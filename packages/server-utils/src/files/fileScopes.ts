@@ -1,4 +1,4 @@
-import { ApiKeyScope, KNOWLEDGE_READ_TOOL_NAMES } from '@bike4mind/common';
+import { ApiKeyScope, FILE_READ_TOOL_NAMES } from '@bike4mind/common';
 import { assertApiKeyScope, holdsApiKeyScope, type ScopedRequest } from '../middlewares/apiKeyScopeGate';
 import { ForbiddenError } from '../utils/errors';
 
@@ -78,7 +78,7 @@ export function assertFilesWriteScope(req: ScopedRequest): void {
   assertApiKeyScope(req, FILES_WRITE_SCOPES, 'This API key is read-only for files; files:write is required');
 }
 
-/** The knowledge-base tools withheld from an API key without files:read; JWT callers keep them. */
+/** The file-reading tools withheld from an API key without files:read; JWT callers keep them. */
 export function fileToolsDeniedFor(req: ScopedRequest): string[] {
-  return holdsApiKeyScope(req, FILES_READ_SCOPES) ? [] : [...KNOWLEDGE_READ_TOOL_NAMES];
+  return holdsApiKeyScope(req, FILES_READ_SCOPES) ? [] : [...FILE_READ_TOOL_NAMES];
 }

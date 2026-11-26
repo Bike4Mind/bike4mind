@@ -18,7 +18,7 @@ import { checkFreeTierDailySpendCap } from '@bike4mind/server-utils/billing/free
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
 import { spendFreezeSubjectForRequest } from '@bike4mind/server-utils/billing/spendFreezeSubject';
 import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
-import { dataLakeToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import { apiKeyToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
@@ -160,7 +160,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT] })
 
     // Unioned and placed after the spread, so a client value can only ADD denials; the key's own
     // scope gaps always win.
-    const deniedTools = [...(isStringArray(requestedDenials) ? requestedDenials : []), ...dataLakeToolsDeniedFor(req)];
+    const deniedTools = [...(isStringArray(requestedDenials) ? requestedDenials : []), ...apiKeyToolsDeniedFor(req)];
 
     const turnAuth = requestTurnAuth(req);
     const quest = await chatCompletion.invoke({

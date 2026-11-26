@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiKeyScope, FabFileSourceType, KNOWLEDGE_READ_TOOL_NAMES } from '@bike4mind/common';
+import { ApiKeyScope, FabFileSourceType, FILE_READ_TOOL_NAMES } from '@bike4mind/common';
 
 const { findByIdAndUserId } = vi.hoisted(() => ({ findByIdAndUserId: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({ fabFileRepository: { findByIdAndUserId } }));
@@ -41,7 +41,7 @@ describe('limitInputFilesForKey', () => {
 
 describe('fileToolsDeniedFor', () => {
   it('withholds the knowledge-base tools from a key without files:read only', () => {
-    expect(fileToolsDeniedFor(key(ApiKeyScope.AI_CHAT))).toEqual([...KNOWLEDGE_READ_TOOL_NAMES]);
+    expect(fileToolsDeniedFor(key(ApiKeyScope.AI_CHAT))).toEqual([...FILE_READ_TOOL_NAMES]);
     expect(fileToolsDeniedFor(key(ApiKeyScope.AI_CHAT, ApiKeyScope.READ_FILES))).toEqual([]);
     expect(fileToolsDeniedFor({})).toEqual([]);
   });

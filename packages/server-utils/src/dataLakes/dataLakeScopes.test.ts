@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { ApiKeyScope, KNOWLEDGE_READ_TOOL_NAMES, type IDataLakeDocument } from '@bike4mind/common';
+import { ApiKeyScope, FILE_READ_TOOL_NAMES, type IDataLakeDocument } from '@bike4mind/common';
 import { SCOPE_STAGING_ENV_VAR } from '../middlewares/apiKeyScopeGate';
 import {
   DATA_LAKE_READ_SCOPES,
@@ -197,7 +197,7 @@ describe('credentialExecutionFields', () => {
   it('denies the knowledge-base tools to a key without files:read', () => {
     expect(
       credentialExecutionFields({ keyId: 'key-1', scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE] })
-    ).toMatchObject({ scopeDeniedTools: [...KNOWLEDGE_READ_TOOL_NAMES] });
+    ).toMatchObject({ scopeDeniedTools: [...FILE_READ_TOOL_NAMES] });
     expect(
       credentialExecutionFields({
         keyId: 'key-1',

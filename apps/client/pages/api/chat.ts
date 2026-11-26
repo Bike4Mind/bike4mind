@@ -62,7 +62,7 @@ import '@bike4mind/server-utils/navigation/registerContributedViews';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
 import { apiKeyBillingOrgId, resolveRequestBillingOrgId } from '@server/billing/apiKeyBillingOrg';
-import { dataLakeToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import { apiKeyToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requestTurnAuth } from '@bike4mind/server-utils/auth/turnAuth';
 import { readVisitId } from '@server/analytics/visitSession';
 import { functionAndConnectorToolHost } from '@bike4mind/server-utils/callableFunctions/functionToolHost';
@@ -236,7 +236,7 @@ async function handleChat(
     organizationId,
     recommendations,
     requestedTools,
-    dataLakeToolsDeniedFor(req)
+    apiKeyToolsDeniedFor(req)
   );
 
   // Read off internalRequest.tools rather than recomputing, so what is reported cannot drift
