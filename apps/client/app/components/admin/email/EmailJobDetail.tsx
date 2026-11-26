@@ -1079,6 +1079,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
 
             {/* Recipient Selection for Variable Testing */}
             <Select
+              data-testid="email-job-detail-recipient-select"
               size="sm"
               placeholder={
                 recipientPreviewData

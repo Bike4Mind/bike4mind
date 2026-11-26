@@ -300,6 +300,20 @@ describe('EmailJobDetail', () => {
     expect(declared('email-job-detail-preview-column', '900px')).toMatchObject({ width: '50%' });
   });
 
+  it('fills the width with the recipient select on phones and floors it at 250px from sm up', () => {
+    renderDetail('job1');
+
+    expect(declared('email-job-detail-recipient-select', '0px')['min-width']).toBe('100%');
+    expect(declared('email-job-detail-recipient-select', '600px')['min-width']).toBe('250px');
+  });
+
+  it('swaps the form column divider from the bottom edge to the right edge at md', () => {
+    renderDetail('job1');
+
+    expect(declared('email-job-detail-form-column', '0px')['border-bottom']).toBe('1px solid');
+    expect(declared('email-job-detail-form-column', '900px')['border-right']).toBe('1px solid');
+  });
+
   it('lets the preview header wrap so the recipient select cannot force a sideways scroll', () => {
     renderDetail('job1');
 
