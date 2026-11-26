@@ -9,6 +9,8 @@ interface TutorialPickerState {
   hostMounted: boolean;
   /** A core walk shows on the open notebook: other first-run surfaces hold back while it does. */
   walkOnScreen: boolean;
+  /** A walk is being started or resumed: it holds the screen from the click until its first step shows. */
+  launching: boolean;
   /** The recorded prompt the walk on screen waits for, when its step is a prompt step. */
   walkPrompt: string | null;
   /** The tour offer is on screen and unanswered: other first-run surfaces wait for it, as they do for a walk. */
@@ -20,6 +22,7 @@ interface TutorialPickerState {
   clearTrackRequest: () => void;
   setHostState: (state: { hostMounted?: boolean; walkOnScreen?: boolean; walkPrompt?: string | null }) => void;
   setOfferWaiting: (offerWaiting: boolean) => void;
+  setLaunching: (launching: boolean) => void;
   answerOffer: () => void;
 }
 
@@ -29,6 +32,7 @@ export const useTutorialPicker = create<TutorialPickerState>(set => ({
   requestedTrack: null,
   hostMounted: false,
   walkOnScreen: false,
+  launching: false,
   walkPrompt: null,
   offerWaiting: false,
   offerAnswered: false,
@@ -37,5 +41,6 @@ export const useTutorialPicker = create<TutorialPickerState>(set => ({
   clearTrackRequest: () => set({ requestedTrack: null }),
   setHostState: state => set(state),
   setOfferWaiting: offerWaiting => set({ offerWaiting }),
+  setLaunching: launching => set({ launching }),
   answerOffer: () => set({ offerAnswered: true, offerWaiting: false }),
 }));

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { isRecordedTutorialTurn } from './walkActive';
+import { isCoreTutorialWalkActive, isRecordedTutorialTurn } from './walkActive';
 import { useTutorialPicker } from './tutorialPickerStore';
 
 describe('isRecordedTutorialTurn', () => {
@@ -24,5 +24,30 @@ describe('isRecordedTutorialTurn', () => {
   it('rejects everything when no walk is on screen', () => {
     useTutorialPicker.setState({ walkOnScreen: false });
     expect(isRecordedTutorialTurn('Hello there?')).toBe(false);
+  });
+});
+
+describe('isCoreTutorialWalkActive', () => {
+  beforeEach(() => {
+    useTutorialPicker.setState({ walkOnScreen: false, launching: false, requestedTrack: null });
+  });
+
+  it('is false with no walk on screen or on its way', () => {
+    expect(isCoreTutorialWalkActive()).toBe(false);
+  });
+
+  it('holds while a walk shows', () => {
+    useTutorialPicker.setState({ walkOnScreen: true });
+    expect(isCoreTutorialWalkActive()).toBe(true);
+  });
+
+  it('holds while a start or resume is in flight, before the first step shows', () => {
+    useTutorialPicker.setState({ launching: true });
+    expect(isCoreTutorialWalkActive()).toBe(true);
+  });
+
+  it('holds while a track asked for waits for the host to start it', () => {
+    useTutorialPicker.setState({ requestedTrack: 'basics' });
+    expect(isCoreTutorialWalkActive()).toBe(true);
   });
 });
