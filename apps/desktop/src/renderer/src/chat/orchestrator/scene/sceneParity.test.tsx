@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatSession } from '@shared/chat';
 import type { PendingDecision } from '@shared/orchestration';
 import { assignPersonas } from '@shared/agentPersona';
+import { chatBackedHostBridge } from '../../../__fixtures__/chatBackedHostBridge';
 import { OrchestratorStage, type OrchestratorViewProps } from '../OrchestratorStage';
 import { singlePaneLayout } from '../orchestratorLayout';
 import { describeAgentStates, type AgentState, type AgentView } from '../roster';
@@ -99,7 +100,7 @@ beforeEach(() => {
     resolveHeldRelay: vi.fn().mockResolvedValue(undefined),
     getRunSpend: vi.fn().mockResolvedValue({ status: 'unattributed' }),
   };
-  (window as unknown as { b4m: unknown }).b4m = { chat };
+  (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat };
 });
 
 const mount = createThemedMount();

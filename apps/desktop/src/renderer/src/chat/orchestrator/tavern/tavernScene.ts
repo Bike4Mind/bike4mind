@@ -97,6 +97,8 @@ export const TAVERN_SCENE: SceneDefinition = {
       quiet: 'The tavern is quiet',
       talk: 'Type to talk to the Innkeeper',
       empty: 'No quests yet. Describe the work and the Innkeeper will split it across agents.',
+      emptyArchived:
+        'Every quest is done and its agent archived. Describe more work and the Innkeeper will hand it out.',
       finale: { complete: 'Quest complete', ended: 'Quest ended' },
     },
   },

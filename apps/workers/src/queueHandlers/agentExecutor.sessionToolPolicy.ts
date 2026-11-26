@@ -110,6 +110,19 @@ export function applySessionToolPolicy(input: SessionToolPolicyInput): string[] 
 }
 
 /**
+ * The session knowledge ids a run may read. A run whose key may not read files (its `scopeDeniedTools`
+ * carry the content reader, see fileToolsDeniedFor) gets none, so pinned knowledge is neither inlined
+ * nor offered to its tools.
+ */
+export function runSessionKnowledgeIds(
+  execution: { scopeDeniedTools?: readonly string[] | null } | null | undefined,
+  sessionKnowledgeIds: string[] | null | undefined
+): string[] {
+  if (execution?.scopeDeniedTools?.includes(CONTENT_READ_TOOL)) return [];
+  return sessionKnowledgeIds ?? [];
+}
+
+/**
  * Whether the run carries any attached file. Reads the ids the dispatch forwarded plus the
  * session's live knowledge pool - the same three sources `buildFirstIterationQuery` merges - so
  * the two agree on what "has attachments" means without this having to hit the database.

@@ -12,6 +12,7 @@ import { useTheme } from '@mui/joy/styles';
 import { isStoppableState } from '@shared/agentState';
 import type { ChatApprovalAnswer, ChatMessage, ChatQueuedMessage, ChatToolCall, SendMessageResult } from '@shared/chat';
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { hostChat } from '../../host/hostChat';
 import { CaretDownIcon } from '../icons';
 import { ToolCallList } from '../ToolCallList';
 import { MessageThread } from '../MessageThread';
@@ -77,7 +78,7 @@ export function useSessionMessages(
       loading = true;
       dirty = false;
       try {
-        const session = await window.b4m.chat.getSession(agentId, false);
+        const session = await hostChat.getSession(agentId, false);
         if (!stale) {
           setLoadError(null);
           setMessages(session ? session.messages : []);
@@ -140,9 +141,12 @@ export function refreshKeyOf(agent: AgentView): string {
  * the status push, so a second click can never answer it twice.
  */
 export function PendingRequests({
+  sessionId,
   calls,
   onAnswered,
 }: {
+  /** The session the calls belong to. */
+  sessionId: string;
   calls: ChatToolCall[];
   onAnswered?(answer: ChatApprovalAnswer): void;
 }) {
@@ -153,7 +157,7 @@ export function PendingRequests({
   const respond = (approvalId: string, answer: ChatApprovalAnswer) => {
     setError(null);
     setAnswered(current => new Set(current).add(approvalId));
-    window.b4m.chat.respondToApproval(approvalId, answer).then(
+    hostChat.respondToApproval(sessionId, approvalId, answer).then(
       () => onAnswered?.(answer),
       (caught: unknown) => {
         setAnswered(current => {
@@ -211,7 +215,7 @@ function ReplyBox({ agentId, actionButton, onSent }: { agentId: string; actionBu
     setError(null);
     const versionBefore = latestQueue.current.version;
     try {
-      const result = await window.b4m.chat.sendMessage({ sessionId: agentId, text: trimmed });
+      const result = await hostChat.sendMessage({ sessionId: agentId, text: trimmed });
       if (!result.ok) {
         setError(result.error);
         return;
@@ -232,7 +236,7 @@ function ReplyBox({ agentId, actionButton, onSent }: { agentId: string; actionBu
   const settleQueued = async (action: 'cancelQueuedMessage' | 'sendQueuedMessageNow') => {
     if (!queued) return;
     try {
-      await window.b4m.chat[action](agentId, queued.id);
+      await hostChat[action](agentId, queued.id);
       setQueued(null);
     } catch (caught) {
       setError(errorText(caught));
@@ -478,8 +482,8 @@ export function AgentPeekDrawer({ agent, onClose, actions, skin, visible = true,
           }
           onRespond={(approvalId, answer) => {
             setActionError(null);
-            void window.b4m.chat
-              .respondToApproval(approvalId, answer)
+            void hostChat
+              .respondToApproval(agent.id, approvalId, answer)
               .then(refresh, error => setActionError(errorText(error)));
           }}
           onContinue={() => rerun(window.b4m.chat.continueReply)}

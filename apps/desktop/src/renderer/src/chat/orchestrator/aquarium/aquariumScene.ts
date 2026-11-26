@@ -111,6 +111,7 @@ export const AQUARIUM_SCENE: SceneDefinition = {
       quiet: 'The tank is quiet',
       talk: 'Type to talk to the Keeper',
       empty: 'No fish yet. Describe the work and the Keeper will split it across agents.',
+      emptyArchived: 'Every task is done and its fish archived. Describe more work and the Keeper will hand it out.',
       finale: { complete: 'Tasks complete', ended: 'Tasks ended' },
     },
   },

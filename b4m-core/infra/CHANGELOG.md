@@ -1,5 +1,11 @@
 # @bike4mind/infra
 
+## 7.4.0
+
+### Minor Changes
+
+- [#8537](https://github.com/Bike4Mind/bike4mind/pull/8537) [`a11c0cf`](https://github.com/Bike4Mind/bike4mind/commit/a11c0cf401247443a6376e5b79d6900a0f86a213) Thanks [@maconard](https://github.com/maconard)! - pin data files to a saved function
+
 ## 7.3.0
 
 ### Minor Changes

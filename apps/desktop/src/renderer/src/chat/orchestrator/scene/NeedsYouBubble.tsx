@@ -3,6 +3,7 @@ import Box from '@mui/joy/Box';
 import type { ChatApprovalAnswer } from '@shared/chat';
 import { pendingCallsIn } from '@shared/needsYou';
 import type { TaskDecisionAnswer } from '@shared/orchestration';
+import { hostChat } from '../../../host/hostChat';
 import { refreshKeyOf, useSessionMessages } from '../AgentPeekDrawer';
 import type { AgentView } from '../roster';
 import { type BubblePlan, planForCall, planForQuestion } from './bubbleAnswer';
@@ -174,10 +175,10 @@ function AgentAnswer({
   };
   const respond = (approvalId: string, answer: ChatApprovalAnswer) =>
     void send(approvalId, answer.decision === 'deny' ? 'denied' : answer.answers ? 'answered' : 'approved', () =>
-      window.b4m.chat.respondToApproval(approvalId, answer)
+      hostChat.respondToApproval(agent.id, approvalId, answer)
     );
   const decide = (decisionId: string, answer: TaskDecisionAnswer) =>
-    void send(decisionId, 'answered', () => window.b4m.chat.answerTaskDecision(agent.id, decisionId, answer));
+    void send(decisionId, 'answered', () => hostChat.answerTaskDecision(agent.id, decisionId, answer));
   const state = outcome && outcome.waitId === waitId ? outcome.state : 'waiting';
 
   const prompt = plan.kind === 'approve' ? plan.summary : plan.prompt;

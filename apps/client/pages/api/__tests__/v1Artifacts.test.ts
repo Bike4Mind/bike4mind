@@ -43,6 +43,9 @@ const {
   mockFindByVersion,
   mockFindContent,
   mockLatestContent,
+  mockFindPointedVersion,
+  mockFindPointedContent,
+  mockFindContentByVersion,
   mockCanRead,
   mockCanUpdateSession,
   baseApiOptions,
@@ -58,6 +61,9 @@ const {
   mockFindByVersion: vi.fn(),
   mockFindContent: vi.fn(),
   mockLatestContent: vi.fn(),
+  mockFindPointedVersion: vi.fn(),
+  mockFindPointedContent: vi.fn(),
+  mockFindContentByVersion: vi.fn(),
   mockCanRead: vi.fn(),
   mockCanUpdateSession: vi.fn(),
   baseApiOptions: [] as { allowedMethods?: string[]; exemptReadsFromDailyRateLimit?: boolean }[],
@@ -110,8 +116,17 @@ vi.mock('@bike4mind/services', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   artifactRepository: { listOwnedBeforeId: mockListOwned, searchOwnedBeforeId: mockSearch, findOne: vi.fn() },
-  artifactContentRepository: { findById: mockFindContent, findLatestContent: mockLatestContent },
-  artifactVersionRepository: { listByArtifactAfterVersion: mockListVersions, findByVersion: mockFindByVersion },
+  artifactContentRepository: {
+    findById: mockFindContent,
+    findLatestContent: mockLatestContent,
+    findOne: mockFindPointedContent,
+    findByArtifactVersion: mockFindContentByVersion,
+  },
+  artifactVersionRepository: {
+    listByArtifactAfterVersion: mockListVersions,
+    findByVersion: mockFindByVersion,
+    findOne: mockFindPointedVersion,
+  },
   projectRepository: {},
   questRepository: {},
   userRepository: {},
@@ -158,6 +173,7 @@ function artifactDoc(overrides: Record<string, unknown> = {}) {
     type: 'mermaid',
     title: 'Signup flow',
     version: 1,
+    currentVersionId: 'v1',
     status: 'draft',
     tags: [],
     visibility: 'private',
@@ -181,7 +197,10 @@ beforeEach(() => {
   mockListVersions.mockResolvedValue({ data: [], hasMore: false });
   mockFindByVersion.mockResolvedValue({ version: 1, contentId: 'c1', createdAt: new Date('2026-10-01T12:00:00Z') });
   mockFindContent.mockResolvedValue({ content: 'graph TD; A-->B' });
-  mockLatestContent.mockResolvedValue({ content: 'graph TD; A-->B' });
+  mockLatestContent.mockResolvedValue({ content: 'unpointed newer row' });
+  mockFindPointedVersion.mockResolvedValue({ version: 1, contentId: 'c1' });
+  mockFindPointedContent.mockResolvedValue({ content: 'graph TD; A-->B' });
+  mockFindContentByVersion.mockResolvedValue({ content: 'graph TD; A-->B' });
   mockCanRead.mockReturnValue(true);
   mockCanUpdateSession.mockResolvedValue({ id: 's1' });
   mockProjectGet.mockResolvedValue({ id: 'p1' });
@@ -395,6 +414,10 @@ describe('GET /api/v1/artifacts/{id}', () => {
 
 describe('PATCH /api/v1/artifacts/{id}', () => {
   it('passes only the present fields and answers with the sent content', async () => {
+    mockUpdate.mockResolvedValue({
+      artifact: artifactDoc({ version: 2, currentVersionId: 'v2' }),
+      version: { version: 2 },
+    });
     const { req, res } = fire('PATCH', { query: { id: ARTIFACT_ID }, body: { content: 'new' } });
 
     await call(byId, req, res);
@@ -407,7 +430,7 @@ describe('PATCH /api/v1/artifacts/{id}', () => {
     expect(mockLatestContent).not.toHaveBeenCalled();
   });
 
-  it('answers the latest stored content to a caller who can read the artifact', async () => {
+  it('answers the pointed stored content to a caller who can read the artifact', async () => {
     const { req, res } = fire('PATCH', { query: { id: ARTIFACT_ID }, body: { title: 'Renamed' } });
 
     await call(byId, req, res);
@@ -415,7 +438,19 @@ describe('PATCH /api/v1/artifacts/{id}', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toMatchObject({ content: 'graph TD; A-->B' });
     expect(mockCanRead).toHaveBeenCalledWith('u1', expect.objectContaining({ id: ARTIFACT_ID }));
-    expect(mockLatestContent).toHaveBeenCalledWith(ARTIFACT_ID);
+    expect(mockFindPointedVersion).toHaveBeenCalledWith({ _id: 'v1', artifactId: ARTIFACT_ID, version: 1 });
+    expect(mockFindPointedContent).toHaveBeenCalledWith({ _id: 'c1', artifactId: ARTIFACT_ID, version: 1 });
+    expect(mockLatestContent).not.toHaveBeenCalled();
+  });
+
+  it('reads the captured numeric version for a legacy artifact without a pointer', async () => {
+    mockUpdate.mockResolvedValue({ artifact: artifactDoc({ version: 4, currentVersionId: undefined }) });
+    mockFindContentByVersion.mockResolvedValue({ content: 'version four' });
+    const { req, res } = fire('PATCH', { query: { id: ARTIFACT_ID }, body: { title: 'Legacy metadata' } });
+    await call(byId, req, res);
+    expect(res._getJSONData()).toMatchObject({ version: 4, content: 'version four' });
+    expect(mockFindContentByVersion).toHaveBeenCalledWith(ARTIFACT_ID, 4);
+    expect(mockLatestContent).not.toHaveBeenCalled();
   });
 
   // update admits permissions.canWrite but get only canRead, so a read-gated re-read would 404 a
@@ -436,7 +471,10 @@ describe('PATCH /api/v1/artifacts/{id}', () => {
 
   it('echoes the sent content to a write-only sharee', async () => {
     mockCanRead.mockReturnValue(false);
-    mockUpdate.mockResolvedValue({ artifact: artifactDoc({ userId: 'owner' }) });
+    mockUpdate.mockResolvedValue({
+      artifact: artifactDoc({ userId: 'owner', version: 2, currentVersionId: 'v2' }),
+      version: { version: 2 },
+    });
     const { req, res } = fire('PATCH', { query: { id: ARTIFACT_ID }, body: { content: 'new' } });
 
     await call(byId, req, res);

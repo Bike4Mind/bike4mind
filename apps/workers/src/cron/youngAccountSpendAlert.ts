@@ -19,6 +19,10 @@ import {
   desiredYoungAccountAlarmThresholds,
   reconcileYoungAccountAlarmThresholds,
 } from './youngAccountSpendAlarmThresholds';
+import {
+  desiredProviderSpendAlarmThresholds,
+  reconcileProviderSpendAlarmThresholds,
+} from './providerSpendAlarmThresholds';
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { Resource } from 'sst';
 import { z } from 'zod';
@@ -160,6 +164,31 @@ async function applyAlarmThresholdOverrides(logger: Logger): Promise<void> {
   }
 }
 
+/** Alarm names are set by infra/youngAccountSpendAlert.ts from infra/providerSpend.ts; empty where that stage has none. */
+async function applyProviderSpendAlarmOverrides(logger: Logger): Promise<void> {
+  const alarmNames = {
+    openai: process.env.PROVIDER_SPEND_ALARM_NAME_OPENAI?.trim(),
+    anthropic: process.env.PROVIDER_SPEND_ALARM_NAME_ANTHROPIC?.trim(),
+  };
+  if (!alarmNames.openai && !alarmNames.anthropic) {
+    logger.log('provider-spend-alarm-threshold-reconcile-skipped', { reason: 'alarm names not configured' });
+    return;
+  }
+  try {
+    const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
+    await reconcileProviderSpendAlarmThresholds({
+      client: new CloudWatchClient({}),
+      alarmNames,
+      desired: desiredProviderSpendAlarmThresholds(settings),
+      logger,
+    });
+  } catch (error) {
+    logger.error('provider-spend-alarm-threshold-reconcile-failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 export async function handler(event: unknown) {
   const logger = new Logger().withMetadata({ cron: 'youngAccountSpendAlert', stage: Resource.App.stage });
 
@@ -178,6 +207,7 @@ export async function handler(event: unknown) {
   } finally {
     // Runs on quiet hours and failed alerts alike, so an override never waits on a breach.
     await applyAlarmThresholdOverrides(logger);
+    await applyProviderSpendAlarmOverrides(logger);
   }
 }
 

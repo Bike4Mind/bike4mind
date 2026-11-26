@@ -595,6 +595,8 @@ export const SettingKeySchema = z.enum([
   'spendMonitorAutoPauseTrustedMinCredits',
   'youngAccountSpendPageUsdPerHour',
   'youngAccountSpendWarnUsdPerHour',
+  'providerSpendOpenaiUsdPerHour',
+  'providerSpendAnthropicUsdPerHour',
   'freeTierDailySystemCostCapUsd',
   'signupGrantSignupPoolDaily',
   'signupGrantTricklePoolDaily',
@@ -2050,6 +2052,9 @@ export const SIGNUP_RISK_SIGNALS = [
   'generatedLocalPart',
   'wafAnonIp',
   'wafBotSignal',
+  'emailSubdomainBurst',
+  'bannedEmailSubdomainSibling',
+  'instantApiKey',
 ] as const;
 export type SignupRiskSignal = (typeof SIGNUP_RISK_SIGNALS)[number];
 
@@ -2073,11 +2078,23 @@ export const SignupRiskScoringSchema = z
         // Edge labels on signupMeta, recorded only where label forwarding is on. Off until a weight is set.
         wafAnonIp: signupRiskWeight(0),
         wafBotSignal: signupRiskWeight(0),
+        emailSubdomainBurst: signupRiskWeight(30),
+        bannedEmailSubdomainSibling: signupRiskWeight(30),
+        instantApiKey: signupRiskWeight(20),
       })
       .strict()
       .prefault({}),
     /** A first API key minted within this many minutes of signup counts as quick. */
     quickApiKeyMinutes: z.number().int().min(1).max(10_080).prefault(60),
+    /** A first API key minted within this many seconds of signup counts as instant; it also counts as quick. */
+    instantApiKeySeconds: z.number().int().min(1).max(3600).prefault(120),
+    /**
+     * Accounts (this one included) on the same email subdomain within `emailSubdomainWindowHours` either
+     * side of signup at which emailSubdomainBurst applies. Only a subdomain host counts, never a bare
+     * registrable domain, so a shared mail provider cannot trip it.
+     */
+    emailSubdomainBurstAccounts: z.number().int().min(2).max(1000).prefault(3),
+    emailSubdomainWindowHours: z.number().int().min(1).max(720).prefault(24),
     /** Credits spent in the first 24h at which fastSpend reaches its full weight; less scales linearly. */
     fastSpendCredits: z.number().positive().prefault(1000),
     /** A score at or above this needs review. */
@@ -2828,6 +2845,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorAutoPauseTrustedMinCredits', order: 19.4948 },
       { key: 'youngAccountSpendPageUsdPerHour', order: 19.495 },
       { key: 'youngAccountSpendWarnUsdPerHour', order: 19.496 },
+      { key: 'providerSpendOpenaiUsdPerHour', order: 19.497 },
+      { key: 'providerSpendAnthropicUsdPerHour', order: 19.498 },
       { key: 'freeTierDailySystemCostCapUsd', order: 19.5 },
       { key: 'syntheticUserEmailDomains', order: 20 },
       { key: 'turnstileEnabled', order: 21 },
@@ -6341,6 +6360,26 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),
+  providerSpendOpenaiUsdPerHour: makeNumberSetting({
+    key: 'providerSpendOpenaiUsdPerHour',
+    name: 'Provider Spend Alarm: OpenAI Hourly Ceiling (USD)',
+    defaultValue: 0,
+    min: 0,
+    description:
+      'OpenAI organization-wide spend per hour, from its own usage report priced with our model rates, at which the provider spend alarm pages. 0 or empty (default) keeps the deployed default and leaves the current threshold unchanged, including any previous override, until a deploy restores the default. A positive change is applied to the CloudWatch alarm by the hourly young-account spend job, so it takes up to an hour.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  providerSpendAnthropicUsdPerHour: makeNumberSetting({
+    key: 'providerSpendAnthropicUsdPerHour',
+    name: 'Provider Spend Alarm: Anthropic Hourly Ceiling (USD)',
+    defaultValue: 0,
+    min: 0,
+    description:
+      'Anthropic organization-wide spend per hour, from its own usage report priced with our model rates, at which the provider spend alarm pages. 0 or empty (default) keeps the deployed default and leaves the current threshold unchanged, including any previous override, until a deploy restores the default. A positive change is applied to the CloudWatch alarm by the hourly young-account spend job, so it takes up to an hour.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
   freeTierDailySystemCostCapUsd: makeNumberSetting({
     key: 'freeTierDailySystemCostCapUsd',
     name: 'Free Tier Daily System Cost Cap (USD)',
@@ -9155,6 +9194,12 @@ const MASK_WRITE_BACK_PATTERN = /^\*{4,}/;
  */
 export function isMaskedSensitiveSettingValue(value: unknown): boolean {
   return typeof value === 'string' && MASK_WRITE_BACK_PATTERN.test(value);
+}
+
+/** Whether the setting's whole value is masked on read: tagged `isSensitive`, or with no definition at all. */
+export function isMaskedSetting(settingName: string): boolean {
+  const definition = resolveSettingDefinition(settingName);
+  return !definition || definition.isSensitive === true;
 }
 
 /**

@@ -16,6 +16,8 @@ describe('place memory', () => {
   it('restores the Studio session Create last saved into', () => {
     writePlaceMemory({ place: 'library' });
     expect(readPlaceMemory()).toEqual({ place: 'library' });
+    writePlaceMemory({ place: 'studio', studio: 'library' });
+    expect(readPlaceMemory()).toEqual({ place: 'studio', studio: 'library' });
     writePlaceMemory({ place: 'studio', studio: 'create', studioSession: 's1' });
     expect(readPlaceMemory()).toEqual({ place: 'studio', studio: 'create', studioSession: 's1' });
   });
@@ -34,7 +36,7 @@ describe('place memory', () => {
   });
 
   it('drops fields of the wrong shape rather than the whole memory', () => {
-    window.localStorage.setItem('b4m.chat.places', JSON.stringify({ place: 'code', chat: 4, studio: 'library' }));
+    window.localStorage.setItem('b4m.chat.places', JSON.stringify({ place: 'code', chat: 4, studio: 'timeline' }));
     expect(readPlaceMemory()).toEqual({ place: 'code' });
   });
 

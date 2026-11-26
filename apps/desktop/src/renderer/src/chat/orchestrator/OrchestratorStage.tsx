@@ -111,8 +111,16 @@ export interface StageAmbient {
   onToggle(on: boolean): void;
 }
 
+/** An agent archived out of the run; the empty stage lists these so they stay one click away. */
+export interface ArchivedAgent {
+  id: string;
+  title: string;
+}
+
 export interface OrchestratorStageProps {
   agents: readonly AgentView[];
+  /** Agents archived out of this run, newest first (archivedAgentsOf). Shown only on the empty stage. */
+  archivedAgents?: readonly ArchivedAgent[];
   selection?: { id: string | null; onChange(id: string | null): void };
   parent?: ParentView;
   /** Bring the parent's own conversation forward for an attention action. */
@@ -181,6 +189,7 @@ const pulse = keyframes`
 
 export function OrchestratorStage({
   agents: rosterAgents,
+  archivedAgents = NO_ARCHIVED,
   selection,
   parent: rosterParent = NO_PARENT,
   onParentFocus,
@@ -472,6 +481,7 @@ export function OrchestratorStage({
       openPr,
       openRoot: () => onParentFocus?.(),
       stop: actions.stop,
+      sessionOfApproval: approvalId => snapshot?.approvals?.find(entry => entry.id === approvalId)?.sessionId,
     });
   };
 
@@ -641,7 +651,10 @@ export function OrchestratorStage({
           {agents.length === 0 ? (
             <EmptyStage
               scene={parentScene && renderView ? renderView(view, viewProps) : null}
-              prompt={stageCopy.empty}
+              prompt={archivedAgents.length > 0 ? stageCopy.emptyArchived : stageCopy.empty}
+              archived={archivedAgents}
+              presenting={presenting}
+              onOpen={actions.open}
             />
           ) : snapshot ? (
             <FocusPanel snapshot={snapshot} onAction={onViewAction} />
@@ -691,7 +704,28 @@ function PresentingBadge() {
   );
 }
 
-function EmptyStage({ scene, prompt }: { scene: ReactNode; prompt: string }) {
+const NO_ARCHIVED: readonly ArchivedAgent[] = [];
+
+interface EmptyStageProps {
+  scene: ReactNode;
+  /** The scene's own line under it (its copy.stage.empty, or emptyArchived once agents were archived). */
+  prompt: string;
+  archived: readonly ArchivedAgent[];
+  presenting: boolean;
+  onOpen(id: string): void;
+}
+
+/** The wording for a stage with no scene, which has no host to name. */
+function plainEmptyHint(archivedCount: number): string {
+  return archivedCount > 0
+    ? 'Every agent has finished and been archived. Describe more work to start new ones.'
+    : 'No agents yet. Describe the work and it will be split across agents.';
+}
+
+function EmptyStage({ scene, prompt, archived, presenting, onOpen }: EmptyStageProps) {
+  const archivedList = archived.length > 0 && (
+    <ArchivedAgentList archived={archived} presenting={presenting} onOpen={onOpen} />
+  );
   if (scene) {
     return (
       <Box
@@ -703,6 +737,7 @@ function EmptyStage({ scene, prompt }: { scene: ReactNode; prompt: string }) {
           <Typography level="body-sm" textColor="text.secondary" textAlign="center">
             {prompt}
           </Typography>
+          {archivedList}
         </Box>
       </Box>
     );
@@ -721,8 +756,51 @@ function EmptyStage({ scene, prompt }: { scene: ReactNode; prompt: string }) {
       }}
     >
       <Typography level="body-sm" textColor="text.tertiary" textAlign="center">
-        No agents yet. Describe the work and it will be split across agents.
+        {plainEmptyHint(archived.length)}
       </Typography>
+      {archivedList}
+    </Box>
+  );
+}
+
+/** Presenter mode hides titles, so it shows the count alone. */
+function ArchivedAgentList({
+  archived,
+  presenting,
+  onOpen,
+}: Pick<EmptyStageProps, 'archived' | 'presenting' | 'onOpen'>) {
+  const label = archived.length === 1 ? '1 archived agent' : `${archived.length} archived agents`;
+  if (presenting) {
+    return (
+      <Typography level="body-xs" textColor="text.tertiary" data-testid="orchestrator-archived-agents">
+        {label}
+      </Typography>
+    );
+  }
+  return (
+    <Box
+      data-testid="orchestrator-archived-agents"
+      sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: 0.75 }}
+    >
+      <Typography level="body-xs" textColor="text.tertiary">
+        {label}:
+      </Typography>
+      {archived.map(agent => (
+        <Button
+          key={agent.id}
+          size="sm"
+          variant="soft"
+          color="neutral"
+          data-testid="orchestrator-archived-agent-open-btn"
+          title={`Open ${agent.title}`}
+          onClick={() => onOpen(agent.id)}
+          sx={{ maxWidth: 240, minWidth: 0 }}
+        >
+          <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {agent.title}
+          </Box>
+        </Button>
+      ))}
     </Box>
   );
 }

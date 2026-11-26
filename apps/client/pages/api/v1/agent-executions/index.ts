@@ -34,6 +34,7 @@ import { apiKeyBillingOrgId } from '@server/billing/apiKeyBillingOrg';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAccessAllowed';
+import { assertFilesReadScope } from '@bike4mind/server-utils/files/fileScopes';
 
 const handler = nextRouteForContract(startAgentExecutionContract, {
   rateLimit: rateLimit({
@@ -43,6 +44,8 @@ const handler = nextRouteForContract(startAgentExecutionContract, {
 }).post(async (req, res) => {
   assertAiAccessAllowed(req.user);
   const body = req.validated;
+  // The run reads attached files with the key owner's own access, so attaching them is a files read.
+  if (body.file_ids?.length || body.session_file_ids?.length) assertFilesReadScope(req);
 
   // Same model-resolution ladder as POST /api/chat: an explicit model wins, else the
   // admin default, which on a local-only self-host box may itself need a fallback - so

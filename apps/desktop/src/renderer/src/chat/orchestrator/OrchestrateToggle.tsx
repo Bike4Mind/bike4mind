@@ -11,6 +11,7 @@ import { describeAgentStates, type AgentState } from './roster';
 interface OrchestrateToggleProps {
   /** One entry per agent; states only, so the chat surface never subscribes to agent activity. */
   states: readonly AgentState[];
+  /** Agent View is available with no live agents (agentsSurfaceAvailable): Orchestrate on, an orchestrator, or archived agents. */
   enabled?: boolean;
   /** The orchestrating session itself waits on the user: counted as the Tavern counts it. */
   parentNeedsYou?: boolean;

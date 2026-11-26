@@ -137,6 +137,7 @@ const handler = baseApi()
   .delete(
     asyncHandler<{}, { deletedCount: number; newLastNotebookId: string | null }, { sessionIds: string[] }>(
       async (req, res) => {
+        assertApiKeyScope(req, [ApiKeyScope.WRITE_NOTEBOOKS], 'Insufficient API key permissions');
         const userId = req.user?.id;
         const { sessionIds } = req.body;
 
@@ -215,7 +216,7 @@ const handler = baseApi()
       }
       const body = parsed.data;
       // Same scope PUT /api/sessions/[id] requires; favorites stay scope-less like /[id]/favorite. Kept
-      // inside the .post() link so apiKeyScopeRoutes.ts does not attribute it to the scope-less DELETE.
+      // inside the .post() link so apiKeyScopeRoutes.ts attributes it to this verb only.
       if (body.action !== 'favorite') {
         assertApiKeyScope(req, [ApiKeyScope.WRITE_NOTEBOOKS], 'Insufficient API key permissions');
       }

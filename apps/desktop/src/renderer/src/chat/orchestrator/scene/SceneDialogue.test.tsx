@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../../../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatToolCall } from '@shared/chat';
@@ -57,7 +58,7 @@ const button = (testId: string) => el(testId) as HTMLButtonElement;
 beforeEach(() => {
   vi.clearAllMocks();
   chat.respondToApproval.mockResolvedValue(undefined);
-  (window as unknown as { b4m: unknown }).b4m = { chat };
+  (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat };
   decisions.byId = new Map([
     ['a', [approval('a', 'p1')]],
     ['b', [approval('b', 'p2')]],

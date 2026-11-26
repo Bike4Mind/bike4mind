@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,6 +21,7 @@ const addContextDirectory = vi.fn();
 const copyDraftAttachments = vi.fn();
 const discardDraftAttachments = vi.fn();
 const deleteSession = vi.fn();
+const moveSession = vi.fn();
 const defaultsForNewSession = vi.fn();
 const setApprovalMode = vi.fn();
 const setSessionReasoningEffort = vi.fn();
@@ -52,6 +54,7 @@ beforeEach(async () => {
   setSessionPromptCacheTtl.mockResolvedValue({ id: 'created' });
   Object.assign(window, {
     b4m: {
+      host: chatBackedHostBridge(),
       chat: {
         createSession,
         defaultsForNewSession,
@@ -68,6 +71,7 @@ beforeEach(async () => {
         setSessionPromptCacheTtl,
         setSessionHistory: saved,
       },
+      sidebar: { moveSession },
     },
   });
   host = document.createElement('div');
@@ -133,7 +137,8 @@ describe('renderer-only session drafts', () => {
   it('materializes once with draft model, folders, project, worktree and section', async () => {
     const placed = vi.fn();
     const sections = { sections: [], assignments: {} };
-    createCodeSession.mockResolvedValue({ ok: true, session: { id: 'created' }, sidebarSections: sections });
+    createCodeSession.mockResolvedValue({ ok: true, session: { id: 'created' } });
+    moveSession.mockResolvedValue(sections);
     await act(async () => {
       draft.start('code', { directory: '/repo', workspace: true }, { sectionId: 'work', placed, failed: vi.fn() });
     });
@@ -147,8 +152,8 @@ describe('renderer-only session drafts', () => {
       directory: '/repo',
       branch: '',
       workspace: true,
-      sectionId: 'work',
     });
+    expect(moveSession).toHaveBeenCalledExactlyOnceWith('created', 'work');
     expect(setSessionModel).toHaveBeenCalledWith('created', 'chosen-model');
     expect(addContextDirectory).toHaveBeenCalledWith('created', '/shared');
     expect(copyDraftAttachments).toHaveBeenCalledWith(id, 'created', []);
@@ -169,7 +174,7 @@ describe('renderer-only session drafts', () => {
     });
     expect(draft.session?.id).toBe(id);
     expect(controller().sendError).toBe('Model unavailable');
-    expect(deleteSession).toHaveBeenCalledWith('created');
+    expect(deleteSession).toHaveBeenCalledWith('created', false);
     expect(opened).not.toHaveBeenCalled();
   });
 

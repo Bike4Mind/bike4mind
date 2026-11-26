@@ -2,6 +2,7 @@
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { assignPersonas } from '@shared/agentPersona';
+import { chatBackedHostBridge } from '../../../__fixtures__/chatBackedHostBridge';
 import type { OrchestratorViewProps } from '../OrchestratorStage';
 import type { AgentView } from '../roster';
 import { stateLampColor } from '../statePalette';
@@ -39,6 +40,7 @@ const press = (target: HTMLElement, key: string) =>
 
 beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: {
       getSession: vi.fn().mockResolvedValue(null),
       getHeldRelays: vi.fn().mockResolvedValue([]),

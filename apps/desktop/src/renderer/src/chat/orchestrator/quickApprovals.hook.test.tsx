@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -52,7 +53,7 @@ beforeEach(() => {
     b: [parked('p-b', 'pwd')],
     busy: [parked('p-busy', 'pwd')],
   };
-  (window as unknown as { b4m: unknown }).b4m = { chat: { getSession } };
+  (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat: { getSession } };
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);

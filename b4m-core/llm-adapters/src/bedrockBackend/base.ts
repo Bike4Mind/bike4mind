@@ -16,6 +16,7 @@ import {
   type TurnUsage,
 } from '@bike4mind/common';
 import { stripAllToolBlocks, stripToolDependentMessages } from '../toolPairingUtils';
+import { HiddenReasoningOnlyEmptyError, isHiddenReasoningOnlyEmptyError } from '../llmEmptyTurnErrors';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from '../executeToolsBatch';
 import { logToolRound, summarizeToolOutcomes } from '../toolRoundTiming';
 import { recordToolResult, type RecordableToolUse } from '../recordToolResult';
@@ -75,7 +76,8 @@ const MAX_LOGGED_ERROR_REASON_LENGTH = 300;
  * stream is deterministic (the max-tool-calls cap) and must match neither.
  *
  * `hiddenReasoningOnly` marks a stream whose only output was a thinking block with no displayed
- * text: the model was reached, so the misrouted-profile hint does not apply.
+ * text: the model was reached, so the misrouted-profile hint does not apply. The non-stalled variant
+ * is thrown as a HiddenReasoningOnlyEmptyError (retried once, then fallback) except on the capped round.
  */
 export function bedrockEmptyResponseMessage(
   model: string,
@@ -677,14 +679,14 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
           !func.some(f => f.name) &&
           !options.abortSignal?.aborted
         ) {
-          throw new Error(
-            bedrockEmptyResponseMessage(
-              model,
-              this._options.region,
-              this.signalsStreamTermination && !sawTerminalEvent,
-              sawReasoning
-            )
-          );
+          const stalled = this.signalsStreamTermination && !sawTerminalEvent;
+          const message = bedrockEmptyResponseMessage(model, this._options.region, stalled, sawReasoning);
+          // The capped round (tools stripped at maxToolCalls) is deterministic: a retry would replay
+          // every tool round and land in the same place, so it keeps the plain, non-retried error.
+          if (sawReasoning && !stalled && toolCallCount < maxToolCalls) {
+            throw new HiddenReasoningOnlyEmptyError('Bedrock', model, message);
+          }
+          throw new Error(message);
         }
 
         // FAIL LOUD on a TRUNCATED completion. A transport stall mid-body closes the h2 stream
@@ -1186,6 +1188,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // caller settles it (ChatCompletionProcess warns once), so it must not page here.
         if (isEmptyConversationError(error)) {
           Logger.globalInstance.warn(`[BaseBedrockBackend] Refused an empty conversation for ${model}`);
+          throw error;
+        }
+        // Retried, then fallen back, by the completion loop; it logs at error only if neither answers.
+        if (isHiddenReasoningOnlyEmptyError(error)) {
+          Logger.globalInstance.warn(`[BaseBedrockBackend] ${error.message}`);
           throw error;
         }
         const { $fault, $metadata, $retryable } = error as Error & {

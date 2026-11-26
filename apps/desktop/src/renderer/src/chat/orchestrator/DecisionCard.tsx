@@ -120,6 +120,7 @@ export function DecisionBody({
       }
       return (
         <PendingRequests
+          sessionId={sessionId}
           calls={[decision.call]}
           onAnswered={answer => onAnswered(answer.decision === 'deny' ? 'denied' : 'approved')}
         />

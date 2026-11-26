@@ -2,11 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ChatSession, ChatSessionStatusEvent, ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
 import {
   HOST_ERROR_CODES,
+  hostErrorData,
   hostMethods,
   hostRequest,
   type HostMethod,
   type HostNotification,
   type HostResponse,
+  type HostResult,
 } from '@shared/hostProtocol';
 import { SessionEventLog } from '../../main/chat/SessionEventLog';
 import { HostEventRelay } from './HostEventRelay';
@@ -36,6 +38,47 @@ function fakeRuntime(eventLog = new SessionEventLog({ epoch: 'epoch-1' })) {
     ),
     renameSession: vi.fn(async (sessionId: string, title: string) => ({ ...summary(sessionId), title })),
     deleteSession: vi.fn(async () => undefined),
+    createSession: vi.fn(async () => summary('chat-1')),
+    createCodeSession: vi.fn(async (request: { directory?: string }) =>
+      request.directory === '/gone'
+        ? { ok: false as const, error: 'That folder no longer exists' }
+        : { ok: true as const, session: summary('code-1') }
+    ),
+    setSessionArchived: vi.fn(
+      async (
+        sessionId: string,
+        archived: boolean,
+        decision?: { confirmed?: boolean; archiveChildIds?: readonly string[] }
+      ): Promise<HostResult<'session/setArchived'>> =>
+        sessionId === 'parent' && archived && !decision?.confirmed
+          ? { summary: null, confirmationRequired: { parentTitle: 'Parent', finished: [], kept: [] } }
+          : { summary: { ...summary(sessionId), archived } }
+    ),
+    deleteSessionTree: vi.fn(async (sessionId: string, nestedIds: readonly string[]) => ({
+      deleted: [...nestedIds, sessionId],
+      error: null as string | null,
+    })),
+    respondToApproval: vi.fn(),
+    answerTaskDecision: vi.fn(async () => undefined),
+    stopBackgroundProcess: vi.fn(async (sessionId: string, processId: string) =>
+      processId === 'p1'
+        ? { ok: true as const, process: { id: 'p1', sessionId, status: 'killed' } }
+        : { ok: false as const, reason: 'notFound' as const }
+    ),
+    browseDirectory: vi.fn(async (path?: string) =>
+      path === '/gone'
+        ? { ok: false as const, reason: 'notFound' as const, path: '/gone' }
+        : {
+            ok: true as const,
+            listing: {
+              path: '/home/dev',
+              parent: '/home',
+              entries: [{ name: 'repo', path: '/home/dev/repo', isGitRepository: true }],
+              truncated: false,
+            },
+          }
+    ),
+    listRecentFolders: vi.fn(async () => [{ path: '/work', name: 'work' }]),
     sendMessage: vi.fn(async () => ({ ok: true as const })),
     stopReply: vi.fn(),
     sessionStatuses: vi.fn(() => [status('s1')]),
@@ -89,22 +132,8 @@ const errorOf = (response: HostResponse) => {
 };
 
 describe('HostServer', () => {
-  it('leaves exactly the methods with no runtime backing pending', () => {
-    expect([...pendingHostMethods].sort()).toEqual(
-      [
-        'background/stop',
-        'fs/browse',
-        'project/recent',
-        'request/respond',
-        'session/create',
-        'session/setArchived',
-      ].sort()
-    );
-  });
-
-  it.each([...pendingHostMethods])('answers pending %s with method not found', async method => {
-    const response = await serve().client().call(method, {});
-    expect(errorOf(response).code).toBe(HOST_ERROR_CODES.methodNotFound);
+  it('serves every protocol method, leaving none pending', () => {
+    expect(pendingHostMethods).toEqual([]);
   });
 
   it('answers an unknown method with method not found', async () => {
@@ -116,6 +145,15 @@ describe('HostServer', () => {
     ['session/get', { sessionId: 7 }],
     ['session/rename', { sessionId: 's1' }],
     ['session/delete', {}],
+    ['session/delete', { sessionId: 's1', allowDiscard: 'yes' }],
+    ['session/deleteTree', { sessionId: 's1', nestedIds: 'c1' }],
+    ['session/create', 'nope'],
+    ['session/setArchived', { sessionId: 's1' }],
+    ['request/respond', { kind: 'approval', requestId: 'r1' }],
+    ['request/respond', { kind: 'taskDecision', requestId: 'r1', answer: { decision: 'once' } }],
+    ['background/stop', { sessionId: 's1' }],
+    ['fs/browse', { path: 3 }],
+    ['project/recent', 'all'],
     ['session/subscribe', { sessionId: 's1', after: { epoch: '', seq: 0 } }],
     ['session/unsubscribe', {}],
     ['turn/send', { sessionId: 's1' }],
@@ -197,7 +235,7 @@ describe('HostServer', () => {
       summary: { id: 's1', title: 'New' },
     });
     expect(resultOf(await call('session/delete', { sessionId: 's1' }))).toEqual({});
-    expect(runtime.deleteSession).toHaveBeenCalledWith('s1', false);
+    expect(runtime.deleteSession).toHaveBeenCalledWith('s1', false, false);
     expect(resultOf(await call('turn/send', { sessionId: 's1', text: 'hi' }))).toEqual({ ok: true });
     expect(resultOf(await call('turn/stop', { sessionId: 's1' }))).toEqual({});
     expect(runtime.stopReply).toHaveBeenCalledWith('s1');
@@ -211,6 +249,143 @@ describe('HostServer', () => {
     expect(resultOf(await call('model/list', {}))).toEqual({ models: { models: [] } });
     expect(runtime.listModels).toHaveBeenCalledWith(false);
     expect(resultOf(await call('draft/defaults'))).toEqual({ defaults: { model: 'model-a', approvalMode: 'ask' } });
+  });
+
+  describe('session lifecycle', () => {
+    it('starts a plain chat session when session/create has no params', async () => {
+      const { client, runtime } = serve();
+      expect(resultOf(await client().call('session/create'))).toEqual({ ok: true, session: summary('chat-1') });
+      expect(runtime.createSession).toHaveBeenCalledWith();
+      expect(runtime.createCodeSession).not.toHaveBeenCalled();
+    });
+
+    it('starts a Code session from session/create params and passes a refusal through as a result', async () => {
+      const { client, runtime } = serve();
+      const { call } = client();
+      expect(resultOf(await call('session/create', { directory: '/work', branch: 'main' }))).toEqual({
+        ok: true,
+        session: summary('code-1'),
+      });
+      expect(runtime.createCodeSession).toHaveBeenCalledWith({ directory: '/work', branch: 'main' });
+      expect(resultOf(await call('session/create', { directory: '/gone' }))).toEqual({
+        ok: false,
+        error: 'That folder no longer exists',
+      });
+    });
+
+    it('answers session/setArchived with the question first, then archives once confirmed', async () => {
+      const { client, runtime } = serve();
+      const { call } = client();
+      expect(resultOf(await call('session/setArchived', { sessionId: 'parent', archived: true }))).toEqual({
+        summary: null,
+        confirmationRequired: { parentTitle: 'Parent', finished: [], kept: [] },
+      });
+      const confirmed = { sessionId: 'parent', archived: true, confirmed: true, archiveChildIds: ['c1'] };
+      expect(resultOf(await call('session/setArchived', confirmed))).toEqual({
+        summary: { id: 'parent', title: 'parent', archived: true },
+      });
+      expect(runtime.setSessionArchived).toHaveBeenLastCalledWith('parent', true, {
+        confirmed: true,
+        archiveChildIds: ['c1'],
+      });
+    });
+
+    it('deletes with discard only when the client asks for it', async () => {
+      const { client, runtime } = serve();
+      const { call } = client();
+      await call('session/delete', { sessionId: 's1', removeWorktree: true });
+      expect(runtime.deleteSession).toHaveBeenLastCalledWith('s1', true, false);
+      await call('session/delete', { sessionId: 's1', removeWorktree: true, allowDiscard: true });
+      expect(runtime.deleteSession).toHaveBeenLastCalledWith('s1', true, true);
+    });
+
+    it('deletes a session tree and reports what went', async () => {
+      const { client, runtime } = serve();
+      const result = await client().call('session/deleteTree', { sessionId: 'p', nestedIds: ['c1', 'c2'] });
+      expect(resultOf(result)).toEqual({ deleted: ['c1', 'c2', 'p'], error: null });
+      expect(runtime.deleteSessionTree).toHaveBeenCalledWith('p', ['c1', 'c2'], false, [], false);
+    });
+
+    it('passes the discard opt-in and worktree removal through to the runtime', async () => {
+      const { client, runtime } = serve();
+      await client().call('session/deleteTree', {
+        sessionId: 'p',
+        nestedIds: ['c1'],
+        removeWorktree: true,
+        nestedWorktreeIds: ['c1'],
+        allowDiscard: true,
+      });
+      expect(runtime.deleteSessionTree).toHaveBeenCalledWith('p', ['c1'], true, ['c1'], true);
+    });
+
+    it('relays a partial failure with what was deleted before it', async () => {
+      const { client, runtime } = serve();
+      runtime.deleteSessionTree.mockResolvedValueOnce({ deleted: ['c1'], error: 'c2 is busy' });
+      const result = await client().call('session/deleteTree', { sessionId: 'p', nestedIds: ['c1', 'c2'] });
+      expect(resultOf(result)).toEqual({ deleted: ['c1'], error: 'c2 is busy' });
+    });
+  });
+
+  const workerId = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  it('routes request/respond to the approval or the task decision by kind', async () => {
+    const { client, runtime } = serve();
+    const { call } = client();
+    expect(
+      resultOf(await call('request/respond', { kind: 'approval', requestId: 'r1', answer: { decision: 'once' } }))
+    ).toEqual({});
+    expect(runtime.respondToApproval).toHaveBeenCalledWith('r1', { decision: 'once' });
+    const decision = { kind: 'taskDecision', sessionId: workerId, decisionId: 'd1', answer: { status: 'skipped' } };
+    expect(resultOf(await call('request/respond', decision))).toEqual({});
+    expect(runtime.answerTaskDecision).toHaveBeenCalledWith(workerId, 'd1', { status: 'skipped' });
+    expect(runtime.respondToApproval).toHaveBeenCalledTimes(1);
+  });
+
+  const tooMany = { selected: ['a', 'b', 'c', 'd', 'e'] };
+  it.each([
+    ['a session id that is not one', { sessionId: 's1' }],
+    ['an empty decision id', { decisionId: '' }],
+    ['an over-long decision id', { decisionId: 'd'.repeat(101) }],
+    ['an answer with extra keys', { answer: { status: 'skipped', note: 'x' } }],
+    ['an answer over its bounds', { answer: { status: 'answered', answers: [tooMany] } }],
+  ])('refuses a task decision answer with %s, before the runtime sees it', async (_case, change) => {
+    const { client, runtime } = serve();
+    const decision = { kind: 'taskDecision', sessionId: workerId, decisionId: 'd1', answer: { status: 'skipped' } };
+    const error = errorOf(await client().call('request/respond', { ...decision, ...change }));
+    expect(error.code).toBe(HOST_ERROR_CODES.invalidParams);
+    expect(runtime.answerTaskDecision).not.toHaveBeenCalled();
+  });
+
+  it('stops a background process, and answers an unknown one with processNotFound', async () => {
+    const { client, warn } = serve();
+    const { call } = client();
+    expect(resultOf(await call('background/stop', { sessionId: 's1', processId: 'p1' }))).toEqual({
+      process: { id: 'p1', sessionId: 's1', status: 'killed' },
+    });
+    const error = errorOf(await call('background/stop', { sessionId: 's1', processId: 'p9' }));
+    expect(error).toMatchObject({
+      code: HOST_ERROR_CODES.processNotFound,
+      data: { sessionId: 's1', processId: 'p9' },
+    });
+    expect(hostErrorData.processNotFound.safeParse(error.data).success).toBe(true);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('browses a directory, and answers one it cannot read with pathUnavailable', async () => {
+    const { client, runtime } = serve();
+    const { call } = client();
+    expect(resultOf(await call('fs/browse'))).toMatchObject({ path: '/home/dev', truncated: false });
+    expect(runtime.browseDirectory).toHaveBeenCalledWith(undefined);
+    const error = errorOf(await call('fs/browse', { path: '/gone' }));
+    expect(error).toMatchObject({
+      code: HOST_ERROR_CODES.pathUnavailable,
+      data: { path: '/gone', reason: 'notFound' },
+    });
+    expect(hostErrorData.pathUnavailable.safeParse(error.data).success).toBe(true);
+  });
+
+  it('serves project/recent from the runtime', async () => {
+    const { client } = serve();
+    expect(resultOf(await client().call('project/recent'))).toEqual({ folders: [{ path: '/work', name: 'work' }] });
   });
 
   it('answers a runtime failure with an internal error and logs it', async () => {

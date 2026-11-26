@@ -7,7 +7,7 @@ import {
   PostToConnectionCommand,
 } from '@aws-sdk/client-apigatewaymanagementapi';
 import { z } from 'zod';
-import { MessageDataToClient } from '@bike4mind/common';
+import { MessageDataToClient, receivesUserFanout } from '@bike4mind/common';
 import { Connection } from '@bike4mind/database/social';
 import { Logger } from '@bike4mind/observability';
 import { Context } from 'aws-lambda';
@@ -119,7 +119,7 @@ export async function sendToClient(
     query.source = options.sourceFilter;
   }
 
-  const connections = await Connection.find(query);
+  const connections = (await Connection.find(query)).filter(receivesUserFanout);
 
   const result = await Promise.allSettled(
     connections.map(connection => sendToConnection(connection.connectionId, endpoint, action))

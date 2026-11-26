@@ -190,25 +190,33 @@ export const DlqMessageDrawer: React.FC<{
               <Typography level="body-sm" fontWeight="bold">
                 Message body
               </Typography>
-              <IconButton size="sm" onClick={handleCopy} aria-label="Copy message body" data-testid="dlq-copy-body">
-                <ContentCopyIcon fontSize="small" />
-              </IconButton>
+              {!message.bodyWithheld && (
+                <IconButton size="sm" onClick={handleCopy} aria-label="Copy message body" data-testid="dlq-copy-body">
+                  <ContentCopyIcon fontSize="small" />
+                </IconButton>
+              )}
             </Stack>
-            <Sheet
-              variant="soft"
-              sx={{
-                p: 1.5,
-                borderRadius: 'sm',
-                maxHeight: 400,
-                overflow: 'auto',
-                fontFamily: 'monospace',
-                fontSize: '0.8rem',
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-              }}
-            >
-              {formatBody(message.body)}
-            </Sheet>
+            {message.bodyWithheld ? (
+              <Typography level="body-sm" color="neutral" data-testid="dlq-body-withheld">
+                This queue holds user content. Only full admins can view message bodies.
+              </Typography>
+            ) : (
+              <Sheet
+                variant="soft"
+                sx={{
+                  p: 1.5,
+                  borderRadius: 'sm',
+                  maxHeight: 400,
+                  overflow: 'auto',
+                  fontFamily: 'monospace',
+                  fontSize: '0.8rem',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                }}
+              >
+                {formatBody(message.body)}
+              </Sheet>
+            )}
           </Box>
         </Stack>
       </Sheet>

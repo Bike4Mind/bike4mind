@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
@@ -40,7 +41,7 @@ const pending = (sessionId: string, rootId: string, id: string): PendingTaskDeci
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 const answerTaskDecision = vi.fn(async () => undefined);
-(window as unknown as { b4m: unknown }).b4m = { chat: { answerTaskDecision } };
+(window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat: { answerTaskDecision } };
 
 afterEach(() => {
   act(() => root?.unmount());

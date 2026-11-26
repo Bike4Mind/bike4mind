@@ -3,7 +3,7 @@ import { promises as fs } from 'fs';
 import { existsSync } from 'fs';
 import { createHash } from 'crypto';
 import { diffLines, type Change } from 'diff';
-import { assertPathAllowed } from '../../utils/pathValidation';
+import { assertWritablePath } from '../../utils/pathValidation';
 import { fuzzyMatch, type FuzzyStrategy } from './fuzzyMatch';
 
 interface EditLocalFileParams {
@@ -220,7 +220,7 @@ export interface EditPlan {
 /**
  * Authorized, read-only resolve for the permission layer: validate the path,
  * read the file, and resolve the span WITHOUT writing. Runs the SAME path
- * authorization ({@link assertPathAllowed}) and matcher ({@link resolveEdit}) as
+ * authorization ({@link assertWritablePath}) and matcher ({@link resolveEdit}) as
  * the write path, so a preflight can never read a path the tool itself would
  * refuse (no raw-model-path read - closes the auth-bypass / special-file-DoS
  * hole) and its fuzzy verdict matches what execution will do. Throws the same
@@ -231,7 +231,7 @@ export async function resolveEditLocalFile(
   allowedDirectories?: string[]
 ): Promise<EditPlan> {
   const { path: filePath, old_string, new_string } = params;
-  const resolvedPath = assertPathAllowed(filePath, allowedDirectories, 'edit');
+  const resolvedPath = assertWritablePath(filePath, allowedDirectories, 'edit');
   if (!existsSync(resolvedPath)) {
     throw new Error(`File not found: ${filePath}`);
   }
@@ -250,7 +250,7 @@ async function editLocalFile(params: EditLocalFileParams, allowedDirectories?: s
   const { path: filePath, old_string, new_string, confirmedFuzzyHash, gateSnapshot } = params;
 
   // Validate path is within allowed directories (cwd is always included)
-  const resolvedPath = assertPathAllowed(filePath, allowedDirectories, 'edit');
+  const resolvedPath = assertWritablePath(filePath, allowedDirectories, 'edit');
 
   // Check if file exists
   if (!existsSync(resolvedPath)) {

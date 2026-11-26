@@ -114,6 +114,38 @@ describe('completion sequence persistence', () => {
     expect(await ShadowDetectionModel.countDocuments()).toBe(2);
   });
 
+  it('counts verdicts on review-only records as graded in the summary', async () => {
+    await shadowDetectionRepository.recordCompletionSequence(observation());
+    await shadowDetectionRepository.recordCompletionSequence(observation(new Date('2026-01-02T12:00:00Z')));
+    await shadowDetectionRepository.recordCompletionSequence(observation(new Date('2026-01-03T12:00:00Z')));
+    const { data } = await shadowDetectionRepository.list({ limit: 10 });
+    await Promise.all(
+      data.slice(0, 2).map(row =>
+        shadowDetectionRepository.addVerdict({
+          id: row.id,
+          expectedRevision: row.revision,
+          verdict: 'confirmed_abuse',
+          reason: 'Same operator',
+          reviewerId: 'reviewer',
+        })
+      )
+    );
+
+    await expect(shadowDetectionRepository.summarize()).resolves.toEqual([
+      {
+        detector: 'completionSequence',
+        policyVersion: 1,
+        recorded: 3,
+        noAction: 0,
+        confirmedAbuse: 2,
+        legitimateHuman: 0,
+        legitimateAutomation: 0,
+        insufficientEvidence: 0,
+        automated: 0,
+      },
+    ]);
+  });
+
   it('removes the whole ordered observation when a participant is removed and refuses to recreate it', async () => {
     await shadowDetectionRepository.recordCompletionSequence(observation());
     await User.collection.deleteOne({ _id: new Types.ObjectId(ids[1]) });

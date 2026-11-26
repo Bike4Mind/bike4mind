@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   readAlarmMention: vi.fn(),
   recordShadowDetections: vi.fn(),
   reconcileAlarmThresholds: vi.fn(),
+  reconcileProviderAlarmThresholds: vi.fn(),
   log: vi.fn(),
   error: vi.fn(),
 }));
@@ -34,6 +35,10 @@ vi.mock('./youngAccountSpendShadowDetections', () => ({
 vi.mock('./youngAccountSpendAlarmThresholds', async importOriginal => ({
   ...(await importOriginal<typeof import('./youngAccountSpendAlarmThresholds')>()),
   reconcileYoungAccountAlarmThresholds: mocks.reconcileAlarmThresholds,
+}));
+vi.mock('./providerSpendAlarmThresholds', async importOriginal => ({
+  ...(await importOriginal<typeof import('./providerSpendAlarmThresholds')>()),
+  reconcileProviderSpendAlarmThresholds: mocks.reconcileProviderAlarmThresholds,
 }));
 vi.mock('../events/alarmSlackMention', () => ({ readAlarmMention: mocks.readAlarmMention }));
 vi.mock('@bike4mind/observability', () => ({
@@ -82,6 +87,7 @@ beforeEach(() => {
   mocks.getSettingsMap.mockResolvedValue({});
   mocks.recordShadowDetections.mockResolvedValue(1);
   mocks.reconcileAlarmThresholds.mockResolvedValue(undefined);
+  mocks.reconcileProviderAlarmThresholds.mockResolvedValue(undefined);
 });
 
 describe('young-account spend thresholds', () => {
@@ -473,6 +479,58 @@ describe('young-account spend handler', () => {
       expect(await handler(event)).toMatchObject({ status: 'ok' });
       expect(mocks.reconcileAlarmThresholds).not.toHaveBeenCalled();
       expect(mocks.log).toHaveBeenCalledWith('young-account-alarm-threshold-reconcile-skipped', expect.anything());
+    });
+  });
+  describe('provider spend alarm threshold override', () => {
+    beforeEach(() => {
+      vi.stubEnv('PROVIDER_SPEND_ALARM_NAME_OPENAI', 'app-production-provider-reported-spend-hourly-openai');
+      vi.stubEnv('PROVIDER_SPEND_ALARM_NAME_ANTHROPIC', 'app-production-provider-reported-spend-hourly-anthropic');
+    });
+
+    it('reconciles each run with the admin-set ceilings', async () => {
+      mocks.getSettingsMap.mockResolvedValue({
+        providerSpendOpenaiUsdPerHour: '50',
+        providerSpendAnthropicUsdPerHour: '',
+      });
+      mocks.findYoungAccountSpend.mockResolvedValue(summary(100, 2));
+      expect(await handler(event)).toMatchObject({ status: 'ok' });
+      expect(mocks.reconcileProviderAlarmThresholds).toHaveBeenCalledExactlyOnceWith({
+        client: expect.anything(),
+        alarmNames: {
+          openai: 'app-production-provider-reported-spend-hourly-openai',
+          anthropic: 'app-production-provider-reported-spend-hourly-anthropic',
+        },
+        desired: { openai: 50 },
+        logger: expect.anything(),
+      });
+    });
+
+    it('still runs when the young-account override fails', async () => {
+      vi.stubEnv('YOUNG_ACCOUNT_SPEND_ALARM_NAME', 'app-production-young-account-spend-rate');
+      vi.stubEnv('YOUNG_ACCOUNT_SPEND_WARN_ALARM_NAME', 'app-production-young-account-spend-rate-warn');
+      mocks.reconcileAlarmThresholds.mockRejectedValue(new Error('cloudwatch down'));
+      mocks.findYoungAccountSpend.mockResolvedValue(summary(100, 2));
+      expect(await handler(event)).toMatchObject({ status: 'ok' });
+      expect(mocks.reconcileAlarmThresholds).toHaveBeenCalledOnce();
+      expect(mocks.reconcileProviderAlarmThresholds).toHaveBeenCalledOnce();
+    });
+
+    it('cannot fail the run', async () => {
+      mocks.reconcileProviderAlarmThresholds.mockRejectedValue(new Error('cloudwatch down'));
+      mocks.findYoungAccountSpend.mockResolvedValue(summary(9000, 4));
+      expect(await handler(event)).toMatchObject({ status: 'alerted' });
+      expect(mocks.error).toHaveBeenCalledWith('provider-spend-alarm-threshold-reconcile-failed', {
+        error: 'cloudwatch down',
+      });
+    });
+
+    it('skips, with a log line, when no alarm name is configured', async () => {
+      vi.stubEnv('PROVIDER_SPEND_ALARM_NAME_OPENAI', '');
+      vi.stubEnv('PROVIDER_SPEND_ALARM_NAME_ANTHROPIC', '');
+      mocks.findYoungAccountSpend.mockResolvedValue(summary(100, 2));
+      expect(await handler(event)).toMatchObject({ status: 'ok' });
+      expect(mocks.reconcileProviderAlarmThresholds).not.toHaveBeenCalled();
+      expect(mocks.log).toHaveBeenCalledWith('provider-spend-alarm-threshold-reconcile-skipped', expect.anything());
     });
   });
 });

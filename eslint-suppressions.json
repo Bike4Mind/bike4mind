@@ -3789,12 +3789,12 @@
   },
   "b4m-core/services/src/artifactService/update.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 9
+      "count": 6
     }
   },
   "b4m-core/services/src/artifactService/update.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 8
+      "count": 3
     }
   },
   "b4m-core/services/src/briefcaseService/briefcaseService.test.ts": {
@@ -4505,7 +4505,7 @@
   },
   "b4m-core/slack/src/handlers/__tests__/WorkflowStepHandler.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 31
+      "count": 30
     }
   },
   "b4m-core/slack/src/handlers/channel-manager.ts": {
@@ -4546,7 +4546,7 @@
   },
   "b4m-core/slack/src/resources/GitHubResource.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 4
+      "count": 3
     }
   },
   "b4m-core/slack/src/resources/InternalResource.ts": {

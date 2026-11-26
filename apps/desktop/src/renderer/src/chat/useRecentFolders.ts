@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RecentFolder } from '@shared/chat';
+import { hostChat } from '../host/hostChat';
 
 export interface RecentFolders {
   folders: readonly RecentFolder[];
@@ -17,7 +18,7 @@ export function useRecentFolders(): RecentFolders {
 
   const refresh = useCallback(() => {
     const id = ++latest.current;
-    void window.b4m.chat.listRecentFolders().then(
+    void hostChat.listRecentFolders().then(
       listed => live.current && id === latest.current && setFolders(listed),
       // A list that cannot be read leaves "Open folder..." working, which is the one entry that matters.
       (error: unknown) => console.warn('Could not read recent folders', error)
@@ -27,7 +28,7 @@ export function useRecentFolders(): RecentFolders {
   const remove = useCallback(async (path: string) => {
     const id = ++latest.current;
     try {
-      const left = await window.b4m.chat.removeRecentFolder(path);
+      const left = await hostChat.removeRecentFolder(path);
       if (live.current && id === latest.current) setFolders(left);
     } catch (error) {
       console.warn('Could not remove recent folder', error);

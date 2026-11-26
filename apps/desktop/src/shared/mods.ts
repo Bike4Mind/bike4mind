@@ -222,6 +222,7 @@ export const sceneSkinSchema = z
             quiet: copyText,
             talk: copyText,
             empty: copyText,
+            emptyArchived: copyText,
             finale: z.strictObject({ complete: copyText, ended: copyText }).partial(),
           })
           .partial(),

@@ -90,5 +90,5 @@ function AgentRequests({ agent }: { agent: AgentView }) {
       </Typography>
     );
   }
-  return <PendingRequests calls={pendingCallsIn(messages)} />;
+  return <PendingRequests sessionId={agent.id} calls={pendingCallsIn(messages)} />;
 }
