@@ -132,7 +132,7 @@ vi.mock('@bike4mind/services', async () => {
         mockRefs.searchArgs = args;
         return Promise.resolve({ data: [], total: 0, hasMore: false });
       },
-      deleteStoredObjects: (...args: unknown[]) => {
+      deleteStoredObjectsAfterCommit: (...args: unknown[]) => {
         mockRefs.storedObjectArgs = args;
         return Promise.resolve();
       },

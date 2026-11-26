@@ -179,7 +179,7 @@ export async function cleanupOrganizationRetention(
       if (isModerationEvidenceHold(candidate)) continue;
       let result: Awaited<ReturnType<typeof fabFilesService.deleteAuthorizedFabFile>> | null = null;
       try {
-        result = await withTransaction(async () => {
+        result = await withTransaction(async session => {
           await lockPolicy(organizationId, version);
           const file = await FabFile.findOne({ ...filter, _id: candidate._id });
           if (!file || isModerationEvidenceHold(file)) return null;
@@ -193,6 +193,7 @@ export async function cleanupOrganizationRetention(
               ...lakeMembershipAuditDb,
             },
             storage: getFilesStorage(),
+            session,
             // Inline media has its own policy and explicit object ledger; file deletion must not remove it early.
             generatedCopies: { storage: { delete: async () => undefined }, quests: questRepository },
             searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,

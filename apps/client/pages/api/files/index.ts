@@ -140,16 +140,11 @@ const handler = baseApi({ requiredScopes: FILES_READ_OR_WRITE_SCOPES })
           ]);
 
           if (files.length > 0) {
-            try {
-              await fabFilesService.deleteStoredObjects(
-                files,
-                { files: getFilesStorage(), generated: getGeneratedCopyStore() },
-                req.logger
-              );
-            } catch (error) {
-              req.logger.error('Error deleting file from storage:', { error, userId });
-              throw error;
-            }
+            await fabFilesService.deleteStoredObjectsAfterCommit(
+              files,
+              { files: getFilesStorage(), generated: getGeneratedCopyStore() },
+              { session, key: 'storedObjects|deleteAll', logger: req.logger }
+            );
           }
 
           await logEvent(
