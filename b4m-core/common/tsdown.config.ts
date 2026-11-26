@@ -8,6 +8,7 @@ export default defineConfig({
     'src/utils/skillMd.ts',
     'src/utils/frontmatter.ts',
     'src/modelHub/index.ts',
+    'src/status/index.ts',
     'src/types/entities/RapidReplyTypes.ts',
     'src/types/entities/UserTypes.ts',
   ],
