@@ -598,15 +598,19 @@ function LayoutIcon({ split, panes = 2 }: { split: 'row' | 'column'; panes?: num
   );
 }
 
-/** A scene view's info as the active skin dresses it (copy, host art); undefined for a layout. */
+/**
+ * A scene view's info as the active skin dresses it (copy, host art); undefined for a layout. The feature
+ * flags and `definition` stay the view's own, so a skinned scene has exactly the features of the bare one.
+ */
 export function useSceneStageInfo(view: OrchestratorViewId): SceneStageInfo | undefined {
   const theme = useSkinTheme();
   const info = ORCHESTRATOR_VIEW_INFO[view].scene;
   const block = info && theme.scenes[info.definition.id];
-  return useMemo(
-    () => (info && block ? frameworkScene(skinScene(info.definition, block, theme.id)) : info),
-    [info, block, theme.id]
-  );
+  return useMemo(() => {
+    if (!info || !block) return info;
+    const skinned = skinScene(info.definition, block, theme.id);
+    return { ...info, hostArt: skinned.cast.host.sprites, copy: skinned.copy.stage };
+  }, [info, block, theme.id]);
 }
 
 /** A view's stage lines under the active skin; a layout, which never settles or hosts, falls back to the Tavern's. */
