@@ -163,8 +163,7 @@ describe.each(CASES)('the $view scene with $skin', ({ view, summary }) => {
   if (summary) {
     it("draws the skin's version of the scene", async () => {
       expect(block, `the skin has no ${shipped.id} block`).toBeDefined();
-      // skinScene hands back the shipped scene when the merged block fails the schema.
-      expect(scene).not.toBe(shipped);
+      expect(scene !== shipped, `the skin's ${shipped.id} block fails the scene schema, so it was dropped`).toBe(true);
       await render(props([agentFixture('a', 'working')]));
       expect(el(id).querySelector(':scope > img')?.getAttribute('src')).toBe(scene.map.backdrop);
     });
