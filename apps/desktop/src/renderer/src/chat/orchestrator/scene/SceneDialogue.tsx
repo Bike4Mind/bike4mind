@@ -17,6 +17,7 @@ import {
   type DialogueKeyAction,
 } from './dialogue';
 import { hueFilter, type SceneArt } from './cast';
+import type { AskOutcome } from './sceneAsk';
 
 /** Above sprites and answer bubbles, below the agent details panel (OrchestratorStage, z 400). */
 const DIALOGUE_Z = 300;
@@ -84,8 +85,13 @@ export interface SceneDialogueProps {
   /** The request at the front, by decisionKey or session id (queueIndex); the queue's head when unset or gone. */
   frontKey: string | undefined;
   onFrontChange(key: string | undefined): void;
-  /** The sessions the box holds a request for, so a click on any other waiting agent can go elsewhere. */
-  onHeldChange?(sessionIds: ReadonlySet<string>): void;
+  /**
+   * Each session's front request in the box, so the scene can show it over the agent and send a click on
+   * any other waiting agent elsewhere.
+   */
+  onAsksChange?(asks: ReadonlyMap<string, PendingDecision>): void;
+  /** A request answered in this box, and how. */
+  onAnswered?(sessionId: string, outcome: Exclude<AskOutcome, 'elsewhere'>): void;
   onOpenDetails(sessionId: string): void;
   /** Bumped to bring the box forward and focus it (the stage's "N need you" pill). */
   focusRequest?: number;
@@ -108,7 +114,8 @@ export function SceneDialogue({
   portraitOf,
   frontKey,
   onFrontChange,
-  onHeldChange,
+  onAsksChange,
+  onAnswered,
   onOpenDetails,
   focusRequest,
   look,
@@ -123,10 +130,15 @@ export function SceneDialogue({
   const queue = dialogueQueue(byId).filter(decision => !answered.has(decisionKey(decision)));
   const index = queueIndex(queue, frontKey);
   const front = queue[index] as PendingDecision | undefined;
-  const heldKey = [...new Set(queue.map(decision => decision.sessionId))].sort().join('\n');
+  const asksKey = queue.map(decisionKey).join('\n');
+  const latestQueue = useRef(queue);
+  latestQueue.current = queue;
   useEffect(() => {
-    onHeldChange?.(new Set(heldKey ? heldKey.split('\n') : []));
-  }, [heldKey, onHeldChange]);
+    const asks = new Map<string, PendingDecision>();
+    for (const decision of latestQueue.current)
+      if (!asks.has(decision.sessionId)) asks.set(decision.sessionId, decision);
+    onAsksChange?.(asks);
+  }, [asksKey, onAsksChange]);
 
   // A focus request un-minimizes the box, then focuses it once it is back on screen.
   const focusPending = useRef(false);
@@ -155,8 +167,9 @@ export function SceneDialogue({
     if (queue.length < 2) return;
     onFrontChange(decisionKey(queue[(index + step + queue.length) % queue.length]));
   };
-  const settle = (key: string) => {
-    setAnswered(previous => new Set(previous).add(key));
+  const settle = (decision: PendingDecision, outcome: Exclude<AskOutcome, 'elsewhere'>) => {
+    onAnswered?.(decision.sessionId, outcome);
+    setAnswered(previous => new Set(previous).add(decisionKey(decision)));
     refresh();
   };
 
@@ -258,7 +271,7 @@ export function SceneDialogue({
           name={name}
           colors={colors}
           onOpenDetails={onOpenDetails}
-          onSettled={() => settle(decisionKey(front))}
+          onSettled={outcome => settle(front, outcome)}
           onRefresh={refresh}
           commandKeys={commandKeys}
         />
@@ -459,7 +472,7 @@ function FrontBody({
   colors: Look;
   onOpenDetails(sessionId: string): void;
   /** This request was answered here. */
-  onSettled(): void;
+  onSettled(outcome: Exclude<AskOutcome, 'elsewhere'>): void;
   /** Something changed that may have closed it; read again. */
   onRefresh(): void;
   commandKeys: MutableRefObject<CommandKeys | undefined>;
@@ -483,7 +496,7 @@ function FrontBody({
         asker={{ name, path: [name] }}
         onOpenDetails={onOpenDetails}
         onSettled={onRefresh}
-        onAnswered={onSettled}
+        onAnswered={() => onSettled('answered')}
       />
       <Box sx={{ mt: '0.5em' }}>
         <Box
@@ -513,7 +526,7 @@ function CommandAsk({
   command: CommandApproval;
   colors: Look;
   onOpen(): void;
-  onSettled(): void;
+  onSettled(outcome: 'approved' | 'denied'): void;
   commandKeys: MutableRefObject<CommandKeys | undefined>;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -536,7 +549,7 @@ function CommandAsk({
     setError(null);
     try {
       await window.b4m.chat.respondToApproval(command.approvalId, answer);
-      onSettled();
+      onSettled(answer.decision === 'deny' ? 'denied' : 'approved');
     } catch (caught) {
       setError(errorText(caught));
       setSending(false);

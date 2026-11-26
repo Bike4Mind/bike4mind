@@ -14,6 +14,7 @@ import { OFFICE_SCENE } from '../office/officeScene';
 import { AQUARIUM_SCENE } from '../aquarium/aquariumScene';
 import type { SceneDefinition } from './sceneDefinition';
 import { UNFOCUSED_PAUSE_MS } from './useScenePause';
+import { ASK_OUTCOME_MS } from './useAskStates';
 
 const mount = createThemedMount('dark');
 const sprite = (id: string) => el(`orchestrator-test-yard-agent-${id}`);
@@ -338,6 +339,107 @@ describe('SceneStage features on any definition', () => {
     expect(el('orchestrator-test-yard-announcer').textContent).toBe(`${view.personas.get('a')?.label} needs you.`);
   });
 });
+
+// The bubble over a waiting agent shows its request and where it stands, in every registered scene.
+describe.each([TEST_SCENE, TAVERN_SCENE, OFFICE_SCENE, AQUARIUM_SCENE] as SceneDefinition[])(
+  'the ask over a waiting agent ($id)',
+  scene => {
+    type Chat = Record<string, ReturnType<typeof vi.fn>>;
+    const chat = () => (window as unknown as { b4m: { chat: Chat } }).b4m.chat;
+    const session = (id: string, call: Record<string, unknown>) => ({
+      id,
+      messages: [
+        {
+          id: 'm1',
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: `call-${id}`, status: 'awaiting-approval', approvalId: `ap-${id}`, ...call }],
+        },
+      ],
+    });
+    const bash = (id: string) => session(id, { name: 'bash_execute', input: { command: 'pnpm test --filter api' } });
+    const bubble = () => el(`orchestrator-${scene.id}-bubble-n1`);
+    const renderScene = async (view: OrchestratorViewProps) => {
+      await mount.render(<SceneStage {...view} scene={scene} />);
+      await act(async () => undefined);
+    };
+
+    beforeEach(() => {
+      chat().respondToApproval = vi.fn().mockResolvedValue(undefined);
+    });
+
+    it('names the tool and its command, waiting', async () => {
+      chat().getSession.mockImplementation(async (id: string) => bash(id));
+      await renderScene(props([agentFixture('n1', 'needs-you')], { inSceneDecisions: true }));
+      expect(bubble().dataset.askState).toBe('waiting');
+      expect(el(`orchestrator-${scene.id}-bubble-n1-ask`).textContent).toBe('bash_execute pnpm test --filter api');
+      expect(el(`orchestrator-${scene.id}-bubble-n1-state`).textContent).toBe('Waiting');
+    });
+
+    it.each([
+      ['scene-dialogue-allow-once', 'approved', 'Approved'],
+      ['scene-dialogue-deny', 'denied', 'Denied'],
+    ])('opens the ask from the bubble, then shows %s as %s and clears', async (control, state, label) => {
+      chat().getSession.mockImplementation(async (id: string) => bash(id));
+      const view = props([agentFixture('n1', 'needs-you')], { inSceneDecisions: true });
+      await renderScene(view);
+      await act(async () => bubble().click());
+      expect(view.onSelect).not.toHaveBeenCalled();
+      expect(el('scene-dialogue-command').textContent).toContain('pnpm test --filter api');
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      await act(async () => (el(control) as HTMLButtonElement).click());
+      expect(chat().respondToApproval).toHaveBeenCalledWith('ap-n1', {
+        decision: state === 'denied' ? 'deny' : 'once',
+      });
+      expect(bubble().dataset.askState).toBe(state);
+      expect(bubble().textContent).toContain(label);
+      await act(async () => vi.advanceTimersByTime(ASK_OUTCOME_MS + 1));
+      expect(query(`orchestrator-${scene.id}-bubble-n1`)?.dataset.askState).toBeUndefined();
+    });
+
+    it("shows a question's own text and options", async () => {
+      const ask = {
+        name: 'ask_user',
+        input: {
+          questions: [
+            {
+              question: 'Which database?',
+              header: 'DB',
+              options: [
+                { label: 'Postgres (Recommended)', description: 'a' },
+                { label: 'SQLite', description: 'b' },
+              ],
+            },
+          ],
+        },
+      };
+      chat().getSession.mockImplementation(async (id: string) => session(id, ask));
+      await renderScene(props([agentFixture('n1', 'needs-you')], { inSceneDecisions: true }));
+      expect(el(`orchestrator-${scene.id}-bubble-n1-ask`).textContent).toBe('Which database?');
+      expect(el(`orchestrator-${scene.id}-bubble-n1-option-0`).textContent).toBe('Postgres');
+      expect(el(`orchestrator-${scene.id}-bubble-n1-option-1`).textContent).toBe('SQLite');
+    });
+
+    it('says so when the ask was answered somewhere else', async () => {
+      chat().getSession.mockImplementation(async (id: string) => bash(id));
+      const view = props([agentFixture('n1', 'needs-you')], { inSceneDecisions: true });
+      await renderScene(view);
+      chat().getSession.mockResolvedValue(null);
+      await renderScene({ ...view, agents: [agentFixture('n1', 'working')] });
+      expect(bubble().dataset.askState).toBe('elsewhere');
+      expect(bubble().textContent).toContain('Answered elsewhere');
+    });
+
+    it('says how an answer from the bubble itself went, where the bubble answers', async () => {
+      chat().getSession.mockImplementation(async (id: string) => bash(id));
+      await mount.render(<SceneStage {...props([agentFixture('n1', 'needs-you')])} scene={scene} />);
+      await act(async () => undefined);
+      expect(el(`orchestrator-${scene.id}-bubble-n1-state`).dataset.askState).toBe('waiting');
+      await act(async () => el(`orchestrator-${scene.id}-bubble-n1-approve`).click());
+      expect(el(`orchestrator-${scene.id}-bubble-n1-state`).textContent).toBe('Approved');
+    });
+  }
+);
 
 // Optional definition fields that only some scenes set.
 describe('SceneStage definition options', () => {

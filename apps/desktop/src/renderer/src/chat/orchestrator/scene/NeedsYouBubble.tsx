@@ -6,6 +6,7 @@ import type { TaskDecisionAnswer } from '@shared/orchestration';
 import { refreshKeyOf, useSessionMessages } from '../AgentPeekDrawer';
 import type { AgentView } from '../roster';
 import { type BubblePlan, planForCall, planForQuestion } from './bubbleAnswer';
+import { ASK_STATE_LABEL, type AskOutcome } from './sceneAsk';
 
 const PROMPT_MAX = 70;
 
@@ -151,14 +152,17 @@ function AgentAnswer({
   // stays disabled while the session snapshot catches up.
   const [answered, setAnswered] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  // How this bubble's last answer went, until the agent moves on and the bubble goes with it.
+  const [outcome, setOutcome] = useState<{ waitId: string; state: AskOutcome } | undefined>(undefined);
   const waitId = waitIdOf(plan);
   const sending = waitId !== undefined && answered.has(waitId);
 
-  const send = async (answeredId: string, request: () => Promise<unknown>) => {
+  const send = async (answeredId: string, state: AskOutcome, request: () => Promise<unknown>) => {
     setAnswered(previous => new Set(previous).add(answeredId));
     setError(null);
     try {
       await request();
+      setOutcome({ waitId: answeredId, state });
     } catch (caught) {
       setError(errorText(caught));
       setAnswered(previous => {
@@ -169,9 +173,12 @@ function AgentAnswer({
     }
   };
   const respond = (approvalId: string, answer: ChatApprovalAnswer) =>
-    void send(approvalId, () => window.b4m.chat.respondToApproval(approvalId, answer));
+    void send(approvalId, answer.decision === 'deny' ? 'denied' : answer.answers ? 'answered' : 'approved', () =>
+      window.b4m.chat.respondToApproval(approvalId, answer)
+    );
   const decide = (decisionId: string, answer: TaskDecisionAnswer) =>
-    void send(decisionId, () => window.b4m.chat.answerTaskDecision(agent.id, decisionId, answer));
+    void send(decisionId, 'answered', () => window.b4m.chat.answerTaskDecision(agent.id, decisionId, answer));
+  const state = outcome && outcome.waitId === waitId ? outcome.state : 'waiting';
 
   const prompt = plan.kind === 'approve' ? plan.summary : plan.prompt;
   const open = (
@@ -196,6 +203,11 @@ function AgentAnswer({
         >
           {named && <strong>{`${name}: `}</strong>}
           {prompt && truncate(prompt, PROMPT_MAX)}
+        </Box>
+      )}
+      {plan.kind !== 'open' && (
+        <Box data-testid={`${testId}-state`} data-ask-state={state} sx={{ fontSize: '0.9em', fontWeight: 600 }}>
+          {ASK_STATE_LABEL[state]}
         </Box>
       )}
       {error && (

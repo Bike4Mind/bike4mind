@@ -30,6 +30,7 @@ import { stateLampColor } from '../statePalette';
 import { VISUALLY_HIDDEN } from '../../../visuallyHidden';
 import { useAgentAnnouncements } from './announcements';
 import { bubbleText, hostBubbleText, truncate } from './bubbleText';
+import { AskBubble, type SpriteAsk } from './AskBubble';
 import { assignSheets, hueFilter, type SceneArt } from './cast';
 import { hostAct, hostBubble } from './host';
 import { ReplyBubble } from './HostReply';
@@ -39,6 +40,8 @@ import { placeAgents, placementMap, type Placement } from './placement';
 import { QuestBoard } from './QuestBoard';
 import { useQuestNotes } from './quests';
 import { SceneDialogue } from './SceneDialogue';
+import { ASK_STATE_LABEL, sceneAskOf } from './sceneAsk';
+import { useAskStates } from './useAskStates';
 import type { HostPose, SceneDefinition, ScenePoint } from './sceneDefinition';
 import { SceneLight, type SceneMood } from './SceneLight';
 import { LABEL_SPAN, hiddenBehind, nameLabelLayout, needsYouGroups, type NameLabel } from './stageGeometry';
@@ -382,6 +385,7 @@ function Sprite({
   point,
   label,
   needsYou,
+  ask,
   persona,
   art,
   animated,
@@ -401,6 +405,8 @@ function Sprite({
   label: NameLabel;
   /** How many waiting agents this sprite's bubble speaks for (needsYouGroups); 0 when another sprite carries it. */
   needsYou: number;
+  /** The request its bubble shows in place of the bare "Needs you!", or how that request just ended. */
+  ask: SpriteAsk | undefined;
   persona: AgentPersona | undefined;
   /** The agent's art in its current pose. */
   art: SceneArt;
@@ -501,13 +507,17 @@ function Sprite({
         }}
       />
       {agent.state === 'working' && !agent.preparing && <Spark kind={sparkKind(agent)} />}
-      {bubble && (
-        <Bubble
-          testId={`${testId}-bubble-${agent.id}`}
-          text={bubble}
-          urgent={agent.state === 'needs-you'}
-          clickable={agent.state === 'needs-you'}
-        />
+      {ask ? (
+        <AskBubble testId={`${testId}-bubble-${agent.id}`} ask={ask} />
+      ) : (
+        bubble && (
+          <Bubble
+            testId={`${testId}-bubble-${agent.id}`}
+            text={bubble}
+            urgent={agent.state === 'needs-you'}
+            clickable={agent.state === 'needs-you'}
+          />
+        )
       )}
       <NamePlate
         testId={`${testId}-name-${agent.id}`}
@@ -787,7 +797,8 @@ export function SceneStage({
       .map(({ agent, placement }) => ({ id: agent.id, zone: placement.zone, point: placement.point }))
   );
   const needsYou = new Map([...needsYouGroupsByCarrier].map(([id, group]) => [id, group.length]));
-  // One place to answer: with the dialogue box up, a waiting sprite keeps only its "Needs you!" marker.
+  // One place to answer: with the dialogue box up, a waiting sprite's bubble shows its request and state but
+  // answers in the box.
   // It stays up at last call too, when someone away from the keyboard is most likely to come back to it.
   const dialogue = inSceneDecisions && answerFromBubble;
   // Until everyone is seated the bubble rides inside the walking sprite; after that it stands on its own with buttons.
@@ -796,11 +807,18 @@ export function SceneStage({
   const agentsById = new Map(agents.map(agent => [agent.id, agent]));
   const [dialogueFront, setDialogueFront] = useState<string | undefined>(undefined);
   const [dialogueFocus, setDialogueFocus] = useState(0);
-  const [dialogueHeld, setDialogueHeld] = useState<ReadonlySet<string>>(() => new Set());
+  const { asks: dialogueAsks, outcomes, onAsksChange, onAnswered } = useAskStates(dialogue, agents);
+  const spriteAskOf = (agent: AgentView, count: number): SpriteAsk | undefined => {
+    const ended = outcomes.get(agent.id);
+    if (ended) return { heading: ASK_STATE_LABEL[ended.state], state: ended.state, ask: ended.ask };
+    const decision = dialogue && agent.state === 'needs-you' && count > 0 ? dialogueAsks.get(agent.id) : undefined;
+    if (!decision) return undefined;
+    return { heading: bubbleText(agent, count) ?? 'Needs you!', state: 'waiting', ask: sceneAskOf(decision) };
+  };
   // A waiting character, clicked, brings its request to the front of the box instead of opening its details.
   // Needs-you with nothing the box can answer (no parked call) opens the details, so the click is never dead.
   const selectSprite = (id: string) => {
-    if (dialogue && agentsById.get(id)?.state === 'needs-you' && dialogueHeld.has(id)) {
+    if (dialogue && agentsById.get(id)?.state === 'needs-you' && dialogueAsks.has(id)) {
       setDialogueFront(id);
       setDialogueFocus(value => value + 1);
     } else onSelect(id);
@@ -944,6 +962,7 @@ export function SceneStage({
             point={arrived ? placement.point : map.door}
             label={labels.get(agent.id) ?? HIDDEN_LABEL}
             needsYou={answerBubbles.has(agent.id) ? 0 : (needsYou.get(agent.id) ?? 0)}
+            ask={answerBubbles.has(agent.id) ? undefined : spriteAskOf(agent, needsYou.get(agent.id) ?? 0)}
             persona={personas.get(agent.id)}
             art={artOf(agent.id, agent.state)}
             animated={animatedPoses.has(states.pose[agent.state])}
@@ -1023,7 +1042,8 @@ export function SceneStage({
             portraitOf={id => artOf(id, 'needs-you')}
             frontKey={dialogueFront}
             onFrontChange={setDialogueFront}
-            onHeldChange={setDialogueHeld}
+            onAsksChange={onAsksChange}
+            onAnswered={onAnswered}
             onOpenDetails={onSelect}
             focusRequest={dialogueFocus + (needsYouFocusRequest ?? 0)}
             look={mode === 'dark' ? 'wood' : 'parchment'}
