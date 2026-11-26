@@ -42,6 +42,14 @@ export type PlatformAttemptDiagnostics = PlatformAttemptPage & {
   byState: Record<'registered' | 'dispatched' | 'usage_known' | 'unresolved', number>;
 };
 
+export type PlatformRecoveryFailureCode = 'conflict' | 'persistence_pending' | 'lookup_failed' | 'recovery_failed';
+export type PlatformRecoveryResult = {
+  recorded: number;
+  unresolved: number;
+  failed: { providerCallId: string; code: PlatformRecoveryFailureCode }[];
+  nextCursor?: string;
+};
+
 export interface IPlatformAttemptRepository {
   register(input: IPlatformAttemptRegistration): Promise<IPlatformAttempt>;
   get(providerCallId: string): Promise<IPlatformAttempt | null>;

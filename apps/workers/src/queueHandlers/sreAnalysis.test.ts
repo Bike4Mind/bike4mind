@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const mockRecoverAccounting = vi.fn().mockResolvedValue(undefined);
+vi.mock('./sreQueueAccounting', () => ({
+  recoverSreQueueAccounting: (...args: unknown[]) => mockRecoverAccounting(...args),
+}));
+
 const mockGetSettingsValue = vi.fn();
 const mockClaimForAnalysis = vi.fn();
+const mockFindByFingerprint = vi.fn();
 const mockUpdateStatus = vi.fn();
 const mockPublish = vi.fn();
 const mockDiagnose = vi.fn();
@@ -13,6 +19,7 @@ vi.mock('@bike4mind/database', () => ({
   inboxRepository: {},
   sreErrorPatternRepository: {},
   sreErrorTrackingRepository: {
+    findByFingerprint: (...args: unknown[]) => mockFindByFingerprint(...args),
     claimForAnalysis: (...args: unknown[]) => mockClaimForAnalysis(...args),
     updateStatus: (...args: unknown[]) => mockUpdateStatus(...args),
     countConsecutiveFailures: vi.fn().mockResolvedValue(0),
@@ -124,6 +131,7 @@ const logger = {
 describe('runSreAnalysis diagnostician gate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRecoverAccounting.mockResolvedValue(undefined);
     mockClaimForAnalysis.mockResolvedValue({ id: 'track-1' });
     mockDiagnose.mockResolvedValue({
       diagnosis: {
@@ -144,7 +152,7 @@ describe('runSreAnalysis diagnostician gate', () => {
   ])('requires approval and does not dispatch (%s)', async (_label, source, gate) => {
     mockGetSettingsValue.mockResolvedValue(makeConfig(gate));
 
-    await runSreAnalysis(makePayload(source), logger);
+    await runSreAnalysis(makePayload(source), logger, { attribution: { executionId: 'execution-one' } } as never);
 
     expect(mockUpdateStatus).toHaveBeenCalledWith('track-1', 'awaiting_approval');
     expect(mockPostSreApprovalMessage).toHaveBeenCalled();
@@ -154,9 +162,68 @@ describe('runSreAnalysis diagnostician gate', () => {
   it('dispatches when the source is allow-listed', async () => {
     mockGetSettingsValue.mockResolvedValue(makeConfig({ autoDispatchSources: [SreSourceType.GITHUB_ISSUE] }));
 
-    await runSreAnalysis(makePayload(SreSourceType.GITHUB_ISSUE), logger);
+    await runSreAnalysis(makePayload(SreSourceType.GITHUB_ISSUE), logger, {
+      attribution: { executionId: 'execution-one' },
+    } as never);
 
     expect(mockPostSreApprovalMessage).not.toHaveBeenCalled();
     expect(mockPublish).toHaveBeenCalledTimes(1);
   });
 });
+
+it('does not acknowledge or claim a fingerprint when original accounting is pending', async () => {
+  vi.clearAllMocks();
+  const error = new Error('accounting pending');
+  mockRecoverAccounting.mockRejectedValueOnce(error);
+  await expect(
+    runSreAnalysis(makePayload(SreSourceType.GITHUB_ISSUE), logger, {
+      attribution: { executionId: 'execution-one' },
+    } as never)
+  ).rejects.toBe(error);
+  expect(mockClaimForAnalysis).not.toHaveBeenCalled();
+  expect(mockDiagnose).not.toHaveBeenCalled();
+  expect(mockPublish).not.toHaveBeenCalled();
+});
+
+it('resumes its own empty-receipt claim after registration failed without sending', async () => {
+  vi.clearAllMocks();
+  mockRecoverAccounting.mockResolvedValue(undefined);
+  mockGetSettingsValue.mockResolvedValue(makeConfig({}));
+  mockClaimForAnalysis
+    .mockResolvedValueOnce({ id: 'track-1', status: 'analyzing', accountingExecutionId: 'execution-one' })
+    .mockResolvedValueOnce(null);
+  mockFindByFingerprint.mockResolvedValue({
+    id: 'track-1',
+    status: 'analyzing',
+    accountingExecutionId: 'execution-one',
+  });
+  const registrationError = new Error('intent registration unavailable');
+  let providerSends = 0;
+  mockDiagnose.mockRejectedValueOnce(registrationError).mockImplementationOnce(async () => {
+    providerSends++;
+    return { diagnosis: null };
+  });
+  const context = { attribution: { executionId: 'execution-one' } } as never;
+  await expect(runSreAnalysis(makePayload(SreSourceType.GITHUB_ISSUE), logger, context)).rejects.toBe(
+    registrationError
+  );
+  expect(providerSends).toBe(0);
+  await runSreAnalysis(makePayload(SreSourceType.GITHUB_ISSUE), logger, context);
+  expect(mockDiagnose).toHaveBeenCalledTimes(2);
+  expect(providerSends).toBe(1);
+});
+
+it.each([undefined, 'foreign-execution'])(
+  'keeps legacy and foreign fingerprint duplicates skipped (%s)',
+  async executionId => {
+    vi.clearAllMocks();
+    mockRecoverAccounting.mockResolvedValue(undefined);
+    mockGetSettingsValue.mockResolvedValue(makeConfig({}));
+    mockClaimForAnalysis.mockResolvedValueOnce(null);
+    mockFindByFingerprint.mockResolvedValue({ id: 'track-1', status: 'analyzing', accountingExecutionId: executionId });
+    await runSreAnalysis(makePayload(SreSourceType.GITHUB_ISSUE), logger, {
+      attribution: { executionId: 'execution-one' },
+    } as never);
+    expect(mockDiagnose).not.toHaveBeenCalled();
+  }
+);

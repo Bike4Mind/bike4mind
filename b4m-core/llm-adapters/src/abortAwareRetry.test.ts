@@ -134,3 +134,15 @@ describe('abort-aware retry', () => {
     expect(settled).toHaveBeenCalledWith('actual response');
   });
 });
+
+describe('single-attempt admission', () => {
+  it('requires an explicitly supported adapter and the existing cancellable text shape', () => {
+    const signal = new AbortController().signal;
+    const options = { retryMode: 'single-attempt' as const, stream: false, abortSignal: signal };
+    expect(() => getAbortAwareRetrySignal(options)).toThrow(/unsupported/);
+    expect(getAbortAwareRetrySignal(options, true)).toBe(signal);
+    expect(() => getAbortAwareRetrySignal({ ...options, stream: true }, true)).toThrow(/non-streaming/);
+    expect(() => getAbortAwareRetrySignal({ ...options, tools: [{} as never] }, true)).toThrow(/without tools/);
+    expect(() => getAbortAwareRetrySignal({ ...options, abortSignal: undefined }, true)).toThrow(/signal/);
+  });
+});

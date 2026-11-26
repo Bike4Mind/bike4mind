@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { AxiosError, AxiosHeaders } from 'axios';
 import { EmailJobOverallStatus, EmailJobStatus } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import EmailJobDetail from './EmailJobDetail';
@@ -28,6 +29,8 @@ const m = vi.hoisted(() => ({
   preview: vi.fn(),
   send: vi.fn(),
   schedule: vi.fn(),
+  cancel: vi.fn(),
+  cancelPending: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
 }));
@@ -43,8 +46,8 @@ vi.mock('@client/app/hooks/data/emailMarketing', () => ({
   useCreateEmailJob: () => mutation(m.create),
   useUpdateEmailJob: () => mutation(m.update),
   useSendEmailJob: () => mutation(m.send),
-  useCancelEmailJob: () => mutation(vi.fn()),
-  useCancelPendingEmails: () => mutation(vi.fn()),
+  useCancelEmailJob: () => mutation(m.cancel),
+  useCancelPendingEmails: () => mutation(m.cancelPending),
   useScheduleEmailJob: () => mutation(m.schedule),
   usePreviewRecipients: () => mutation(m.preview),
 }));
@@ -83,6 +86,15 @@ const previewResult = (overrides: Partial<PreviewResult> = {}): PreviewResult =>
   hasMore: false,
   ...overrides,
 });
+
+const badRequest = (error: string) =>
+  new AxiosError('Request failed with status code 400', 'ERR_BAD_REQUEST', undefined, undefined, {
+    status: 400,
+    statusText: 'Bad Request',
+    data: { error },
+    headers: {},
+    config: { headers: new AxiosHeaders() },
+  });
 
 const EMAIL = /^u\d\d@example\.com$/;
 const emailCells = (scope: HTMLElement = document.body) => within(scope).queryAllByText(EMAIL);
@@ -266,6 +278,167 @@ describe('EmailJobDetail', () => {
     expect(m.update).not.toHaveBeenCalled();
   });
 
+  describe('schedule and send actions', () => {
+    const scheduleButton = () => screen.queryByRole('button', { name: 'Schedule' });
+
+    it.each([EmailJobStatus.SCHEDULED, EmailJobStatus.CANCELLED, EmailJobStatus.COMPLETED])(
+      'offers no Schedule for a %s campaign',
+      status => {
+        m.job = { ...draftJob(EmailJobOverallStatus.COMPLETE), status };
+        renderDetail('job1');
+
+        expect(screen.getByDisplayValue('Draft job')).toBeInTheDocument();
+        expect(scheduleButton()).toBeNull();
+      }
+    );
+
+    it('offers Schedule for a draft, even one whose send failed', () => {
+      m.job = draftJob(EmailJobOverallStatus.FAILED);
+      renderDetail('job1');
+
+      expect(scheduleButton()).toBeInTheDocument();
+    });
+
+    it('shows a rejected schedule inline, keeps the form open, and clears the error on cancel', async () => {
+      m.schedule.mockRejectedValue(badRequest('Can only schedule jobs in draft status'));
+      renderDetail('job1');
+
+      fireEvent.click(scheduleButton()!);
+      fireEvent.change(screen.getByLabelText('Send At'), { target: { value: '2099-01-01T10:00' } });
+      const [, submit] = screen.getAllByRole('button', { name: 'Schedule' });
+      fireEvent.click(submit);
+
+      expect(await screen.findByTestId('email-job-schedule-error')).toHaveTextContent(
+        'Can only schedule jobs in draft status'
+      );
+      expect(screen.getByLabelText('Send At')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByLabelText('Send At')).toBeNull();
+      fireEvent.click(scheduleButton()!);
+      expect(screen.queryByTestId('email-job-schedule-error')).toBeNull();
+    });
+
+    it('drops the Send At form when a refetch moves the job out of draft, keeping the schedule error', async () => {
+      m.schedule.mockRejectedValue(badRequest('Can only schedule jobs in draft status'));
+      const view = renderDetail('job1');
+
+      fireEvent.click(scheduleButton()!);
+      fireEvent.change(screen.getByLabelText('Send At'), { target: { value: '2099-01-01T10:00' } });
+      fireEvent.click(screen.getAllByRole('button', { name: 'Schedule' })[1]);
+      await screen.findByTestId('email-job-schedule-error');
+
+      m.job = { ...draftJob(), status: EmailJobStatus.SCHEDULED };
+      view.rerender(
+        <CssVarsProvider theme={appTheme}>
+          <EmailJobDetail jobId="job1" onBack={() => {}} />
+        </CssVarsProvider>
+      );
+
+      expect(screen.queryByLabelText('Send At')).toBeNull();
+      expect(scheduleButton()).toBeNull();
+      expect(screen.getByTestId('email-job-schedule-error')).toHaveTextContent(
+        'Can only schedule jobs in draft status'
+      );
+    });
+
+    it('closes the Send At form and clears the error once a retried schedule succeeds', async () => {
+      m.schedule.mockRejectedValueOnce(badRequest('Can only schedule jobs in draft status')).mockResolvedValue({});
+      renderDetail('job1');
+
+      fireEvent.click(scheduleButton()!);
+      fireEvent.change(screen.getByLabelText('Send At'), { target: { value: '2099-01-01T10:00' } });
+      fireEvent.click(screen.getAllByRole('button', { name: 'Schedule' })[1]);
+      await screen.findByTestId('email-job-schedule-error');
+
+      fireEvent.click(screen.getAllByRole('button', { name: 'Schedule' })[1]);
+
+      await waitFor(() => expect(screen.queryByLabelText('Send At')).toBeNull());
+      expect(screen.queryByTestId('email-job-schedule-error')).toBeNull();
+      expect(m.schedule).toHaveBeenCalledTimes(2);
+    });
+
+    it('shows a failed save as an action error', async () => {
+      m.update.mockRejectedValueOnce(badRequest('Template not found'));
+      renderDetail('job1');
+      await screen.findByRole('button', { name: 'View All 30 Recipients' });
+
+      fireEvent.change(screen.getByDisplayValue('Draft job'), { target: { value: 'Renamed' } });
+      fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+
+      expect(await screen.findByTestId('email-job-action-error')).toHaveTextContent('Template not found');
+    });
+
+    it('shows a failed auto-save before sending as an action error', async () => {
+      m.update.mockRejectedValueOnce(badRequest('Template not found'));
+      renderDetail('job1');
+      await screen.findByRole('button', { name: 'View All 30 Recipients' });
+
+      const [send] = screen
+        .getAllByRole('button', { name: /^Send Campaign/ })
+        .filter(el => !el.hasAttribute('aria-expanded'));
+      fireEvent.click(send);
+
+      expect(await screen.findByTestId('email-job-action-error')).toHaveTextContent('Template not found');
+      expect(m.send).not.toHaveBeenCalled();
+    });
+
+    it('keeps an action error when a refetch lands after it and moves the job to another status', async () => {
+      m.job = { ...draftJob(), status: EmailJobStatus.SCHEDULED };
+      m.cancel.mockRejectedValue(badRequest('Job is not scheduled'));
+      const view = renderDetail('job1');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel Schedule' }));
+      await screen.findByTestId('email-job-action-error');
+
+      m.job = { ...draftJob(), status: EmailJobStatus.CANCELLED };
+      view.rerender(
+        <CssVarsProvider theme={appTheme}>
+          <EmailJobDetail jobId="job1" onBack={() => {}} />
+        </CssVarsProvider>
+      );
+
+      expect(screen.getByTestId('email-job-action-error')).toHaveTextContent('Job is not scheduled');
+    });
+
+    it('shows a rejected send as an action error', async () => {
+      m.update.mockResolvedValue({});
+      m.send.mockRejectedValue(badRequest('Campaign has no eligible recipients'));
+      renderDetail('job1');
+      await screen.findByRole('button', { name: 'View All 30 Recipients' });
+
+      // The accordion header shares the "Send Campaign" name, so pick the button that is not a disclosure.
+      const [send] = screen
+        .getAllByRole('button', { name: /^Send Campaign/ })
+        .filter(el => !el.hasAttribute('aria-expanded'));
+      fireEvent.click(send);
+
+      expect(await screen.findByTestId('email-job-action-error')).toHaveTextContent(
+        'Campaign has no eligible recipients'
+      );
+    });
+
+    it('shows a rejected schedule cancel as an action error', async () => {
+      m.job = { ...draftJob(), status: EmailJobStatus.SCHEDULED };
+      m.cancel.mockRejectedValue(badRequest('Job is not scheduled'));
+      renderDetail('job1');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel Schedule' }));
+
+      expect(await screen.findByTestId('email-job-action-error')).toHaveTextContent('Job is not scheduled');
+    });
+
+    it('shows a failed cancel of pending emails as an action error, even without a server response', async () => {
+      m.job = draftJob(EmailJobOverallStatus.SENDING);
+      m.cancelPending.mockRejectedValue(new Error('Network Error'));
+      renderDetail('job1');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel All Pending' }));
+
+      expect(await screen.findByTestId('email-job-action-error')).toHaveTextContent('Network Error');
+    });
+  });
+
   // jsdom's getComputedStyle ignores @media rules, so read the declarations emitted for the element's
   // classes inside the `min-width` query for a breakpoint (0px is the phone-first base, 900px is md).
   const declared = (testId: string, minWidth: string) => {
@@ -273,7 +446,10 @@ describe('EmailJobDetail', () => {
     const found: Record<string, string> = {};
     for (const sheet of Array.from(document.styleSheets)) {
       for (const rule of Array.from(sheet.cssRules)) {
-        if (!(rule instanceof CSSMediaRule) || !rule.conditionText.replace(/\s/g, '').includes(`(min-width:${minWidth})`)) {
+        if (
+          !(rule instanceof CSSMediaRule) ||
+          !rule.conditionText.replace(/\s/g, '').includes(`(min-width:${minWidth})`)
+        ) {
           continue;
         }
         for (const inner of Array.from(rule.cssRules)) {
