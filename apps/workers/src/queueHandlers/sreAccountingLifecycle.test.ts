@@ -85,7 +85,6 @@ vi.mock('./sreQueueAccounting', async importOriginal => {
 });
 vi.mock('@bike4mind/utils', () => ({
   getSettingsByNames: vi.fn().mockResolvedValue({}),
-  sanitizeText: (value: string) => value,
 }));
 vi.mock('@bike4mind/server-utils/utils/eventBus', () => ({
   SreEvents: {

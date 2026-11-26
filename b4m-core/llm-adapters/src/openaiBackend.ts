@@ -22,6 +22,7 @@ import {
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
 import { assertEvaluationTextWire, assertEvaluationWireBound } from './evaluationTextWire';
+import { matchesOpenAIResponseModel } from './openaiModelIdentity';
 import { reconcileAfterDispatch } from './evaluationReconcile';
 import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
@@ -1389,7 +1390,8 @@ export class OpenAIBackend implements ICompletionBackend {
           }
         ).then(r => r.result);
     if (options.retryMode === 'single-attempt' && !(response instanceof Stream)) {
-      if (response.model !== parameters.model) throw new Error('Provider response model identity is unverified');
+      if (!matchesOpenAIResponseModel(parameters.model, response.model))
+        throw new Error('Provider response model identity is unverified');
       const cached = response.usage?.prompt_tokens_details?.cached_tokens;
       assertMeasuredProviderUsage({
         inputTokens: response.usage?.prompt_tokens,

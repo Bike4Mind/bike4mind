@@ -790,6 +790,36 @@ describe('single-attempt accounting transport', () => {
     }
   );
 
+  it.each([
+    ['gpt-4o', 'gpt-4o-2024-08-06'],
+    ['gpt-4o-mini', 'gpt-4o-mini-2024-07-18'],
+    ['gpt-4.1', 'gpt-4.1-2025-04-14'],
+    ['gpt-5', 'gpt-5-2025-08-07'],
+    ['gpt-4', 'gpt-4-0613'],
+    ['gpt-4-turbo', 'gpt-4-turbo-2024-04-09'],
+  ])('captures one paid OpenAI response when %s resolves to %s', async (requestedModel, returnedModel) => {
+    const fetch = vi.fn(async () =>
+      json({
+        id: 'response',
+        object: 'chat.completion',
+        created: 0,
+        model: returnedModel,
+        choices: [{ index: 0, message: { role: 'assistant', content: 'answer' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 8, completion_tokens: 2 },
+      })
+    );
+    vi.stubGlobal('fetch', fetch);
+    const callback = vi.fn();
+    await new OpenAIBackend('test', logger()).complete(
+      requestedModel,
+      messages,
+      { ...opts(new AbortController().signal), retryMode: 'single-attempt' },
+      callback
+    );
+    expect(callback).toHaveBeenCalledWith(['answer'], expect.objectContaining({ inputTokens: 8, outputTokens: 2 }));
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it.each(direct)(
     '$name rejects missing, mismatched, or unproven aliased model identity before usage capture',
     async ({ name, make, model }) => {
