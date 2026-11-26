@@ -16,11 +16,14 @@ const RENDERER_SOURCES = import.meta.glob<string>(
   { query: '?raw', import: 'default', eager: true }
 );
 
-/** Every `view === '<id>'`-style check (either order, `!==` too) and `case '<id>':` naming one of `ids`. */
+/**
+ * Every `view === '<id>'` or `scene.id === '<id>'` style check (either order, `!==` too) and `case '<id>':`
+ * naming one of `ids`.
+ */
 function sceneIdChecks(source: string, ids: readonly string[]): string[] {
   // Scene ids are kebab names (sceneDefinition.ts), so they need no escaping here.
   const quoted = `['"\`](?:${ids.join('|')})['"\`]`;
-  const viewish = String.raw`[\w.?\[\]]*view\w*`;
+  const viewish = String.raw`[\w.?\[\]]*(?:view\w*|\bid)`;
   const patterns = [
     new RegExp(String.raw`${viewish}\s*[!=]==?\s*${quoted}`, 'i'),
     new RegExp(String.raw`${quoted}\s*[!=]==?\s*${viewish}`, 'i'),
@@ -74,6 +77,8 @@ describe('scene registry', () => {
     expect(sceneIdChecks('const x = layout.panes[0].view !== "tavern";', ids)).toHaveLength(1);
     expect(sceneIdChecks("const office = 'tile-wall' === pane.view;", ids)).toHaveLength(1);
     expect(sceneIdChecks("    case 'tavern':", ids)).toHaveLength(1);
+    expect(sceneIdChecks("if (scene.id === 'tavern') return;", ids)).toHaveLength(1);
+    expect(sceneIdChecks("const isWall = 'tile-wall' !== definition?.id;", ids)).toHaveLength(1);
     expect(sceneIdChecks("singlePaneLayout('tavern')", ids)).toEqual([]);
     expect(sceneIdChecks("lookId === 'tavern'", ids)).toEqual([]);
   });
