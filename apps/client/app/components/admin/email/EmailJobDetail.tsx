@@ -52,6 +52,7 @@ import {
 } from '@client/app/hooks/data/emailMarketing';
 import { EmailJobStatus, EmailJobOverallStatus, IEmailTemplateDocument } from '@bike4mind/common';
 import { APP_NAME } from '@client/config/general'; // brand externalized
+import { getErrorMessage } from '@client/app/utils/error';
 import EmailStatusSummary from './EmailStatusSummary';
 import EmailActivityHistory from './EmailActivityHistory';
 import EmailPreviewModal from './EmailPreviewModal';
@@ -153,6 +154,8 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [scheduleDate, setScheduleDate] = useState('');
   const [showSchedule, setShowSchedule] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [recipientPreviewData, setRecipientPreviewData] = useState<{
     totalCount: number;
     eligibleCount: number;
@@ -358,6 +361,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
   };
 
   const handleSend = async () => {
+    setActionError(null);
     let targetJobId = jobId;
     const testEmailAddresses = parseTestEmails();
     const recipientFilter = buildRecipientFilter();
@@ -393,23 +397,37 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
 
     if (!targetJobId) return;
 
-    await sendMutation.mutateAsync({
-      id: targetJobId,
-      testMode: formData.isTestMode,
-      testRecipients: formData.isTestMode ? testEmailAddresses : undefined,
-      testSubjectIndicator: formData.isTestMode, // Only add [TEST] prefix when in test mode
-      recipientFilter,
-    });
+    try {
+      await sendMutation.mutateAsync({
+        id: targetJobId,
+        testMode: formData.isTestMode,
+        testRecipients: formData.isTestMode ? testEmailAddresses : undefined,
+        testSubjectIndicator: formData.isTestMode, // Only add [TEST] prefix when in test mode
+        recipientFilter,
+      });
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    }
   };
 
   const handleCancelPending = async () => {
     if (!jobId) return;
-    await cancelPendingMutation.mutateAsync({ jobId });
+    setActionError(null);
+    try {
+      await cancelPendingMutation.mutateAsync({ jobId });
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    }
   };
 
   const handleCancel = async () => {
     if (!jobId) return;
-    await cancelMutation.mutateAsync(jobId);
+    setActionError(null);
+    try {
+      await cancelMutation.mutateAsync(jobId);
+    } catch (error) {
+      setActionError(getErrorMessage(error));
+    }
   };
 
   // Filter recipients for View Users modal
@@ -422,11 +440,16 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
 
   const handleSchedule = async () => {
     if (!jobId || !scheduleDate) return;
-    await scheduleMutation.mutateAsync({
-      id: jobId,
-      scheduledAt: new Date(scheduleDate),
-    });
-    setShowSchedule(false);
+    setScheduleError(null);
+    try {
+      await scheduleMutation.mutateAsync({
+        id: jobId,
+        scheduledAt: new Date(scheduleDate),
+      });
+      setShowSchedule(false);
+    } catch (error) {
+      setScheduleError(getErrorMessage(error));
+    }
   };
 
   const getProgress = () => {
@@ -435,6 +458,8 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
   };
 
   const isSending = job?.overallStatus === EmailJobOverallStatus.SENDING;
+  // overallStatus stays non-draft once a send went out, so gate on status: the schedule route accepts only drafts.
+  const canSchedule = isEditing && job?.status === EmailJobStatus.DRAFT;
   // Reusable campaigns can be edited anytime except when actively sending
   const canEdit = !job || !isSending;
   const isSaving = createMutation.isPending || updateMutation.isPending;
@@ -942,8 +967,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                       </Button>
                     )}
 
-                    {/* Schedule - Only in edit mode and not sending */}
-                    {isEditing && job && !isSending && (
+                    {canSchedule && !isSending && (
                       <Button
                         variant="soft"
                         color="primary"
@@ -953,6 +977,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                           defaultDate.setHours(defaultDate.getHours() + 1);
                           defaultDate.setMinutes(0, 0, 0);
                           setScheduleDate(defaultDate.toISOString().slice(0, 16));
+                          setScheduleError(null);
                           setShowSchedule(true);
                         }}
                       >
@@ -986,6 +1011,12 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                     )}
                   </Stack>
 
+                  {actionError && (
+                    <Alert color="danger" variant="soft" data-testid="email-job-action-error">
+                      {actionError}
+                    </Alert>
+                  )}
+
                   {/* Recipient count reminder */}
                   {recipientPreviewData && (
                     <Alert color="primary" variant="soft">
@@ -995,8 +1026,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                     </Alert>
                   )}
 
-                  {/* Schedule Form - Only show in edit mode */}
-                  {isEditing && showSchedule && (
+                  {canSchedule && showSchedule && (
                     <Sheet variant="outlined" sx={{ p: 2, borderRadius: 'md' }}>
                       <Stack spacing={2}>
                         <FormControl>
@@ -1012,6 +1042,11 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                             }}
                           />
                         </FormControl>
+                        {scheduleError && (
+                          <Alert color="danger" variant="soft" data-testid="email-job-schedule-error">
+                            {scheduleError}
+                          </Alert>
+                        )}
                         <Stack direction="row" spacing={1}>
                           <Button
                             variant="solid"
@@ -1023,7 +1058,14 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                           >
                             Schedule
                           </Button>
-                          <Button variant="plain" color="neutral" onClick={() => setShowSchedule(false)}>
+                          <Button
+                            variant="plain"
+                            color="neutral"
+                            onClick={() => {
+                              setShowSchedule(false);
+                              setScheduleError(null);
+                            }}
+                          >
                             Cancel
                           </Button>
                         </Stack>
