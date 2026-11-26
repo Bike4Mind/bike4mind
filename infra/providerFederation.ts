@@ -39,20 +39,11 @@ const REQUIRED = [
 
 const OPTIONAL = ['ANTHROPIC_SERVICE_ACCOUNT_ID', 'ANTHROPIC_WORKSPACE_ID'] as const;
 
-// Must match PROVIDER_CREDENTIAL_NAMESPACE in b4m-core/llm-adapters/src/providerCredentialMetrics.ts.
-const CREDENTIAL_METRICS: ProviderFederation = {
-  environment: { PROVIDER_CREDENTIAL_METRICS: 'true' },
-  permissions: [
-    {
-      actions: ['cloudwatch:PutMetricData'],
-      resources: ['*'],
-      conditions: [{ test: 'StringEquals', variable: 'cloudwatch:namespace', values: ['Lumina5/ProviderCredential'] }],
-    },
-  ],
-};
+const CREDENTIAL_METRICS_ENV = { PROVIDER_CREDENTIAL_METRICS: 'true' };
 
 export function buildProviderFederation(env: ProviderFederationDeployEnv): ProviderFederation {
-  if (env.B4M_PROVIDER_AUTH_FEDERATED !== 'true') return CREDENTIAL_METRICS;
+  if (env.B4M_PROVIDER_AUTH_FEDERATED !== 'true')
+    return { environment: { ...CREDENTIAL_METRICS_ENV }, permissions: [] };
 
   const missing = REQUIRED.filter(key => !env[key]?.trim());
   if (missing.length > 0) {
@@ -60,7 +51,7 @@ export function buildProviderFederation(env: ProviderFederationDeployEnv): Provi
   }
 
   const environment: Record<string, string> = {
-    ...CREDENTIAL_METRICS.environment,
+    ...CREDENTIAL_METRICS_ENV,
     B4M_PROVIDER_AUTH: 'federated',
     PROVIDER_WIF_TOKEN_SOURCE: 'aws-sts',
   };
@@ -73,7 +64,6 @@ export function buildProviderFederation(env: ProviderFederationDeployEnv): Provi
     environment,
     // GetWebIdentityToken supports no resource-level scoping.
     permissions: [
-      ...CREDENTIAL_METRICS.permissions,
       {
         actions: ['sts:GetWebIdentityToken'],
         resources: ['*'],

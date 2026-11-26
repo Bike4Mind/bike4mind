@@ -1124,7 +1124,7 @@ export class OpenAIBackend implements ICompletionBackend {
     if (retrySignal && this.usesFederatedCredentials) {
       throw new Error('Abort-aware completion retries do not support federated credentials');
     }
-    void recordProviderCredentialUse('openai', this.usesFederatedCredentials ? 'federated' : 'static', this.logger);
+    recordProviderCredentialUse('openai', this.usesFederatedCredentials ? 'federated' : 'static');
     this.currentModel = model;
     options = {
       temperature: 0.9,

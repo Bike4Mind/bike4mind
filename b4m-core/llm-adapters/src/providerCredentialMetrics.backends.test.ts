@@ -41,7 +41,7 @@ describe('provider credential metric from the completion backends', () => {
   const savedEnv: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    recordProviderCredentialUse.mockReset().mockResolvedValue(undefined);
+    recordProviderCredentialUse.mockReset();
     for (const [name, value] of Object.entries(OPENAI_FEDERATION_ENV)) {
       savedEnv[name] = process.env[name];
       process.env[name] = value;
@@ -64,7 +64,7 @@ describe('provider credential metric from the completion backends', () => {
     await completeIgnoringFailure(withUnusableClient(build()));
 
     expect(recordProviderCredentialUse).toHaveBeenCalledTimes(1);
-    expect(recordProviderCredentialUse).toHaveBeenCalledWith(provider, credential, expect.anything());
+    expect(recordProviderCredentialUse).toHaveBeenCalledWith(provider, credential);
   });
 
   it.each([

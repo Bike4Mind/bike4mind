@@ -20,16 +20,7 @@ const CONFIGURED: ProviderFederationDeployEnv = {
   OPENAI_WIF_AUDIENCE: 'openai-aud',
 };
 
-// Pinned literal: must match PROVIDER_CREDENTIAL_NAMESPACE in b4m-core/llm-adapters.
-const CREDENTIAL_METRIC_GRANT = {
-  actions: ['cloudwatch:PutMetricData'],
-  resources: ['*'],
-  conditions: [{ test: 'StringEquals', variable: 'cloudwatch:namespace', values: ['Lumina5/ProviderCredential'] }],
-};
-const CREDENTIAL_METRICS_ONLY = {
-  environment: { PROVIDER_CREDENTIAL_METRICS: 'true' },
-  permissions: [CREDENTIAL_METRIC_GRANT],
-};
+const CREDENTIAL_METRICS_ONLY = { environment: { PROVIDER_CREDENTIAL_METRICS: 'true' }, permissions: [] };
 
 describe('buildProviderFederation', () => {
   it.each([undefined, '', 'false', 'TRUE', '1'])('only reports credentials when the toggle is %j', toggle => {
@@ -39,6 +30,14 @@ describe('buildProviderFederation', () => {
   });
 
   it('only reports credentials with nothing configured', () => {
+    expect(buildProviderFederation({})).toEqual(CREDENTIAL_METRICS_ONLY);
+  });
+
+  it('returns a fresh object per call so a caller cannot mutate the next one', () => {
+    const first = buildProviderFederation({});
+    first.environment.EXTRA = 'x';
+    first.permissions.push({ actions: [], resources: [], conditions: [] });
+
     expect(buildProviderFederation({})).toEqual(CREDENTIAL_METRICS_ONLY);
   });
 
@@ -56,7 +55,6 @@ describe('buildProviderFederation', () => {
         OPENAI_WIF_AUDIENCE: 'openai-aud',
       },
       permissions: [
-        CREDENTIAL_METRIC_GRANT,
         {
           actions: ['sts:GetWebIdentityToken'],
           resources: ['*'],

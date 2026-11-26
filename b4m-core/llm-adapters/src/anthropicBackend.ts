@@ -1004,7 +1004,7 @@ export class AnthropicBackend implements ICompletionBackend {
     if (retrySignal && this.usesFederatedCredentials) {
       throw new Error('Abort-aware completion retries do not support federated credentials');
     }
-    void recordProviderCredentialUse('anthropic', this.usesFederatedCredentials ? 'federated' : 'static', this.logger);
+    recordProviderCredentialUse('anthropic', this.usesFederatedCredentials ? 'federated' : 'static');
     this.currentModel = model;
     if (options._internal?.evaluation) {
       if (options.executeTools !== false)

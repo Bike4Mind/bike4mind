@@ -1,7 +1,3 @@
-import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
-import type { MetricDatum } from '@aws-sdk/client-cloudwatch';
-import { Logger } from '@bike4mind/observability';
-
 /**
  * Records which credential each AnthropicBackend/OpenAIBackend `complete()` call used,
  * so a workload identity federation rollout can be verified per stage and a fall back
@@ -11,8 +7,8 @@ import { Logger } from '@bike4mind/observability';
  * `static` covers every plain key string, including a user's own key: the backend
  * cannot tell a platform key from a user key, only a key from the federated sentinel.
  *
- * Keep the names below in sync with infra/alarms.ts (`providerCredentialFallback`) and
- * infra/providerFederation.ts (the namespace-scoped grant); the tests pin the literals.
+ * Keep the names below in sync with infra/alarms.ts (`providerCredentialFallback`); the
+ * tests pin the literals.
  */
 export const PROVIDER_CREDENTIAL_NAMESPACE = 'Lumina5/ProviderCredential';
 export const PROVIDER_CREDENTIAL_USE_METRIC = 'ProviderCredentialUse';
@@ -21,61 +17,47 @@ export const PROVIDER_CREDENTIAL_FALLBACK_METRIC = 'ProviderCredentialFallback';
 export type CredentialProvider = 'anthropic' | 'openai';
 export type ProviderCredentialKind = 'static' | 'federated' | 'static_fallback';
 
-function buildMetricData(
-  stage: string,
-  provider: CredentialProvider,
-  credential: ProviderCredentialKind,
-  timestamp: Date
-): MetricDatum[] {
-  const count = { Value: 1, Unit: StandardUnit.Count, Timestamp: timestamp };
-  const usage: MetricDatum = {
-    ...count,
-    MetricName: PROVIDER_CREDENTIAL_USE_METRIC,
-    Dimensions: [
-      { Name: 'Stage', Value: stage },
-      { Name: 'Provider', Value: provider },
-      { Name: 'Credential', Value: credential },
-    ],
-  };
-  if (credential !== 'static_fallback') return [usage];
-
-  // An alarm matches one exact dimension set, so the fallback also gets a
-  // Stage-only metric of its own that one alarm covers for both providers.
-  return [
-    usage,
-    { ...count, MetricName: PROVIDER_CREDENTIAL_FALLBACK_METRIC, Dimensions: [{ Name: 'Stage', Value: stage }] },
-  ];
-}
-
 /**
- * Fire-and-forget: never throws and never blocks the request it reports on.
- *
- * Runs only where infra/providerFederation.ts sets PROVIDER_CREDENTIAL_METRICS, which
- * also grants PutMetricData on this namespace. Elsewhere (other workers, CLI, self-host,
- * tests) it no-ops, so a runtime without the grant does not log a failure per completion.
+ * Writes one CloudWatch EMF line to stdout. Synchronous, so it is never lost when a Lambda
+ * returns fast (e.g. an auth failure right after the call). Gated on
+ * PROVIDER_CREDENTIAL_METRICS (set by infra/providerFederation.ts) so other runtimes
+ * (CLI, self-host, tests) stay quiet.
  */
-export async function recordProviderCredentialUse(
-  provider: CredentialProvider,
-  credential: ProviderCredentialKind,
-  logger?: Logger
-): Promise<void> {
+export function recordProviderCredentialUse(provider: CredentialProvider, credential: ProviderCredentialKind): void {
   const stage = process.env.SEED_STAGE_NAME;
   if (!stage || process.env.PROVIDER_CREDENTIAL_METRICS !== 'true') return;
 
   try {
-    // Fresh client per call: warm Lambda containers outlive their credentials.
-    const client = new CloudWatchClient({ region: process.env.AWS_REGION || 'us-east-2' });
-    await client.send(
-      new PutMetricDataCommand({
+    const isFallback = credential === 'static_fallback';
+    const directives = [
+      {
         Namespace: PROVIDER_CREDENTIAL_NAMESPACE,
-        MetricData: buildMetricData(stage, provider, credential, new Date()),
+        Dimensions: [['Stage', 'Provider', 'Credential']],
+        Metrics: [{ Name: PROVIDER_CREDENTIAL_USE_METRIC, Unit: 'Count' }],
+      },
+    ];
+    // An alarm matches one exact dimension set, so the fallback also gets a
+    // Stage-only metric of its own that one alarm covers for both providers.
+    if (isFallback) {
+      directives.push({
+        Namespace: PROVIDER_CREDENTIAL_NAMESPACE,
+        Dimensions: [['Stage']],
+        Metrics: [{ Name: PROVIDER_CREDENTIAL_FALLBACK_METRIC, Unit: 'Count' }],
+      });
+    }
+    // eslint-disable-next-line no-console -- an EMF line must reach stdout as top-level JSON; Logger would nest it under `message`
+    console.info(
+      JSON.stringify({
+        event: 'providerCredentialUse',
+        Stage: stage,
+        Provider: provider,
+        Credential: credential,
+        [PROVIDER_CREDENTIAL_USE_METRIC]: 1,
+        ...(isFallback ? { [PROVIDER_CREDENTIAL_FALLBACK_METRIC]: 1 } : {}),
+        _aws: { Timestamp: Date.now(), CloudWatchMetrics: directives },
       })
     );
-  } catch (error) {
-    (logger ?? Logger.globalInstance).warn('[provider-credential] Failed to emit ProviderCredentialUse metric', {
-      provider,
-      credential,
-      error: error instanceof Error ? error.message : String(error),
-    });
+  } catch {
+    // Observability must never break the completion it reports on.
   }
 }
