@@ -47,19 +47,45 @@ const HEX_ESCAPE = /\\(?:x[\da-f]{2}|u[\da-f]{4}|U[\da-f]{8})/;
 const IMG_WORD = /\bimg\b/gi;
 const INLINE_IMG_VALUE = /^img\s*["']?\s*:\s*["']?\s*data:image\//i;
 
+const KEY_POSITION = /(?:^|[{,?\n]|[&*!][^\s,{}[\]]*)[\t ]*["']?$/;
+const BACKSLASH_LINE_BREAK = /\\\r?\n/;
+
+/** Text of each `@{ ... }` block. Mirrors mermaid's shape-data lexer: only double quotes protect a `}`, with no escape. */
+function shapeBlocks(definition: string): string[] {
+  const blocks: string[] = [];
+  let from = definition.indexOf('@{');
+  while (from >= 0) {
+    const bodyStart = from + 2;
+    let inQuote = false;
+    let end = definition.length;
+    for (let i = bodyStart; i < definition.length; i++) {
+      const ch = definition[i];
+      if (ch === '"') inQuote = !inQuote;
+      else if (ch === '}' && !inQuote) {
+        end = i;
+        break;
+      }
+    }
+    blocks.push(definition.slice(bodyStart, end));
+    from = definition.indexOf('@{', bodyStart);
+  }
+  return blocks;
+}
+
 /**
  * Shape data (`A@{ img: "..." }`) is YAML, and mermaid loads an `img` value with `new Image()`
- * while it lays the diagram out. Rather than parse YAML, everything after the first `@{` must
- * name `img` only as a key with a data: image value; a hex escape there could spell the key, so
- * it is refused too.
+ * while it lays the diagram out. Rather than parse YAML, inside each `@{ }` block `img` may only
+ * appear as a key with a data: image value; hex escapes and backslash line continuations could
+ * spell the key, so they are refused too. Fails closed.
  */
 function hasExternalShapeImage(definition: string): boolean {
-  const start = definition.indexOf('@{');
-  if (start < 0) return false;
-  const shapeText = definition.slice(start);
-  if (HEX_ESCAPE.test(shapeText)) return true;
-  for (const match of shapeText.matchAll(IMG_WORD)) {
-    if (!INLINE_IMG_VALUE.test(shapeText.slice(match.index))) return true;
+  for (const block of shapeBlocks(definition)) {
+    if (HEX_ESCAPE.test(block) || BACKSLASH_LINE_BREAK.test(block)) return true;
+    for (const match of block.matchAll(IMG_WORD)) {
+      if (KEY_POSITION.test(block.slice(0, match.index)) && !INLINE_IMG_VALUE.test(block.slice(match.index))) {
+        return true;
+      }
+    }
   }
   return false;
 }

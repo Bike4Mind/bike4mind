@@ -11,6 +11,8 @@ describe('assertNoRemoteDiagramResources', () => {
     'flowchart TD\n A@{ "\\x69mg": "https://example.com/p.png" }',
     'flowchart TD\n A@{ label: &k img }\n B@{ *k : "https://example.com/p.png" }',
     '%%{init: {"themeVariables": {"fontFamily": "x;background:url(https://evil.example/a.png)"}}}%%\ngraph TD\n A-->B',
+    'flowchart TD\n A@{\n  shape: rect\n  img: https://example.com/a.png\n}',
+    'flowchart TD\n A@{ "im\\\ng": "https://example.com/a.png" }',
     'kanban\n  todo[Todo]\n    t1[Task]@{ img: "https://example.com/p.png" }',
   ])('refuses %s', definition => {
     expect(() => assertNoRemoteDiagramResources(definition)).toThrow();
@@ -23,6 +25,8 @@ describe('assertNoRemoteDiagramResources', () => {
     'flowchart TD\n A@{ shape: rect, label: "Start" } --> B',
     'flowchart TD\n A@{ img: "data:image/png;base64,AAAA", h: 40 }',
     'graph TD\n A["img folder"]-->B',
+    'flowchart TD\n A@{ shape: rect }\n B["Resize img"]',
+    'flowchart TD\n A@{ shape: rect, label: "Resize img" }',
     '%%{init: {"themeVariables": {"primaryColor": "#ff0000"}}}%%\ngraph TD\n A-->B',
   ])('accepts %s', definition => {
     expect(() => assertNoRemoteDiagramResources(definition)).not.toThrow();
