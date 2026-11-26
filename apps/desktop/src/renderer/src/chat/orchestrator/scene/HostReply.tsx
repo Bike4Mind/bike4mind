@@ -82,6 +82,21 @@ export function ReplyBubble({
     '&:active': { color: WOOD_DARK },
     '&:focus-visible': { outline: `2px solid ${WOOD}`, outlineOffset: 2 },
   } as const;
+  // Ends just beside the host, its tail pointing at it. On a narrow scene the 180px floor would reach
+  // over the quest board; shrink instead.
+  const side =
+    'right' in anchor
+      ? {
+          right: `${anchor.right}%`,
+          maxWidth: `calc(${100 - anchor.right}% - ${board.left + board.width}%)`,
+          tail: { right: -11, borderWidth: '7px 0 7px 9px', borderColor: `transparent transparent transparent ${INK}` },
+        }
+      : {
+          left: `${anchor.left}%`,
+          maxWidth: `calc(${board.left > anchor.left ? board.left : 100}% - ${anchor.left}%)`,
+          tail: { left: -11, borderWidth: '7px 9px 7px 0', borderColor: `transparent ${INK} transparent transparent` },
+        };
+  const { tail, ...edge } = side;
   return (
     <Box
       data-testid={`${testId}-reply-bubble`}
@@ -89,12 +104,9 @@ export function ReplyBubble({
       sx={{
         position: 'absolute',
         top: `${anchor.top}%`,
-        // Ends just left of the host, its tail pointing at it.
-        right: `${anchor.right}%`,
+        ...edge,
         zIndex: 250,
         width: 'clamp(180px, 34%, 320px)',
-        // On a narrow scene the 180px floor would reach back over the quest board; shrink instead.
-        maxWidth: `calc(${100 - anchor.right}% - ${board.left + board.width}%)`,
         px: '0.75em',
         py: '0.5em',
         boxShadow: pixelFrame(2),
@@ -105,11 +117,9 @@ export function ReplyBubble({
         '&::after': {
           content: '""',
           position: 'absolute',
-          right: -11,
           top: '60%',
-          borderWidth: '7px 0 7px 9px',
           borderStyle: 'solid',
-          borderColor: `transparent transparent transparent ${INK}`,
+          ...tail,
         },
       }}
     >

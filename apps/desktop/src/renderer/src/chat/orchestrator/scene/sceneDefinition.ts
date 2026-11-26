@@ -32,8 +32,8 @@ export type HostPose = (typeof HOST_POSES)[number];
 
 const EPITHETS = ['Warden', 'Scribe', 'Tinkerer', 'Cartographer', 'Seeker', 'Wanderer'] as const;
 
-/** The framework's light looks; SceneLight.tsx draws each. */
-export const LIGHT_KINDS = ['fire', 'candle'] as const;
+/** The framework's light looks; SceneLight.tsx draws each. A `lamp` is electric: steady, with no flicker. */
+export const LIGHT_KINDS = ['fire', 'candle', 'lamp'] as const;
 export type LightKind = (typeof LIGHT_KINDS)[number];
 
 const SKIN_BACKDROPS = ['tavernBackdrop', 'aquariumBackdrop'] as const;
@@ -58,8 +58,11 @@ const mapSchema = z.object({
   board: box.extend({ notes: z.number().int().min(2) }),
   /** Where the host stands when it is not visiting an agent. */
   host: point,
-  /** Where the host's reply bubble hangs, its right edge as a percent of the scene width from the right. */
-  reply: z.object({ top: percent, right: percent }),
+  /**
+   * Where the host's reply bubble hangs: `right` is its right edge as a percent of the scene width from the
+   * right, for a host to the right of it; `left` its left edge from the left, for a host to the left of it.
+   */
+  reply: z.union([z.object({ top: percent, right: percent }), z.object({ top: percent, left: percent })]),
   /**
    * Furniture drawn in the backdrop that a sprite can stand behind (a counter): from `top` down to `front`
    * between `left` and `right`, the part of the sprite below `top` is cut away.
@@ -109,7 +112,12 @@ export const sceneDefinitionSchema = z
     id: name,
     map: mapSchema,
     cast: castSchema,
-    states: z.object({ zone: byState(name), pose: byState(name) }),
+    states: z.object({
+      zone: byState(name),
+      pose: byState(name),
+      /** Where a working agent waits while its workspace is still being set up; its working zone if unset. */
+      preparing: name.optional(),
+    }),
     ambience: z.object({
       /** Behind the letterboxed picture. */
       frame: z.string().min(1),
@@ -162,6 +170,9 @@ export const sceneDefinitionSchema = z
     if (zones.size === 0) issue(['map', 'zones'], 'a scene needs at least one zone');
     for (const [state, zone] of Object.entries(scene.states.zone)) {
       if (!zones.has(zone)) issue(['states', 'zone', state], `unknown zone "${zone}"`);
+    }
+    if (scene.states.preparing !== undefined && !zones.has(scene.states.preparing)) {
+      issue(['states', 'preparing'], `unknown zone "${scene.states.preparing}"`);
     }
     for (const [state, pose] of Object.entries(scene.states.pose)) {
       if (!poses.has(pose)) issue(['states', 'pose', state], `unknown pose "${pose}"`);

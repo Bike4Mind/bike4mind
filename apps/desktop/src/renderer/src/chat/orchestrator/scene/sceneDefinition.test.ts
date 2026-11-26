@@ -32,8 +32,17 @@ describe('sceneDefinitionSchema', () => {
     ],
     ['a point off the map', 'map.door.x', broken(scene => (scene.map.door.x = 140))],
     ['an empty zone', 'map.zones.desk.slots', broken(scene => (scene.map.zones.desk.slots = []))],
+    ['an unknown preparing zone', 'states.preparing', broken(scene => (scene.states.preparing = 'attic'))],
   ])('rejects %s, naming the field', (_, field, scene) => {
     expect(() => parseSceneDefinition(scene)).toThrow(field);
+  });
+
+  it('accepts a preparing zone and a reply bubble hung to the right of its host', () => {
+    const scene = broken(scene => {
+      scene.states.preparing = 'porch';
+      scene.map.reply = { top: 10, left: 20 };
+    });
+    expect(parseSceneDefinition(scene)).toMatchObject({ states: { preparing: 'porch' }, map: { reply: { left: 20 } } });
   });
 
   it('rejects another contract version', () => {

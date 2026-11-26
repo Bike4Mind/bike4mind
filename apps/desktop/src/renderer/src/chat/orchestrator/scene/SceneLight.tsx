@@ -101,6 +101,7 @@ export function SceneLight({
         {lights.map((light, index) => {
           const timing = flickerTiming(index);
           const fire = light.kind === 'fire';
+          const lamp = light.kind === 'lamp';
           return (
             <Box
               key={`${light.x}-${light.y}`}
@@ -113,8 +114,12 @@ export function SceneLight({
                 borderRadius: '50%',
                 background: fire
                   ? 'radial-gradient(closest-side, rgba(255, 150, 60, 0.6), rgba(255, 110, 30, 0.22) 55%, rgba(255, 90, 20, 0) 100%)'
-                  : 'radial-gradient(closest-side, rgba(255, 200, 120, 0.55), rgba(255, 170, 80, 0) 100%)',
-                animation: `${flicker} ${fire ? '1.3s' : timing.duration} ease-in-out ${timing.delay} infinite`,
+                  : lamp
+                    ? 'radial-gradient(closest-side, rgba(225, 240, 255, 0.5), rgba(200, 225, 255, 0) 100%)'
+                    : 'radial-gradient(closest-side, rgba(255, 200, 120, 0.55), rgba(255, 170, 80, 0) 100%)',
+                animation: lamp
+                  ? 'none'
+                  : `${flicker} ${fire ? '1.3s' : timing.duration} ease-in-out ${timing.delay} infinite`,
                 [NO_MOTION]: { animation: 'none' },
               }}
             />

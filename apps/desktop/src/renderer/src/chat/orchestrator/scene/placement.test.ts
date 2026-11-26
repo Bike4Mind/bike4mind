@@ -138,4 +138,14 @@ describe('placeAgents', () => {
     const needySeated = seats.filter(seat => seat.kind === 'seat' && (seat.zone === 'porch' || seat.borrowed));
     expect(needySeated).toHaveLength(total);
   });
+
+  it('sends a working agent still setting up to the preparing zone, and to its desk once ready', () => {
+    const map = placementMap({ ...TEST_SCENE, states: { ...TEST_SCENE.states, preparing: 'porch' } });
+    const setup = { ...agent('a', 'working'), preparing: 'worktree' as const };
+    const first = placeAgents([setup], new Map(), map);
+    expect(first.get('a')).toMatchObject({ kind: 'seat', zone: 'porch', borrowed: false });
+    expect(placeAgents([agent('a', 'working')], first, map).get('a')).toMatchObject({ zone: 'desk', slot: 0 });
+    // Without a preparing zone, setting up is just working.
+    expect(place([setup]).get('a')).toMatchObject({ zone: 'desk' });
+  });
 });

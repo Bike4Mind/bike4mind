@@ -1,16 +1,18 @@
 import type { AgentState } from '@shared/agentState';
 import type { SceneDefinition, ScenePoint } from './sceneDefinition';
 
-/** The part of a scene placement reads: its zones, which zone each state sits in, and where needs-you borrows. */
+/** The part of a scene placement reads: its zones, which zone each agent sits in, and where needs-you borrows. */
 export interface PlacementMap {
   zones: Readonly<Record<string, { slots: readonly ScenePoint[]; overflow: ScenePoint }>>;
-  zoneOf(state: AgentState): string;
+  zoneOf(agent: PlacedAgent): string;
   borrowOrder: readonly string[];
 }
 
 export interface PlacedAgent {
   id: string;
   state: AgentState;
+  /** Set while the agent's workspace is still being set up (AgentView.preparing). */
+  preparing?: unknown;
 }
 
 /**
@@ -22,8 +24,15 @@ export type Placement =
   | { kind: 'overflow'; zone: string; index: number; point: ScenePoint };
 
 export function placementMap(scene: SceneDefinition): PlacementMap {
-  const zoneTable = scene.states.zone;
-  return { zones: scene.map.zones, zoneOf: state => zoneTable[state], borrowOrder: scene.map.borrowOrder };
+  const { zone: zoneTable, preparing } = scene.states;
+  return {
+    zones: scene.map.zones,
+    zoneOf: agent =>
+      preparing !== undefined && agent.state === 'working' && agent.preparing !== undefined
+        ? preparing
+        : zoneTable[agent.state],
+    borrowOrder: scene.map.borrowOrder,
+  };
 }
 
 /**
@@ -58,7 +67,7 @@ export function placeAgents(
       zone,
       slot,
       point: map.zones[zone].slots[slot],
-      borrowed: zone !== map.zoneOf(agent.state),
+      borrowed: zone !== map.zoneOf(agent),
     });
   };
   const freeSlot = (zone: string) => {
@@ -75,7 +84,7 @@ export function placeAgents(
   };
 
   const seatAtHome = (agent: PlacedAgent) => {
-    const zone = map.zoneOf(agent.state);
+    const zone = map.zoneOf(agent);
     const free = freeSlot(zone);
     if (free >= 0) seat(agent, zone, free);
     return free >= 0;
@@ -85,7 +94,7 @@ export function placeAgents(
     const before = previous.get(agent.id);
     if (before?.kind !== 'seat' || !taken.has(before.zone) || takenIn(before.zone).has(before.slot)) continue;
     if (before.slot >= map.zones[before.zone].slots.length) continue;
-    if (before.zone === map.zoneOf(agent.state)) seat(agent, before.zone, before.slot);
+    if (before.zone === map.zoneOf(agent)) seat(agent, before.zone, before.slot);
   }
 
   // A freed seat at home beats a borrowed one; a borrowed seat is kept over newcomers to its zone.
@@ -137,7 +146,7 @@ export function placeAgents(
   const depth = new Map<string, number>();
   for (const agent of agents) {
     if (!stacked.has(agent.id)) continue;
-    const zone = map.zoneOf(agent.state);
+    const zone = map.zoneOf(agent);
     const index = depth.get(zone) ?? 0;
     depth.set(zone, index + 1);
     placements.set(agent.id, { kind: 'overflow', zone, index, point: map.zones[zone].overflow });
