@@ -266,9 +266,9 @@ The list includes IAM, because SST creates a role for each function and task it 
 
 ### How Access Is Controlled
 
-1. **Environment-bound trust**: Each role can only be assumed by a job that declares one of its GitHub environments. A workflow run without that environment cannot assume the role, whatever branch it runs on.
+1. **Environment-bound trust**: Each role can only be assumed by a job that declares one of its GitHub environments. A workflow run without that environment cannot assume the role.
 2. **Environment protection rules**: GitHub decides which runs may use an environment. Restrict `staging` and `production` to the `main` branch and require reviewers on `production` (see [Configure GitHub Environments](#4-configure-github-environments)).
-3. **Account Isolation**: Each account has its own role, and the prod role trusts only the `production` environment.
+3. **Account Isolation**: Each account has its own role, and the prod role trusts only the `production` environment. The dev role trusts both `staging` and `preview`, and `preview` has no branch rule, so a job on any branch can assume the dev role. Keeping production in its own account is what protects it.
 4. **OIDC Authentication**: Uses GitHub's OIDC provider for short-lived, token-based authentication. No long-lived AWS keys are stored in GitHub.
 
 ## Setup Steps
