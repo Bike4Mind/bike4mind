@@ -63,13 +63,18 @@ export const liveLinkRuleFactsDeps: LinkRuleFactsDeps = {
   },
 };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Bounds the usage-event scan, which times out when stretched over a long-lived account.
+const SPEND_LOOKBACK_DAYS = 30;
+
 type DomainCluster = { domain: string; members: UserSignupLinkCandidate[] };
 
 export async function loadLinkRuleFacts(
   userIds: readonly string[],
   config: AutoContainmentConfig,
   deps: LinkRuleFactsDeps = liveLinkRuleFactsDeps,
-  logger?: Pick<Logger, 'warn'>
+  logger?: Pick<Logger, 'warn'>,
+  now: Date = new Date()
 ): Promise<LinkRuleFacts[]> {
   const ids = [...new Set(userIds)].slice(0, config.maxAccountsPerDetection);
   if (ids.length === 0) return [];
@@ -96,14 +101,15 @@ export async function loadLinkRuleFacts(
     Promise.all(accounts.map(account => domainClusterOf(account, windowHours, deps, read))),
   ]);
 
-  // Spend since each account's own signup: no account spends before it exists, so one read from the
-  // earliest signup covers every account and candidate.
+  // Spend is read since the later of the earliest signup and the lookback: no account spends before it
+  // exists, and one old account must not stretch the scan for every id.
   const spendIds = [...new Set([...ids, ...clusters.flatMap(cluster => cluster?.members.map(m => m.id) ?? [])])];
   const signups = [
     ...accounts.map(account => account.createdAt),
     ...clusters.flatMap(cluster => cluster?.members.map(m => m.createdAt) ?? []),
   ].filter((date): date is Date => date !== null);
-  const since = signups.length > 0 ? new Date(Math.min(...signups.map(date => date.getTime()))) : null;
+  const earliest = signups.length > 0 ? Math.min(...signups.map(date => date.getTime())) : null;
+  const since = earliest === null ? null : new Date(Math.max(earliest, now.getTime() - SPEND_LOOKBACK_DAYS * DAY_MS));
   const spend = since ? await read('creditsSpent', () => deps.spendProfileByUsers(spendIds, since), null) : null;
   const spentOf = (id: string) => spend?.[id]?.totalCredits ?? 0;
 

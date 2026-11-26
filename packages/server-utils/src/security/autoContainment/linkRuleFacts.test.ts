@@ -183,4 +183,27 @@ describe('loadLinkRuleFacts', () => {
     });
     expect((await loadLinkRuleFacts(['u1'], config, deps))[0].paying).toBe(true);
   });
+
+  describe('spend lookback', () => {
+    const DAY_MS = 24 * HOUR_MS;
+    const now = new Date('2026-11-24T10:00:00Z');
+
+    it('clamps the spend read to the last 30 days when an account signed up long ago', async () => {
+      const old = new Date(now.getTime() - 400 * DAY_MS);
+      const deps = makeDeps({
+        findAccountRiskProfiles: vi.fn(async () => [account('u1', { createdAt: old })]),
+      });
+      await loadLinkRuleFacts(['u1'], config, deps, undefined, now);
+      expect(deps.spendProfileByUsers).toHaveBeenCalledWith(['u1'], new Date(now.getTime() - 30 * DAY_MS));
+    });
+
+    it('reads from the earliest signup when it is recent', async () => {
+      const recent = new Date(now.getTime() - 2 * DAY_MS);
+      const deps = makeDeps({
+        findAccountRiskProfiles: vi.fn(async () => [account('u1', { createdAt: recent })]),
+      });
+      await loadLinkRuleFacts(['u1'], config, deps, undefined, now);
+      expect(deps.spendProfileByUsers).toHaveBeenCalledWith(['u1'], recent);
+    });
+  });
 });

@@ -55,7 +55,7 @@ Paying and partner-domain accounts are never touched, and a rule never decides C
 
 | Rule                | Fires when                                                                                    | Tier                              |
 | ------------------- | --------------------------------------------------------------------------------------------- | --------------------------------- |
-| `bannedSameDevice`  | Same uncommon device as a banned account, and credits spent since signup.                     | limit                             |
+| `bannedSameDevice`  | Same uncommon device as a banned account, and credits spent in the last 30 days.              | limit                             |
 | `sharedOwnedDomain` | 3+ accounts on one owned mail domain within the strong-link window, 2+ of them spent credits. | limit if it spent, else holdGrant |
 | `heldSignupDomain`  | The address's domain (or a parent) was confirmed blocked by an admin, not by automation.      | holdGrant                         |
 
