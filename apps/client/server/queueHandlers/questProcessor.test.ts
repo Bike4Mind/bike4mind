@@ -219,17 +219,15 @@ describe('processQuest', () => {
     );
   }, 120_000);
 
-  it('passes an injected frame sender to the process and its abort signal to process()', async () => {
+  it('passes an injected frame sender to the process', async () => {
     const { processQuest } = await import('./questProcessor');
     const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
     const params = { userId: 'user-1', sessionId: 'session-1', questId: 'quest-1', params: {} };
     const clientMessageSender = { sendToClient: vi.fn() };
-    const abortSignal = new AbortController().signal;
 
-    await processQuest(params as never, logger as never, { clientMessageSender, abortSignal });
+    await processQuest(params as never, logger as never, { clientMessageSender });
 
     expect(processOptions.mock.lastCall?.[0]).toEqual(expect.objectContaining({ clientMessageSender }));
-    expect(mockProcess).toHaveBeenLastCalledWith(expect.objectContaining({ abortSignal }));
   }, 120_000);
 
   it('hands process() a resolver that asks whether callable functions are on for the turn owner', async () => {

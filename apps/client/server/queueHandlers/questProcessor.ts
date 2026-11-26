@@ -300,8 +300,6 @@ export const getImageJobsResolver = (apiKeyId: string | undefined) =>
  * `params` against `QuestStartBodySchema` (= `LLMEvents.CompletionStart.schema`).
  */
 export type ProcessQuestOptions = {
-  /** Aborts the turn as a Stop would; the queued path never sets it. */
-  abortSignal?: AbortSignal;
   /** Sink for the turn's websocket frames; see IChatCompletionServiceOptions.clientMessageSender. */
   clientMessageSender?: ClientFrameSender;
 };
@@ -309,7 +307,7 @@ export type ProcessQuestOptions = {
 export async function processQuest(
   params: z.infer<typeof QuestStartBodySchema>,
   logger: Logger,
-  { abortSignal, clientMessageSender }: ProcessQuestOptions = {}
+  { clientMessageSender }: ProcessQuestOptions = {}
 ): Promise<void> {
   const handlerStartTime = Date.now();
   logger.debug('Quest processor start');
@@ -488,7 +486,6 @@ export async function processQuest(
       imageJobsResolver: getImageJobsResolver(params.apiKeyId),
       imageJobFilesResolver: resolveImageJobFiles,
       callableFunctionsResolver: () => resolveCallableFunctionsEnabled(user),
-      abortSignal,
     });
   } catch (error) {
     await liveActivity.end('failed');
