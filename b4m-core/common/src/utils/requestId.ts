@@ -3,6 +3,8 @@
  * X-Request-ID identifier shared by the Next.js and Lambda transports.
  */
 
+import { randomUuid } from './randomUuid';
+
 /**
  * Canonical correlation header, echoed on every response.
  *
@@ -30,7 +32,7 @@ const UNSAFE_REQUEST_ID_CHARS = /[^A-Za-z0-9._-]/g;
 
 /** Generate a fresh request ID (UUID v4). */
 export function generateRequestId(): string {
-  return globalThis.crypto.randomUUID();
+  return randomUuid();
 }
 
 /**

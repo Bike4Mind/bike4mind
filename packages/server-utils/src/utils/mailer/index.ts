@@ -13,6 +13,7 @@ import {
   type MailTransportKind,
 } from './transport';
 import { getMailConfigStatus, isUnauthenticatedSmtpRelay, type EmailConfigStatus } from './configStatus';
+import { resolveMailSender } from './sender';
 
 export {
   SMTP_DNS_TIMEOUT_MS,
@@ -65,7 +66,6 @@ export function createMailTransport(kind: MailTransportKind = resolveMailTranspo
 }
 
 export class MailService {
-  defaultFrom = Config.MAIL_FROM;
   // Account-tied support address from the SUPPORT_EMAIL secret; no brand fallback.
   // Undefined when unset/placeholder so consumers never receive the 'not-configured' default.
   supportEmail = isPlaceholderValue(Config.SUPPORT_EMAIL) ? undefined : Config.SUPPORT_EMAIL;
@@ -101,8 +101,9 @@ export class MailService {
     try {
       await this.transport.verify();
 
+      const { from } = await resolveMailSender();
       const result = await this.transport.send({
-        from: this.defaultFrom,
+        from,
         to,
         subject: 'System Health Test Email',
         text: `This is a test email from the System Health admin panel.\n\nIf you received this, your email configuration is working correctly.\n\nTimestamp: ${new Date().toISOString()}`,
@@ -148,9 +149,10 @@ export class MailService {
 
     // try/catch here (not delegating the error) so the API call still succeeds even when mail fails
     try {
+      const { from } = await resolveMailSender();
       const result = await this.transport.send(
         {
-          from: this.defaultFrom,
+          from,
           to: recipient,
           ...(typeof data === 'object' && data),
         },

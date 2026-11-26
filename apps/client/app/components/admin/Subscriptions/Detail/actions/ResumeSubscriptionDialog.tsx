@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 import { useAdminSubscriptionResume } from '@client/app/hooks/data/adminSubscriptionDetail';
 import { ActionDialog, ADMIN_REASON_PRESETS, ChangePreview, useUndoToast } from '../../../shared';
 import { formatDate, ownerDisplayName, type SubscriptionDialogProps } from '../subscriptionDetailModel';
+import { randomUuid } from '@bike4mind/common';
 
 /** Resume: clears the scheduled cancellation so the subscription renews as normal. */
 export const ResumeSubscriptionDialog: React.FC<SubscriptionDialogProps> = ({ detail, onClose, onAudit }) => {
   const { subscription } = detail;
   const resume = useAdminSubscriptionResume(subscription.id);
   const showUndo = useUndoToast();
-  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const [idempotencyKey] = useState(() => randomUuid());
   const name = ownerDisplayName(subscription);
   // A schedule can be a custom cancel date set in Stripe, which differs from the period end.
   const cancelDate = formatDate(subscription.cancelAt ?? subscription.periodEndsAt) ?? 'the end of the period';

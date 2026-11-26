@@ -4,6 +4,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -12,6 +14,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bike4mind.app.AppGraph
 import com.bike4mind.app.B4MApplication
 import com.bike4mind.kit.links.Route
+import com.bike4mind.kit.shortcuts.ComposeLanding
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -35,6 +38,10 @@ fun AppRoot(
     var restored by remember(graph) { mutableStateOf(false) }
     // A chat is identified by its session id; NEW_CHAT is a conversation the first message will create.
     var openChat by rememberSaveable(graph) { mutableStateOf<String?>(null) }
+    // The composer text a launcher shortcut opened [openChat] with; null for a chat opened any other way.
+    var composeDraft by rememberSaveable(graph) { mutableStateOf<String?>(null) }
+    // Bumped per shortcut so it always opens a fresh chat screen, even over the same chat.
+    var chatLaunch by rememberSaveable(graph) { mutableIntStateOf(0) }
     // A brief id from a push or a link, or LATEST_BRIEF from the chats list.
     var openBrief by rememberSaveable(graph) { mutableStateOf<String?>(null) }
     // The Studio gallery, opened from the chats list.
@@ -42,6 +49,15 @@ fun AppRoot(
     // SETTINGS or DELETE_ACCOUNT while Settings is up.
     var openSettings by rememberSaveable(graph) { mutableStateOf<String?>(null) }
     val route by pendingRoute.collectAsStateWithLifecycle()
+
+    fun showChat(sessionId: String?, draft: String? = null) {
+        openSettings = null
+        openStudio = false
+        openBrief = null
+        composeDraft = draft
+        if (draft != null) chatLaunch++
+        openChat = sessionId
+    }
 
     LaunchedEffect(graph) {
         graph.session.restore()
@@ -75,23 +91,17 @@ fun AppRoot(
         val pending = route ?: return@LaunchedEffect
         if (!restored || !signedIn) return@LaunchedEffect
         when (pending) {
-            Route.Sessions -> {
-                openSettings = null
-                openStudio = false
-                openBrief = null
-                openChat = null
-            }
-            is Route.Session -> {
-                openSettings = null
-                openStudio = false
-                openBrief = null
-                openChat = pending.sessionId
-            }
+            Route.Sessions -> showChat(null)
+            is Route.Session -> showChat(pending.sessionId)
             is Route.Brief -> {
                 openSettings = null
                 openStudio = false
                 openChat = null
                 openBrief = pending.briefId
+            }
+            is Route.Compose -> when (val landing = ComposeLanding.of(pending) { graph.sessions.list(limit = 1).sessions.firstOrNull()?.id }) {
+                is ComposeLanding.Chat -> showChat(landing.sessionId ?: NEW_CHAT, landing.draft)
+                ComposeLanding.Sessions -> showChat(null)
             }
             // MainActivity opens web routes itself; one never waits here.
             is Route.Web -> Unit
@@ -124,29 +134,30 @@ fun AppRoot(
                 graph = graph,
                 briefId = openBrief.takeUnless { it == LATEST_BRIEF },
                 onBack = { openBrief = null },
-                onOpenSession = {
-                    openBrief = null
-                    openChat = it
-                },
+                onOpenSession = { showChat(it) },
             )
         }
         openStudio -> ScreenScope(key = Screen.Studio(graph)) {
             BackHandler { openStudio = false }
             MediaGalleryScreen(graph = graph, onBack = { openStudio = false })
         }
-        openChat != null -> ScreenScope(key = Screen.Chat(graph, openChat)) {
-            BackHandler { openChat = null }
-            ChatScreen(
-                graph = graph,
-                sessionId = openChat.takeUnless { it == NEW_CHAT },
-                onBack = { openChat = null },
-            )
+        openChat != null -> ScreenScope(key = Screen.Chat(graph, openChat, chatLaunch)) {
+            // Keyed like the screen so its saved composer text starts over too.
+            key(openChat, chatLaunch) {
+                BackHandler { showChat(null) }
+                ChatScreen(
+                    graph = graph,
+                    sessionId = openChat.takeUnless { it == NEW_CHAT },
+                    onBack = { showChat(null) },
+                    composeDraft = composeDraft,
+                )
+            }
         }
         else -> ScreenScope(key = Screen.Sessions(graph)) {
             SessionListScreen(
                 graph = graph,
-                onOpen = { openChat = it },
-                onNewChat = { openChat = NEW_CHAT },
+                onOpen = { showChat(it) },
+                onNewChat = { showChat(NEW_CHAT) },
                 onOpenBrief = { openBrief = LATEST_BRIEF },
                 onOpenStudio = { openStudio = true },
                 onOpenSettings = { openSettings = SETTINGS },
@@ -158,7 +169,7 @@ fun AppRoot(
 /** Screen identities for [ScreenScope]; the graph is part of each, so a server switch starts fresh. */
 private sealed interface Screen {
     data class SignIn(val graph: AppGraph) : Screen
-    data class Chat(val graph: AppGraph, val chat: String?) : Screen
+    data class Chat(val graph: AppGraph, val chat: String?, val launch: Int) : Screen
     data class Brief(val graph: AppGraph, val brief: String?) : Screen
     data class Sessions(val graph: AppGraph) : Screen
     data class Settings(val graph: AppGraph) : Screen

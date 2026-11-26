@@ -34,6 +34,13 @@
     <string name="sessions_load_failed">Could not load chats</string>
 
     <!-- Chat -->
+    <!-- Launcher shortcuts (xml/shortcuts.xml): the Pixel launcher menu shows the short label. -->
+    <string name="shortcut_ask_short">Ask</string>
+    <string name="shortcut_ask_long">Ask Bike4Mind</string>
+    <string name="shortcut_note_short">Capture note</string>
+    <string name="shortcut_note_long">Capture note</string>
+    <string name="shortcut_quest_short">Start quest</string>
+    <string name="shortcut_quest_long">Start quest</string>
     <string name="chat_title">Chat</string>
     <string name="chat_title_new">New chat</string>
     <string name="chat_message_placeholder">Message</string>
