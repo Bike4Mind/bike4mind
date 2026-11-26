@@ -450,6 +450,24 @@ describe('not found', () => {
     expect(h.runner).not.toHaveBeenCalled();
   });
 
+  it('writes one refused row per invoke of a function the caller cannot see, without inputs or outputs', async () => {
+    await invoke(OTHERS_ID, { input: { load: 1, span: 2 } });
+    await invoke(DRAFT_ID, { input: { load: 1, span: 2 } });
+    await invoke('not-an-id', { input: { load: 1, span: 2 } });
+    expect(h.calls).toHaveLength(3);
+    for (const row of h.calls) {
+      expect(row).toMatchObject({ callerUserId: 'u1', surface: 'rest', outcome: 'refused', reason: 'not_found' });
+      expect(row).not.toHaveProperty('inputs');
+      expect(row).not.toHaveProperty('outputs');
+    }
+    expect(h.calls.map(row => row.functionId)).toEqual([OTHERS_ID, DRAFT_ID, 'not-an-id']);
+  });
+
+  it('writes no row for a read of a function the caller cannot see', async () => {
+    await call(getRoute, { query: { id: OTHERS_ID } });
+    expect(h.calls).toHaveLength(0);
+  });
+
   it('answers a turned-off function and one whose artifact was deleted with the same 404 on read and invoke', async () => {
     h.functions[0] = fnDoc(LIVE_ID, { enabled: false });
     expect(await call(getRoute, { query: { id: LIVE_ID } })).toEqual(missing);
