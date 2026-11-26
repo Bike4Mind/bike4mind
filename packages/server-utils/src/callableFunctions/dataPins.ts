@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Transform, type Readable } from 'node:stream';
+import { AssumeRoleCommand, STSClient } from '@aws-sdk/client-sts';
 import {
   BadRequestError,
   CALLABLE_FUNCTION_DATA_LIMITS,
@@ -41,8 +42,22 @@ export const CALLABLE_FUNCTION_DATA_LINK_SECONDS = 300;
 
 const MIB = 1024 * 1024;
 
-/** How long a browser read link stays valid; the browser fetches it at once and caches the bytes by hash. */
+/**
+ * How long a browser read link stays valid; the browser fetches it at once and caches the bytes by hash. The bucket
+ * policy refuses the browser role's links past the same age (FUNCTION_DATA_BROWSER_LINK_WINDOW_MS in infra).
+ */
 export const CALLABLE_FUNCTION_DATA_BROWSER_LINK_SECONDS = 60;
+
+/**
+ * The role the web API function assumes to sign browser links (infra/callableFunctionDataPolicy.ts): the only signer
+ * whose links the data bucket honors outside the runtime's endpoint. Unset where there is no data bucket.
+ */
+export const CALLABLE_FUNCTION_DATA_BROWSER_ROLE_ENV = 'CALLABLE_FUNCTION_DATA_BROWSER_ROLE_ARN';
+
+/** The shortest session STS grants; the S3 client re-assumes the role as it nears expiry. */
+const BROWSER_ROLE_SESSION_SECONDS = 900;
+
+export type CallableFunctionDataSts = Pick<STSClient, 'send'>;
 
 export type CallableFunctionDataStorage = Pick<
   S3Storage,
@@ -67,6 +82,38 @@ export function getCallableFunctionDataStorage(env: NodeJS.ProcessEnv = process.
   const bucket = env[CALLABLE_FUNCTION_DATA_BUCKET_ENV];
   if (!bucket) return getFilesStorage();
   return (dataStorage ??= new S3Storage(bucket));
+}
+
+let browserStorage: { key: string; storage: Pick<S3Storage, 'getSignedUrl'> } | undefined;
+
+/** The data bucket as seen by the browser role: its signed links carry that role's session credentials. */
+function getBrowserLinkStorage(
+  bucket: string,
+  roleArn: string,
+  sts?: CallableFunctionDataSts
+): Pick<S3Storage, 'getSignedUrl'> {
+  const assumeRole = async () => {
+    const { Credentials } = await (sts ?? new STSClient({})).send(
+      new AssumeRoleCommand({
+        RoleArn: roleArn,
+        RoleSessionName: 'callable-function-data-browser',
+        DurationSeconds: BROWSER_ROLE_SESSION_SECONDS,
+      })
+    );
+    if (!Credentials?.AccessKeyId || !Credentials.SecretAccessKey || !Credentials.SessionToken) {
+      throw new Error('The browser data role returned no credentials');
+    }
+    return {
+      accessKeyId: Credentials.AccessKeyId,
+      secretAccessKey: Credentials.SecretAccessKey,
+      sessionToken: Credentials.SessionToken,
+      expiration: Credentials.Expiration,
+    };
+  };
+  if (sts) return new S3Storage(bucket, undefined, assumeRole);
+  const key = `${bucket}\n${roleArn}`;
+  if (browserStorage?.key !== key) browserStorage = { key, storage: new S3Storage(bucket, undefined, assumeRole) };
+  return browserStorage.storage;
 }
 
 /** sha256 of the pinned files' names and hashes, so case results recorded on other files are never reused. */
@@ -133,6 +180,7 @@ export interface CallableFunctionDataDeps {
   source?: CallableFunctionDataSource;
   limits?: CallableFunctionDataLimits;
   now?: Date;
+  sts?: CallableFunctionDataSts;
 }
 
 /**
@@ -274,9 +322,9 @@ export async function unpinCallableFunctionData(
 }
 
 /**
- * Where the owner's browser reads one pinned file for `/data/<name>`: a short-lived signed link to the data bucket,
- * or, where storage cannot sign one a browser can reach (self-host without a browser endpoint), the read route's
- * same-origin byte stream.
+ * Where the owner's browser reads one pinned file for `/data/<name>`: a short-lived link to the data bucket signed by
+ * the browser role, a link to the files bucket where there is no data bucket, or, where no link a browser can use
+ * can be signed (self-host without a browser endpoint, a data bucket without the role), the read route's bytes.
  */
 export async function linkCallableFunctionDataForBrowser(
   actor: { id: string },
@@ -288,9 +336,17 @@ export async function linkCallableFunctionDataForBrowser(
   if (!fn) throw notFound();
   const pin = fn.pin.dataPins?.find(entry => entry.name === name);
   if (!pin) throw new NotFoundError('Data file not found');
+  const bucket = process.env[CALLABLE_FUNCTION_DATA_BUCKET_ENV];
+  const roleArn = process.env[CALLABLE_FUNCTION_DATA_BROWSER_ROLE_ENV];
   const storage = deps.storage ?? getCallableFunctionDataStorage();
-  const url = (await storage.browserSigningOrigin())
-    ? await storage.getSignedUrl(callableFunctionDataKey(fn.id, pin.sha256), 'get', {
+  const signer =
+    bucket && roleArn
+      ? getBrowserLinkStorage(bucket, roleArn, deps.sts)
+      : !bucket && (await storage.browserSigningOrigin())
+        ? storage
+        : undefined;
+  const url = signer
+    ? await signer.getSignedUrl(callableFunctionDataKey(fn.id, pin.sha256), 'get', {
         audience: 'browser',
         expiresIn: CALLABLE_FUNCTION_DATA_BROWSER_LINK_SECONDS,
         ResponseContentType: 'application/octet-stream',

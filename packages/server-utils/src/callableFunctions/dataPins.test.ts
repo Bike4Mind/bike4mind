@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ICallableFunctionDataPin, IUserDocument } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
@@ -36,7 +36,9 @@ vi.mock('../utils/storage/index', () => ({
     getContent: async () => Readable.from([await h.sourceDownload()]),
   }),
 }));
-vi.mock('@bike4mind/fab-pipeline', () => ({ S3Storage: class {} }));
+vi.mock('@bike4mind/fab-pipeline', async () => ({
+  S3Storage: (await vi.importActual<typeof import('@bike4mind/fab-pipeline')>('@bike4mind/fab-pipeline')).S3Storage,
+}));
 vi.mock('@bike4mind/observability', () => ({ Logger: { warn: vi.fn(), error: vi.fn() } }));
 
 import {
@@ -47,6 +49,7 @@ import {
   signCallableFunctionDataLinks,
   unpinCallableFunctionData,
   type CallableFunctionDataStorage,
+  type CallableFunctionDataSts,
 } from './dataPins';
 
 const FN_ID = 'a'.repeat(24);
@@ -67,7 +70,7 @@ const pinOf = (name: string, bytes = 10, hash = sha(Buffer.from(name))): ICallab
 function memoryStorage() {
   const objects = new Map<string, Buffer>();
   const storage = {
-    uploadStream: vi.fn(async (input: Readable, key: string) => {
+    uploadStream: vi.fn(async (input: Readable, key: string, _bytes: number) => {
       const chunks: Buffer[] = [];
       for await (const chunk of input) chunks.push(chunk as Buffer);
       objects.set(key, Buffer.concat(chunks));
@@ -351,6 +354,63 @@ describe('linkCallableFunctionDataForBrowser', () => {
     const link = await linkCallableFunctionDataForBrowser(OWNER, FN_ID, 'points.csv', { storage });
     expect(link.url).toBe(`/api/callable-functions/${FN_ID}/data/points.csv?bytes=1`);
     expect(storage.getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  describe('with a data bucket', () => {
+    const ROLE = 'browser-reader-role-arn';
+    const assumed = () => ({
+      send: vi.fn(async () => ({
+        Credentials: {
+          AccessKeyId: 'ASIABROWSERREADER',
+          SecretAccessKey: 'browser-secret',
+          SessionToken: 'browser-session',
+          Expiration: new Date(Date.now() + 15 * 60_000),
+        },
+      })),
+    });
+
+    beforeEach(() => {
+      vi.stubEnv('CALLABLE_FUNCTION_DATA_BUCKET', 'function-data');
+      vi.stubEnv('AWS_REGION', 'us-east-2');
+      vi.stubEnv('AWS_ENDPOINT_URL_S3', '');
+      vi.stubEnv('S3_PRESIGN_ENDPOINT', '');
+      withPins([pinOf('points.csv', CSV.length, sha(CSV))]);
+    });
+    afterEach(() => vi.unstubAllEnvs());
+
+    it("signs the one-minute link with the browser role's assumed credentials, not the process's own", async () => {
+      vi.stubEnv('CALLABLE_FUNCTION_DATA_BROWSER_ROLE_ARN', ROLE);
+      const { storage } = memoryStorage();
+      const sts = assumed();
+      const link = await linkCallableFunctionDataForBrowser(OWNER, FN_ID, 'points.csv', {
+        storage,
+        sts: sts as unknown as CallableFunctionDataSts,
+      });
+      const url = new URL(link.url);
+      expect(url.origin).toBe('https://function-data.s3.us-east-2.amazonaws.com');
+      expect(url.pathname).toBe(`/data/${FN_ID}/${sha(CSV)}`);
+      expect(url.searchParams.get('X-Amz-Credential')).toMatch(/^ASIABROWSERREADER\//);
+      expect(url.searchParams.get('X-Amz-Security-Token')).toBe('browser-session');
+      expect(url.searchParams.get('X-Amz-Expires')).toBe('60');
+      expect(url.searchParams.get('response-content-disposition')).toBe('attachment');
+      expect(sts.send).toHaveBeenCalledTimes(1);
+      expect((sts.send.mock.calls[0] as unknown[])[0]).toMatchObject({
+        input: { RoleArn: ROLE, RoleSessionName: 'callable-function-data-browser', DurationSeconds: 900 },
+      });
+      expect(storage.getSignedUrl).not.toHaveBeenCalled();
+    });
+
+    it('reads through the byte route, never a link the process signed, when the browser role is not wired', async () => {
+      const { storage } = memoryStorage();
+      const sts = assumed();
+      const link = await linkCallableFunctionDataForBrowser(OWNER, FN_ID, 'points.csv', {
+        storage,
+        sts: sts as unknown as CallableFunctionDataSts,
+      });
+      expect(link.url).toBe(`/api/callable-functions/${FN_ID}/data/points.csv?bytes=1`);
+      expect(storage.getSignedUrl).not.toHaveBeenCalled();
+      expect(sts.send).not.toHaveBeenCalled();
+    });
   });
 });
 
