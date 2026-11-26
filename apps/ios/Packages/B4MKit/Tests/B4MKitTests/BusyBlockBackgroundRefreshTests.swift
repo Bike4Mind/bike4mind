@@ -5,15 +5,21 @@ import XCTest
 private final class FakeScheduler: BackgroundRefreshScheduling, @unchecked Sendable {
   private let lock = NSLock()
   private var _submits: [(identifier: String, earliestBegin: Date)] = []
+  private var _cancels: [String] = []
   var error: (any Error)?
 
   var submits: [(identifier: String, earliestBegin: Date)] { lock.withLock { _submits } }
+  var cancels: [String] { lock.withLock { _cancels } }
 
   func submit(identifier: String, earliestBegin: Date) throws {
     try lock.withLock {
       if let error { throw error }
       _submits.append((identifier, earliestBegin))
     }
+  }
+
+  func cancel(identifier: String) {
+    lock.withLock { _cancels.append(identifier) }
   }
 }
 
@@ -57,6 +63,15 @@ final class BusyBlockBackgroundRefreshTests: XCTestCase {
 
     XCTAssertEqual(scheduler.submits.map(\.identifier), ["app.test.busy-block-refresh"])
     XCTAssertEqual(scheduler.submits.first?.earliestBegin, now.addingTimeInterval(BusyBlockBackgroundRefresh.interval))
+  }
+
+  func testCancelPendingCancelsTheIdentifier() {
+    let scheduler = FakeScheduler()
+
+    refresh(scheduler) { .synced }.cancelPending()
+
+    XCTAssertEqual(scheduler.cancels, ["app.test.busy-block-refresh"])
+    XCTAssertTrue(scheduler.submits.isEmpty)
   }
 
   func testRefusedSubmitIsSwallowed() {

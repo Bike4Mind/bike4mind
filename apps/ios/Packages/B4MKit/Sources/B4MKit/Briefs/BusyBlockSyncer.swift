@@ -38,6 +38,8 @@ public final class BusyBlockSyncer {
   private let now: @Sendable () -> Date
   private var lastSync: Date?
   private var current: Task<BusyBlockSyncOutcome, Never>?
+  /// Bumped at each sign-in so a sync still running from the previous session cannot record into the new one.
+  private var session = 0
   /// The latest outcome that says something about the account or device; `inFlight` and `throttled` leave it alone.
   public private(set) var lastOutcome: BusyBlockSyncOutcome?
 
@@ -63,15 +65,17 @@ public final class BusyBlockSyncer {
     guard current == nil else { return .skipped(.inFlight) }
     guard reader.access() != .notDetermined else { return record(.skipped(.neverAsked)) }
     if !force, let lastSync, now().timeIntervalSince(lastSync) < Self.minInterval { return .skipped(.throttled) }
-    let task = Task { await perform() }
+    let started = session
+    let task = Task { await perform(session: started) }
     current = task
     defer { current = nil }
-    return record(
-      await withTaskCancellationHandler {
-        await task.value
-      } onCancel: {
-        task.cancel()
-      })
+    let outcome = await withTaskCancellationHandler {
+      await task.value
+    } onCancel: {
+      task.cancel()
+    }
+    guard session == started else { return outcome }
+    return record(outcome)
   }
 
   /// A forced sync, or the outcome of the one already running, so a caller that must report success waits for it.
@@ -89,24 +93,29 @@ public final class BusyBlockSyncer {
   /// Forgets the last outcome and throttle at a sign-in: a signed-out or opted-out result belongs to the
   /// previous session and would otherwise keep the background edge from re-arming for the new one.
   public func sessionDidStart() {
+    session += 1
     lastOutcome = nil
     lastSync = nil
   }
 
-  private func perform() async -> BusyBlockSyncOutcome {
+  private func perform(session started: Int) async -> BusyBlockSyncOutcome {
     do {
       guard try await api.state().enabled else {
-        lastSync = now()
+        markSynced(session: started)
         return .skipped(.disabled)
       }
       _ = try await api.save(enabled: true, blocks: currentBlocks())
-      lastSync = now()
+      markSynced(session: started)
       return .synced
     } catch APIError.signedOut {
       return .skipped(.signedOut)
     } catch {
       return .failed
     }
+  }
+
+  private func markSynced(session started: Int) {
+    if session == started { lastSync = now() }
   }
 
   private func record(_ outcome: BusyBlockSyncOutcome) -> BusyBlockSyncOutcome {
