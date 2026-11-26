@@ -8,7 +8,8 @@ import type { CreditActor } from './delegateTargets';
  * outright (delegateTargets.ts), so this only ever holds a full admin's.
  */
 export const isHeldSelfGrant = (actor: CreditActor, targetsSelf: boolean): boolean =>
-  targetsSelf && !hasAdminPermission(actor, 'credits:self_grant');
+  // Under impersonation `actor` is the impersonated account, whose exemption is not the impersonator's.
+  targetsSelf && (actor.impersonatedBy !== undefined || !hasAdminPermission(actor, 'credits:self_grant'));
 
 /**
  * The approver requirement every held self-grant is requested with: an admin holding `credits:approve_self_grant`,

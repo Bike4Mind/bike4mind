@@ -1,4 +1,10 @@
-import { assertCanActOnAdminTarget, ForbiddenError, isFullAdmin, NotFoundError } from '@bike4mind/common';
+import {
+  assertCanActOnAdminTarget,
+  ForbiddenError,
+  isFullAdmin,
+  NotFoundError,
+  type AdminApproval,
+} from '@bike4mind/common';
 import { organizationRepository, userRepository } from '@bike4mind/database';
 import { SubscriptionOwnerType, type ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { isSelfOrImpersonator } from '@bike4mind/server-utils/utils/adminAudit';
@@ -35,14 +41,31 @@ export async function assertDelegateCanCreditUsers(actor: CreditActor, userIds: 
   for (const user of users) assertCanActOnAdminTarget(actor, user, verb);
 }
 
-/** Whether the actor (or the admin impersonating them) owns, administers, bills for or is a member of the organization. */
-export function belongsToOrganization(actor: CreditActor, organization: CreditedOrganization): boolean {
-  return [
+const organizationMemberIds = (organization: CreditedOrganization): string[] =>
+  [
     organization.userId,
     ...(organization.adminUserIds ?? []),
     ...(organization.billingManagerUserIds ?? []),
     ...(organization.users ?? []).map(member => member.userId),
-  ].some(id => typeof id === 'string' && id.length > 0 && isSelfOrImpersonator(actor, id));
+  ].filter((id): id is string => typeof id === 'string' && id.length > 0);
+
+/** Whether the actor (or the admin impersonating them) owns, administers, bills for or is a member of the organization. */
+export function belongsToOrganization(actor: CreditActor, organization: CreditedOrganization): boolean {
+  return organizationMemberIds(organization).some(id => isSelfOrImpersonator(actor, id));
+}
+
+/**
+ * Whether a credit change to the organization is a self-grant: the acting admin belongs to it, or, when an
+ * approver runs it, the admin who requested it does. Approval executors run as the approver.
+ */
+export function isOrganizationSelfGrant(
+  actor: CreditActor,
+  organization: CreditedOrganization,
+  approval?: Pick<AdminApproval, 'requestedBy'>
+): boolean {
+  if (belongsToOrganization(actor, organization)) return true;
+  const requesterIds = approval?.requestedBy.selfIds ?? [];
+  return organizationMemberIds(organization).some(id => requesterIds.includes(id));
 }
 
 export async function assertDelegateCanCreditOrganization(

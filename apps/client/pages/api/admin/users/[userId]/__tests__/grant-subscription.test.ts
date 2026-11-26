@@ -87,10 +87,15 @@ import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 const approvalMocks = vi.hoisted(() => ({
   policy: vi.fn(async (_credits: number): Promise<unknown> => null),
   request: vi.fn(),
+  gateOptions: vi.fn(),
 }));
+const DISABLED_POLICY = { enabled: false, bulkUserThreshold: 25, creditThreshold: 10, expiryHours: 24 };
 vi.mock('@server/admin/creditGrants/gate', () => ({
-  creditGrantNeedsApproval: async (credits: number) => {
+  // Like the real gate, a held self-grant gets the policy even with approvals disabled.
+  creditGrantNeedsApproval: async (credits: number, _actorId: string, opts?: { heldSelfGrant?: boolean }) => {
+    approvalMocks.gateOptions(opts);
     const policy = await approvalMocks.policy(credits);
+    if (opts?.heldSelfGrant) return { policy: policy ?? DISABLED_POLICY };
     return policy ? { policy } : { policy: null, release: async () => undefined };
   },
 }));
@@ -335,7 +340,8 @@ describe('POST /api/admin/users/[userId]/grant-subscription - reason and self-gr
     });
 
     it('allows a self-grant through the ledger and flags it in the audit entry', async () => {
-      await callWith({ ...body, reason: REASON }, 'admin-1')();
+      const user = { isAdmin: true, id: 'admin-1', email: 'a@example.com', adminPermissions: ['credits:self_grant'] };
+      await callWith({ ...body, reason: REASON }, 'admin-1', user)();
       expect(mockAddCredits).toHaveBeenCalled();
       expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
         expect.anything(),
@@ -346,12 +352,21 @@ describe('POST /api/admin/users/[userId]/grant-subscription - reason and self-gr
       );
     });
 
-    it('flags a grant to the account an impersonating admin impersonates from', async () => {
-      const user = { isAdmin: true, id: 'admin-2', email: 'b@example.com', impersonatedBy: 'admin-1' };
+    it('holds a grant to the account an impersonating admin impersonates from, even with credits:self_grant', async () => {
+      approvalMocks.request.mockResolvedValue(PENDING);
+      const user = {
+        isAdmin: true,
+        id: 'admin-2',
+        email: 'b@example.com',
+        adminPermissions: ['credits:self_grant'],
+        impersonatedBy: 'admin-1',
+      };
       await callWith({ ...body, reason: REASON }, 'admin-1', user)();
-      expect(recordAdminActionFromRequest).toHaveBeenCalledWith(
+      expect(mockAddCredits).not.toHaveBeenCalled();
+      expect(approvalMocks.request).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ details: expect.objectContaining({ selfGrant: true }) })
+        expect.objectContaining({ requiredPermission: 'credits:approve_self_grant' }),
+        expect.anything()
       );
     });
 
@@ -416,6 +431,29 @@ describe('POST /api/admin/users/[userId]/grant-subscription - approval gate', ()
       }),
       POLICY
     );
+  });
+
+  it.each([
+    ['direct', undefined],
+    ['impersonated', { impersonatedBy: 'admin-2', adminPermissions: ['credits:self_grant'] }],
+  ])('holds a %s self-grant with approvals disabled and answers 202', async (_label, extra) => {
+    mockUserFindById.mockResolvedValue({ id: 'admin-1', email: 'a@example.com' });
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { userId: 'admin-1' },
+      body: { subscriptionType: 'team', organizationName: 'Acme', seats: 5, reason: REASON },
+    });
+    (req as unknown as { user: unknown }).user = { isAdmin: true, id: 'admin-1', ...extra };
+    (req as unknown as { logger: unknown }).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    await (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res);
+    expect(approvalMocks.gateOptions).toHaveBeenCalledWith({ heldSelfGrant: true });
+    expect(res._getStatusCode()).toBe(202);
+    expect(approvalMocks.request).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ requiredPermission: 'credits:approve_self_grant', requiresFullAdmin: false }),
+      DISABLED_POLICY
+    );
+    expect(mockSubCreate).not.toHaveBeenCalled();
   });
 
   it('refuses with 409 at execute when the per-seat credits changed since the request', async () => {

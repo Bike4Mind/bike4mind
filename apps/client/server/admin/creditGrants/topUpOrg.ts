@@ -14,7 +14,7 @@ import { Resource } from 'sst';
 
 import type { Request } from 'express';
 import { approvalDetails, notifyAfterCommit } from './approval';
-import { assertDelegateCanCreditOrganization } from './delegateTargets';
+import { assertDelegateCanCreditOrganization, isOrganizationSelfGrant } from './delegateTargets';
 import { isApprovedSelfGrant } from './selfGrant';
 
 // Cap protects against admin typo (e.g. an extra zero). 10M credits = ~6 years
@@ -110,7 +110,12 @@ export async function topUpOrg(req: Request, params: TopUpParams, approval?: Adm
         target: { kind: 'organization', id: organization.id, displayName: organization.name },
         summary: `${isRefund ? 'refunded' : 'topped up'} ${credits} credits`,
         reason,
-        details: { ...approvalDetails(approval), credits, ownerId: organization.userId, ...(isRefund ? { kind } : {}) },
+        details: {
+          ...approvalDetails(approval),
+          credits,
+          ownerId: organization.userId,
+          ...(isRefund ? { kind } : { selfGrant: isOrganizationSelfGrant(req.user!, organization, approval) }),
+        },
         related: creditTransactionId ? { creditTransactionId } : undefined,
       });
     });

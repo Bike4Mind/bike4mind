@@ -15,6 +15,16 @@ describe('isHeldSelfGrant', () => {
   it('never holds a grant to someone else', () => {
     expect(isHeldSelfGrant({ id: 'a', isAdmin: true }, false)).toBe(false);
   });
+
+  it('holds an impersonated actor granting to themselves even when the account holds credits:self_grant', () => {
+    const actor = { id: 'a', isAdmin: true, adminPermissions: ['credits:self_grant'], impersonatedBy: 'b' };
+    expect(isHeldSelfGrant(actor, true)).toBe(true);
+  });
+
+  it('does not hold an impersonated actor granting to someone else', () => {
+    const actor = { id: 'a', isAdmin: true, adminPermissions: ['credits:self_grant'], impersonatedBy: 'b' };
+    expect(isHeldSelfGrant(actor, false)).toBe(false);
+  });
 });
 
 describe('SELF_GRANT_APPROVAL', () => {

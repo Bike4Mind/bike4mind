@@ -74,10 +74,15 @@ import { creditLotRepository, creditTransactionRepository, organizationRepositor
 const approvalMocks = vi.hoisted(() => ({
   policy: vi.fn(async (_credits: number): Promise<unknown> => null),
   request: vi.fn(),
+  gateOptions: vi.fn(),
 }));
+const DISABLED_POLICY = { enabled: false, bulkUserThreshold: 25, creditThreshold: 10, expiryHours: 24 };
 vi.mock('@server/admin/creditGrants/gate', () => ({
-  creditGrantNeedsApproval: async (credits: number) => {
+  // Like the real gate, a held self-grant gets the policy even with approvals disabled.
+  creditGrantNeedsApproval: async (credits: number, _actorId: string, opts?: { heldSelfGrant?: boolean }) => {
+    approvalMocks.gateOptions(opts);
     const policy = await approvalMocks.policy(credits);
+    if (opts?.heldSelfGrant) return { policy: policy ?? DISABLED_POLICY };
     return policy ? { policy } : { policy: null, release: async () => undefined };
   },
 }));
@@ -214,7 +219,7 @@ describe('POST /api/admin/organizations/[id]/top-up credit kind', () => {
       expect.objectContaining({
         action: 'org.credits.topped_up',
         summary: 'topped up 100 credits',
-        details: { credits: 100, ownerId: 'owner-1' },
+        details: { credits: 100, ownerId: 'owner-1', selfGrant: false },
       })
     );
     expect(res._getJSONData()).toEqual({ organizationId: 'org-1', creditsAdded: 100 });
@@ -387,6 +392,52 @@ describe('POST /api/admin/organizations/[id]/top-up - approval gate', () => {
     );
   });
 
+  it.each([
+    ['only the owner', { userId: 'admin-1' }],
+    ['only a billing manager', { userId: 'owner-1', billingManagerUserIds: ['admin-1'] }],
+    ['only a member', { userId: 'owner-1', users: [{ userId: 'admin-1' }] }],
+    ['only an admin', { userId: 'owner-1', adminUserIds: ['admin-1'] }],
+  ])('holds a top-up with approvals disabled when the admin is %s', async (_label, org) => {
+    mockOrgFindById.mockResolvedValue({ id: 'org-1', name: 'Acme', ...org });
+    const { res, run } = call({});
+    await run();
+    expect(approvalMocks.gateOptions).toHaveBeenCalledWith({ heldSelfGrant: true });
+    expect(res._getStatusCode()).toBe(202);
+    expect(approvalMocks.request).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ requiredPermission: 'credits:approve_self_grant', requiresFullAdmin: false }),
+      DISABLED_POLICY
+    );
+    expect(mockAddCredits).not.toHaveBeenCalled();
+  });
+
+  it('holds an impersonated self-grant even when the account holds credits:self_grant', async () => {
+    mockOrgFindById.mockResolvedValue({ id: 'org-1', name: 'Acme', userId: 'admin-1' });
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'org-1' }, body: BODY });
+    (req as unknown as { user: unknown }).user = {
+      isAdmin: true,
+      id: 'admin-1',
+      adminPermissions: ['credits:self_grant'],
+      impersonatedBy: 'admin-2',
+    };
+    (req as unknown as { logger: unknown }).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    await (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res);
+    expect(res._getStatusCode()).toBe(202);
+    expect(approvalMocks.request).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ requiredPermission: 'credits:approve_self_grant', requiresFullAdmin: false }),
+      DISABLED_POLICY
+    );
+  });
+
+  it('runs an unrelated admin top-up straight through with approvals disabled', async () => {
+    const { res, run } = call({});
+    await run();
+    expect(approvalMocks.gateOptions).toHaveBeenCalledWith({ heldSelfGrant: false });
+    expect(res._getStatusCode()).toBe(200);
+    expect(approvalMocks.request).not.toHaveBeenCalled();
+  });
+
   it('404s an unknown organization before storing a request', async () => {
     approvalMocks.policy.mockResolvedValueOnce(POLICY);
     mockOrgFindById.mockResolvedValueOnce(null);
@@ -429,5 +480,53 @@ describe('POST /api/admin/organizations/[id]/top-up - approval gate', () => {
 
     await expect(topUpOrg(approverReq, params)).rejects.toThrow('You cannot top up an organization you belong to');
     expect(await topUpOrg(approverReq, params, approval)).toEqual({ organizationId: 'org-1', creditsAdded: 100 });
+  });
+});
+
+describe('topUpOrg executor - selfGrant audit flag', () => {
+  const params = {
+    organizationId: 'org-1',
+    credits: 100,
+    kind: 'top_up' as const,
+    idempotencyKey: 'idem-key-12345',
+    reason: 'r',
+  };
+  const approverReq = (id = 'admin-2') =>
+    ({ user: { id, isAdmin: true }, logger: { info: vi.fn() } }) as unknown as Request;
+  const approvalBy = (...selfIds: string[]) =>
+    ({
+      id: 'approval-1',
+      requiredPermission: 'credits:approve_self_grant',
+      requestedBy: { id: selfIds[0], name: 'R', selfIds },
+    }) as unknown as AdminApproval;
+  const auditDetails = () => vi.mocked(recordAdminActionFromRequest).mock.calls[0][1].details;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAddCredits.mockResolvedValue({ creditHolder: {}, creditTransactionId: 'tx-topup' });
+    mockTxFindOne.mockResolvedValue(null);
+  });
+
+  it.each([
+    ['owner', { userId: 'requester-1' }],
+    ['billing manager', { userId: 'owner-1', billingManagerUserIds: ['requester-1'] }],
+    ['member', { userId: 'owner-1', users: [{ userId: 'requester-1' }] }],
+  ])('flags a top-up approved by another admin when the requester is the org %s', async (_label, org) => {
+    mockOrgFindById.mockResolvedValue({ id: 'org-1', name: 'Acme', ...org });
+    await topUpOrg(approverReq(), params, approvalBy('requester-1'));
+    expect(auditDetails()).toMatchObject({ selfGrant: true });
+  });
+
+  it('does not flag a top-up for an unrelated admin', async () => {
+    mockOrgFindById.mockResolvedValue({ id: 'org-1', name: 'Acme', userId: 'owner-1' });
+    await topUpOrg(approverReq('admin-1'), params);
+    expect(auditDetails()).toMatchObject({ selfGrant: false });
+  });
+
+  it('leaves selfGrant off a refund', async () => {
+    mockOrgFindById.mockResolvedValue({ id: 'org-1', name: 'Acme', userId: 'admin-2' });
+    await topUpOrg(approverReq(), { ...params, kind: 'refund' });
+    expect(auditDetails()).not.toHaveProperty('selfGrant');
+    expect(auditDetails()).toMatchObject({ kind: 'refund' });
   });
 });

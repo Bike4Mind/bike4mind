@@ -13,6 +13,7 @@ import {
   assertDelegateCanCreditOrganization,
   assertDelegateCanCreditUser,
   assertDelegateCanCreditUsers,
+  isOrganizationSelfGrant,
 } from './delegateTargets';
 
 const delegate = { id: 'delegate-1', isAdmin: false, adminPermissions: ['credits:adjust'] };
@@ -147,5 +148,44 @@ describe('bulk delegate targets', () => {
         'change'
       )
     ).rejects.toThrow('Organization not found');
+  });
+});
+
+describe('isOrganizationSelfGrant', () => {
+  const actor = { id: 'admin-1', isAdmin: true };
+  const approvalBy = (...selfIds: string[]) => ({ requestedBy: { id: 'requester', name: 'R', selfIds } }) as never;
+
+  it.each([
+    ['owns', { userId: 'admin-1' }],
+    ['administers', { userId: 'user-1', adminUserIds: ['admin-1'] }],
+    ['manages billing for', { userId: 'user-1', billingManagerUserIds: ['admin-1'] }],
+    ['is a member of', { userId: 'user-1', users: [{ userId: 'admin-1' }] }],
+  ])('is true for an actor that %s the organization', (_label, organization) => {
+    expect(isOrganizationSelfGrant(actor, organization)).toBe(true);
+  });
+
+  it('is true when the impersonator belongs to the organization', () => {
+    expect(isOrganizationSelfGrant({ ...actor, impersonatedBy: 'owner-1' }, { userId: 'owner-1' })).toBe(true);
+  });
+
+  it.each([
+    ['owns', { userId: 'requester' }],
+    ['administers', { userId: 'user-1', adminUserIds: ['requester'] }],
+    ['manages billing for', { userId: 'user-1', billingManagerUserIds: ['requester'] }],
+    ['is a member of', { userId: 'user-1', users: [{ userId: 'requester' }] }],
+  ])('is true for an approver when the requesting admin %s the organization', (_label, organization) => {
+    expect(isOrganizationSelfGrant(actor, organization, approvalBy('requester'))).toBe(true);
+  });
+
+  it('matches any of the requester self ids', () => {
+    expect(isOrganizationSelfGrant(actor, { userId: 'owner-2' }, approvalBy('other', 'owner-2'))).toBe(true);
+  });
+
+  it('is false for an unrelated actor with no approval', () => {
+    expect(isOrganizationSelfGrant(actor, { userId: 'user-1', users: [{ userId: 'user-2' }] })).toBe(false);
+  });
+
+  it('is false when neither the actor nor the requester belongs to the organization', () => {
+    expect(isOrganizationSelfGrant(actor, { userId: 'user-1' }, approvalBy('requester'))).toBe(false);
   });
 });
