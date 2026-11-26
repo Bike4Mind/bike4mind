@@ -83,6 +83,25 @@ class CalendarBusyBlockReaderTest {
     }
 
     @Test
+    fun eventsQueriesTheWindowExcludingCancelledEvents() {
+        shadowOf(app).grantPermissions(Manifest.permission.READ_CALENDAR)
+        val provider = RecordingProvider(
+            MatrixCursor(CalendarBusyBlockReader.PROJECTION).apply {
+                addRow(arrayOf<Any?>(1_000L, 2_000L, 0, Events.AVAILABILITY_BUSY))
+            },
+        )
+        ShadowContentResolver.registerProviderInternal(CalendarContract.AUTHORITY, provider)
+
+        val events = reader.events(Instant.ofEpochMilli(5_000), Instant.ofEpochMilli(9_000))
+
+        assertEquals(listOf(sample(1_000, 2_000, false, Availability.BUSY)), events)
+        assertEquals(Instances.CONTENT_URI.buildUpon().appendPath("5000").appendPath("9000").build(), provider.uri)
+        assertArrayEquals(CalendarBusyBlockReader.PROJECTION, provider.projection)
+        assertEquals(CalendarBusyBlockReader.SELECTION, provider.selection)
+        assertArrayEquals(arrayOf(Events.STATUS_CANCELED.toString()), provider.selectionArgs)
+    }
+
+    @Test
     fun accessIsAuthorizedOnlyWhenGranted() {
         shadowOf(app).denyPermissions(Manifest.permission.READ_CALENDAR)
         assertEquals(BusyBlockAccess.NOT_DETERMINED, reader.access())
@@ -110,6 +129,31 @@ class CalendarBusyBlockReaderTest {
 
     private fun sample(start: Long, end: Long, allDay: Boolean, availability: Availability) =
         CalendarEventSample(Instant.ofEpochMilli(start), Instant.ofEpochMilli(end), allDay, availability)
+
+    private class RecordingProvider(private val rows: Cursor) : ContentProvider() {
+        var uri: Uri? = null
+        var projection: Array<out String>? = null
+        var selection: String? = null
+        var selectionArgs: Array<out String>? = null
+
+        override fun onCreate() = true
+
+        override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?): Cursor {
+            this.uri = uri
+            this.projection = projection
+            this.selection = selection
+            this.selectionArgs = selectionArgs
+            return rows
+        }
+
+        override fun getType(uri: Uri): String? = null
+
+        override fun insert(uri: Uri, values: ContentValues?): Uri? = null
+
+        override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?) = 0
+
+        override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?) = 0
+    }
 
     private class DenyingProvider : ContentProvider() {
         override fun onCreate() = true

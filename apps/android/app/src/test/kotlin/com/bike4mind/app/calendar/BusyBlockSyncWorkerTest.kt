@@ -65,6 +65,15 @@ class BusyBlockSyncWorkerTest {
     }
 
     @Test
+    fun cancellingDropsTheArmedTrigger() {
+        BusyBlockSyncWorker.arm(app)
+
+        BusyBlockSyncWorker.cancel(app)
+
+        assertEquals(listOf(WorkInfo.State.CANCELLED), work().map { it.state })
+    }
+
+    @Test
     fun aRunWhileSignedOutNeitherSyncsNorReArms() = runTest {
         var syncs = 0
         var rearms = 0
