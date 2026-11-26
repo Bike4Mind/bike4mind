@@ -54,17 +54,24 @@ describe('createSessionTurn contract', () => {
   it('parses every event the stream sends', () => {
     const events = [
       { type: 'meta', requestId: 'r1' },
-      { type: 'turn', questId: 'q1', sessionId: 's1' },
-      { type: 'delta', questId: 'q1', slot: 0, text: 'Hel' },
-      { type: 'replace', questId: 'q1', slot: 1, text: 'Rewritten' },
-      { type: 'settled', questId: 'q1', status: 'stopped', creditsUsed: 3, errorCode: 'insufficient_credits' },
+      { type: 'turn', quest_id: 'q1', session_id: 's1' },
+      { type: 'delta', quest_id: 'q1', slot: 0, text: 'Hel' },
+      { type: 'replace', quest_id: 'q1', slot: 1, text: 'Rewritten' },
+      {
+        type: 'settled',
+        quest_id: 'q1',
+        status: 'stopped',
+        failed: true,
+        credits_used: 3,
+        error_code: 'insufficient_credits',
+      },
       { type: 'error', message: 'Lost track of the turn', requestId: 'r1' },
     ];
     for (const event of events) expect(SessionTurnStreamEventSchema.safeParse(event).success).toBe(true);
   });
 
   it('rejects a settled event with a non-terminal status', () => {
-    expect(SessionTurnStreamEventSchema.safeParse({ type: 'settled', questId: 'q1', status: 'running' }).success).toBe(
+    expect(SessionTurnStreamEventSchema.safeParse({ type: 'settled', quest_id: 'q1', status: 'running' }).success).toBe(
       false
     );
   });

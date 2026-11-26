@@ -228,11 +228,11 @@ export interface paths {
     put?: never;
     /**
      * Add a turn to a session
-     * @description Adds a user message to an existing session (called a "notebook" in the product UI) and runs the assistant reply through the same pipeline as the web app, so the turn appears in the session and every other client watching it sees it live. A successful request is answered with an SSE stream (`text/event-stream`): a `meta` event carrying `requestId`, a `turn` event with the new `questId` and `sessionId`, then `delta` events (`{ questId, slot, text }`) that each APPEND `text` to reply slot `slot`, and `replace` events (`{ questId, slot, text }`) that REPLACE a slot whole when the server reset or rewrote it (a retry, a rapid-reply handoff). Thinking models stream their reasoning in an earlier slot than the answer. One `settled` event (`{ questId, status, creditsUsed, errorCode }`) follows the last slot event, then `data: [DONE]`. `status` is `done` or `stopped`; treat `stopped`, or a present `errorCode`, as a failed turn whose slots hold an explanation rather than an answer.
+     * @description Adds a user message to an existing session (called a "notebook" in the product UI) and runs the assistant reply through the same pipeline as the web app, so the turn appears in the session and every other client watching it sees it live. A successful request is answered with an SSE stream (`text/event-stream`): a `meta` event carrying `requestId`, a `turn` event with the new `quest_id` and `session_id`, then `delta` events (`{ quest_id, slot, text }`) that each APPEND `text` to reply slot `slot`, and `replace` events (`{ quest_id, slot, text }`) that REPLACE a slot whole when the server reset or rewrote it (a retry, a rapid-reply handoff). Thinking models stream their reasoning in an earlier slot than the answer. One `settled` event (`{ quest_id, status, failed, credits_used, error_code }`) follows the last slot event, then `data: [DONE]`. `status` is `done` or `stopped`; when `failed` is true the slots hold an explanation rather than an answer, and `error_code` names the cause when it is a known one.
      *
-     *     DISCONNECTS. Closing the stream detaches from the turn; it does not stop it. The turn runs to the end and is saved to the session. Stop a turn with `POST /api/sessions/{id}/chat/stop-reply`.
+     *     DISCONNECTS. Closing the stream detaches from the turn; it does not stop it. The turn runs to the end and is saved to the session, and an API key's concurrent-request slot stays held until the turn finishes. Stop a turn with `POST /api/sessions/{id}/chat/stop-reply`.
      *
-     *     ERRORS. Everything checked before the turn starts fails with a JSON error body and a real HTTP status, before any stream opens: a bad credential `401`; a key without `ai:chat` `403` (with `required_scopes`); a suspended account, paused spending, an organization the caller cannot bill or a model the organization does not allow `403` with an `errorCode`; an unknown `model` `400`; a `session_id` that does not exist or that the caller cannot write to `404` (the two are indistinguishable on purpose); a body that fails schema validation `422`; the free-tier daily allowance used up `429` with `errorCode: "daily_free_limit_reached"` and `Retry-After`. Once the turn exists the stream opens and the status stays `200`: a turn the account cannot pay for or run (for example `errorCode: "insufficient_credits"` or `"model_requires_subscription"`) is reported by its `settled` event like any other failed turn, and an `error` event is sent only when the server could not follow the turn to its end.
+     *     ERRORS. Everything checked before the turn starts fails with a JSON error body and a real HTTP status, before any stream opens: a bad credential `401`; a key without `ai:chat` `403` (with `required_scopes`); a suspended account, paused spending or an organization the caller cannot bill `403` with an `errorCode`; a `model` that does not exist, is disabled or cannot run a chat completion `400`; a `session_id` that does not exist or that the caller cannot write to `404` (the two are indistinguishable on purpose); a body that fails schema validation `422`; too many requests, or the free-tier daily allowance used up, `429` with `Retry-After`. Once the turn exists the stream opens and the status stays `200`: a turn the account cannot pay for (`error_code: "insufficient_credits"`) or a model its plan or organization does not allow is reported by its `settled` event with `failed: true`, like any other failed turn, and an `error` event is sent only when the server could not follow the turn to its end.
      */
     post: operations['createSessionTurn'];
     delete?: never;
@@ -4935,7 +4935,7 @@ export interface components {
     /**
      * @example {
      *       "type": "delta",
-     *       "questId": "664f1c2b9a1e4d0012ab34cd",
+     *       "quest_id": "664f1c2b9a1e4d0012ab34cd",
      *       "slot": 0,
      *       "text": "The report covers"
      *     }
@@ -4949,32 +4949,33 @@ export interface components {
       | {
           /** @enum {string} */
           type: 'turn';
-          questId: string;
-          sessionId: string;
+          quest_id: string;
+          session_id: string;
         }
       | {
           /** @enum {string} */
           type: 'delta';
-          questId: string;
+          quest_id: string;
           slot: number;
           text: string;
         }
       | {
           /** @enum {string} */
           type: 'replace';
-          questId: string;
+          quest_id: string;
           slot: number;
           text: string;
         }
       | {
           /** @enum {string} */
           type: 'settled';
-          questId: string;
+          quest_id: string;
           /** @enum {string} */
           status: 'done' | 'stopped';
-          creditsUsed?: number;
+          failed: boolean;
+          credits_used?: number;
           /** @enum {string} */
-          errorCode?:
+          error_code?:
             | 'insufficient_credits'
             | 'spend_cap_exceeded'
             | 'spend_frozen'
@@ -21577,7 +21578,7 @@ export interface operations {
           'text/event-stream': components['schemas']['createSessionTurnResponse200'];
         };
       };
-      /** @description A `model` the caller cannot use (`errorCode: "unknown_model"`), or an otherwise invalid request. */
+      /** @description A `model` that does not exist, is disabled or cannot run a chat completion, or an otherwise invalid request. */
       400: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -21599,7 +21600,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key does not hold `ai:chat`, the account is suspended (`errorCode: "account_suspended"`), AI access is turned off for the account, the organization policy does not allow the model (`errorCode: "org_model_not_allowed"`), or the caller named an `organization_id` it cannot bill (`errorCode: "billing_organization_mismatch"` for an organization-billed key). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
+      /** @description The API key does not hold `ai:chat`, the account is suspended (`errorCode: "account_suspended"`), AI access is turned off for the account, the organization policy does not allow the model for an API key (`errorCode: "org_model_not_allowed"`; a signed-in caller gets the refusal as a failed turn in the stream), or the caller named an `organization_id` it cannot bill (`errorCode: "billing_organization_mismatch"` for an organization-billed key). Also `403` (`errorCode: spend_frozen`, with `frozenScope` and `frozenAt`) when spending is paused for the account, its organization or the API key; not retryable until the pause is lifted. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

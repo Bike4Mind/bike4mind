@@ -23,6 +23,8 @@ import type { z } from 'zod';
 export type QuestSnapshot = {
   id: string;
   status?: string | null;
+  /** `error` on a quest whose slots hold a failure explanation; set on the stored quest. */
+  type?: string | null;
   reply?: string | null;
   replies?: readonly string[] | null;
   creditsUsed?: number | null;
@@ -67,8 +69,8 @@ export class TurnReplyDiffer {
       if (next === previous) continue;
       events.push(
         next.startsWith(previous)
-          ? { type: 'delta', questId: this.questId, slot, text: next.slice(previous.length) }
-          : { type: 'replace', questId: this.questId, slot, text: next }
+          ? { type: 'delta', quest_id: this.questId, slot, text: next.slice(previous.length) }
+          : { type: 'replace', quest_id: this.questId, slot, text: next }
       );
     }
     this.lastSlots = [...slots];
@@ -84,12 +86,14 @@ export class TurnReplyDiffer {
     if (snapshot.id !== this.questId || this.settled || !isTerminalQuestStatus(snapshot.status)) return [];
     const events: SessionTurnStreamEvent[] = this.observe(snapshot);
     this.settled = true;
+    const errorCode = isQuestOutcomeErrorCode(snapshot.errorCode) ? snapshot.errorCode : undefined;
     events.push({
       type: 'settled',
-      questId: this.questId,
+      quest_id: this.questId,
       status: snapshot.status,
-      ...(typeof snapshot.creditsUsed === 'number' ? { creditsUsed: snapshot.creditsUsed } : {}),
-      ...(isQuestOutcomeErrorCode(snapshot.errorCode) ? { errorCode: snapshot.errorCode } : {}),
+      failed: snapshot.status === 'stopped' || snapshot.type === 'error' || errorCode !== undefined,
+      ...(typeof snapshot.creditsUsed === 'number' ? { credits_used: snapshot.creditsUsed } : {}),
+      ...(errorCode ? { error_code: errorCode } : {}),
     });
     return events;
   }

@@ -65,6 +65,10 @@ export const SessionTurnRequestSchema = z.object({
 });
 export type SessionTurnRequest = z.infer<typeof SessionTurnRequestSchema>;
 
+/**
+ * Event fields are snake_case (CONVENTIONS.md section 2), except in `meta` and `error`: those are the
+ * completions stream's shared events (buildMetaEvent, formatSSEError) and keep its `requestId`.
+ */
 const SessionTurnMetaEventSchema = z.object({
   type: z.literal('meta'),
   requestId: z.string(),
@@ -73,8 +77,8 @@ const SessionTurnMetaEventSchema = z.object({
 /** Sent once the turn's quest exists, so the caller can map it to the session's message list. */
 const SessionTurnStartedEventSchema = z.object({
   type: z.literal('turn'),
-  questId: z.string(),
-  sessionId: z.string(),
+  quest_id: z.string(),
+  session_id: z.string(),
 });
 
 /**
@@ -83,7 +87,7 @@ const SessionTurnStartedEventSchema = z.object({
  */
 const SessionTurnDeltaEventSchema = z.object({
   type: z.literal('delta'),
-  questId: z.string(),
+  quest_id: z.string(),
   slot: z.number().int().nonnegative(),
   text: z.string(),
 });
@@ -91,20 +95,25 @@ const SessionTurnDeltaEventSchema = z.object({
 /** The slot was reset or rewritten (a retry, a rapid-reply handoff): `text` replaces it whole. */
 const SessionTurnReplaceEventSchema = z.object({
   type: z.literal('replace'),
-  questId: z.string(),
+  quest_id: z.string(),
   slot: z.number().int().nonnegative(),
   text: z.string(),
 });
 
 export const SESSION_TURN_SETTLED_STATUSES = ['done', 'stopped'] as const;
 
-/** The turn reached a terminal status. Sent once, after the last delta and before `[DONE]`. */
+/**
+ * The turn reached a terminal status. Sent once, after the last delta and before `[DONE]`. `failed`
+ * covers refusals that carry no `error_code` (a model the plan or organization does not allow), which
+ * settle as `done` with an explanation in the slots.
+ */
 const SessionTurnSettledEventSchema = z.object({
   type: z.literal('settled'),
-  questId: z.string(),
+  quest_id: z.string(),
   status: z.enum(SESSION_TURN_SETTLED_STATUSES),
-  creditsUsed: z.number().optional(),
-  errorCode: z.enum(QUEST_OUTCOME_ERROR_CODES).optional(),
+  failed: z.boolean(),
+  credits_used: z.number().optional(),
+  error_code: z.enum(QUEST_OUTCOME_ERROR_CODES).optional(),
 });
 
 export const SessionTurnStreamEventSchema = z.union([

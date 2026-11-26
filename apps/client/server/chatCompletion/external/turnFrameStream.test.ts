@@ -12,8 +12,8 @@ const frame = (replies: string[], extra: Partial<QuestSnapshot> = {}): QuestSnap
 describe('TurnReplyDiffer', () => {
   it('sends the appended suffix of a growing slot as a delta', () => {
     const differ = new TurnReplyDiffer(QUEST);
-    expect(differ.observe(frame(['Hel']))).toEqual([{ type: 'delta', questId: QUEST, slot: 0, text: 'Hel' }]);
-    expect(differ.observe(frame(['Hello']))).toEqual([{ type: 'delta', questId: QUEST, slot: 0, text: 'lo' }]);
+    expect(differ.observe(frame(['Hel']))).toEqual([{ type: 'delta', quest_id: QUEST, slot: 0, text: 'Hel' }]);
+    expect(differ.observe(frame(['Hello']))).toEqual([{ type: 'delta', quest_id: QUEST, slot: 0, text: 'lo' }]);
   });
 
   it('sends nothing for a duplicate frame', () => {
@@ -25,32 +25,32 @@ describe('TurnReplyDiffer', () => {
   it('replaces a slot whose new text does not extend the old', () => {
     const differ = new TurnReplyDiffer(QUEST);
     differ.observe(frame(['Hello wor']));
-    expect(differ.observe(frame(['Retry']))).toEqual([{ type: 'replace', questId: QUEST, slot: 0, text: 'Retry' }]);
+    expect(differ.observe(frame(['Retry']))).toEqual([{ type: 'replace', quest_id: QUEST, slot: 0, text: 'Retry' }]);
   });
 
   it('clears slots that a reset emptied, then streams the rebuilt slot from scratch', () => {
     const differ = new TurnReplyDiffer(QUEST);
     differ.observe(frame(['thinking', 'answer']));
     expect(differ.observe(frame([]))).toEqual([
-      { type: 'replace', questId: QUEST, slot: 0, text: '' },
-      { type: 'replace', questId: QUEST, slot: 1, text: '' },
+      { type: 'replace', quest_id: QUEST, slot: 0, text: '' },
+      { type: 'replace', quest_id: QUEST, slot: 1, text: '' },
     ]);
-    expect(differ.observe(frame(['again']))).toEqual([{ type: 'delta', questId: QUEST, slot: 0, text: 'again' }]);
+    expect(differ.observe(frame(['again']))).toEqual([{ type: 'delta', quest_id: QUEST, slot: 0, text: 'again' }]);
   });
 
   it('diffs each slot independently', () => {
     const differ = new TurnReplyDiffer(QUEST);
     differ.observe(frame(['Let me think']));
     expect(differ.observe(frame(['Let me think.', 'The answer']))).toEqual([
-      { type: 'delta', questId: QUEST, slot: 0, text: '.' },
-      { type: 'delta', questId: QUEST, slot: 1, text: 'The answer' },
+      { type: 'delta', quest_id: QUEST, slot: 0, text: '.' },
+      { type: 'delta', quest_id: QUEST, slot: 1, text: 'The answer' },
     ]);
   });
 
   it('reads `reply` as the only slot when no reply slot is filled', () => {
     const differ = new TurnReplyDiffer(QUEST);
     expect(differ.observe({ id: QUEST, replies: [], reply: 'Session not found.' })).toEqual([
-      { type: 'delta', questId: QUEST, slot: 0, text: 'Session not found.' },
+      { type: 'delta', quest_id: QUEST, slot: 0, text: 'Session not found.' },
     ]);
   });
 
@@ -65,8 +65,15 @@ describe('TurnReplyDiffer', () => {
     differ.observe(frame(['Hello']));
     const terminal = frame(['Hello world'], { status: 'stopped', creditsUsed: 4, errorCode: 'insufficient_credits' });
     expect(differ.settle(terminal)).toEqual([
-      { type: 'delta', questId: QUEST, slot: 0, text: ' world' },
-      { type: 'settled', questId: QUEST, status: 'stopped', creditsUsed: 4, errorCode: 'insufficient_credits' },
+      { type: 'delta', quest_id: QUEST, slot: 0, text: ' world' },
+      {
+        type: 'settled',
+        quest_id: QUEST,
+        status: 'stopped',
+        failed: true,
+        credits_used: 4,
+        error_code: 'insufficient_credits',
+      },
     ]);
     expect(differ.isSettled).toBe(true);
     expect(differ.settle(terminal)).toEqual([]);
@@ -78,8 +85,19 @@ describe('TurnReplyDiffer', () => {
     expect(differ.settle(frame(['x']))).toEqual([]);
     expect(differ.settle(frame(['x'], { status: 'done', errorCode: 'not_a_code' })).at(-1)).toEqual({
       type: 'settled',
-      questId: QUEST,
+      quest_id: QUEST,
       status: 'done',
+      failed: false,
+    });
+  });
+
+  it('marks an error-typed quest failed even with no error code', () => {
+    const differ = new TurnReplyDiffer(QUEST);
+    expect(differ.settle(frame(['Not allowed'], { status: 'done', type: 'error' })).at(-1)).toEqual({
+      type: 'settled',
+      quest_id: QUEST,
+      status: 'done',
+      failed: true,
     });
   });
 });

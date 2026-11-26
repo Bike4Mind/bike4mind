@@ -8,6 +8,7 @@ import {
   HTTPError,
   UnauthorizedError,
   UnprocessableEntityError,
+  buildMetaEvent,
   createSessionTurnContract,
   formatSSEError,
   formatZodError,
@@ -48,6 +49,7 @@ import { resolveContractAuth } from '@bike4mind/server-utils/cli/resolveContract
 import { dataLakeToolsDeniedFor } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { getOrCreateSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVersionGate';
+import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
 import {
   getDefaultChatCompletionOptions,
@@ -56,6 +58,7 @@ import {
 import { Config } from '@bike4mind/server-utils/utils/config';
 import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
+import { resolveUserRateLimitPerMin } from '@bike4mind/server-utils/utils/userRateTier';
 import { sessionWillInjectAuthoredPrompt } from '@bike4mind/server-utils/utils/sessionSystemPromptResolver';
 import { loadBaseIdentitySystemPromptMessages } from '@bike4mind/server-utils/utils/systemPrompts/loader';
 import {
@@ -70,7 +73,7 @@ import express, { type Express, type NextFunction, type Request, type Response }
 import type { z } from 'zod';
 import { handleQuestProcessingFailure } from '../internal/route';
 import { logApiKeyUsageOnResponse } from './apiKeyUsageLog';
-import { handleBodyParserError, requestIdFrom, toJsonError } from './preStreamErrors';
+import { bodyParserErrorHandler, requestIdFrom, toJsonError } from './preStreamErrors';
 import { TurnReplyDiffer, createTurnFrameTee, isTerminalQuestStatus, type QuestSnapshot } from './turnFrameStream';
 
 /**
@@ -87,6 +90,7 @@ import { TurnReplyDiffer, createTurnFrameTee, isTerminalQuestStatus, type QuestS
 export const TURNS_ENDPOINT = createSessionTurnContract.path;
 const checkTurnsMethod = createMethodGuard([createSessionTurnContract.method]);
 const HEARTBEAT_INTERVAL_MS = 10_000;
+const USER_TIER_RATE_LIMIT_WINDOW_MS = 60 * 1000;
 
 type QuestStartParams = z.infer<typeof QuestStartBodySchema>;
 
@@ -106,6 +110,23 @@ async function loadKeyOwner(apiKeyInfo: ApiKeyInfo): Promise<IUserDocument> {
   if (!user) throw new UnauthorizedError('User not found or banned');
   await resolveRoleAdminPermissions(user);
   return apiKeyGrantsAdmin(apiKeyInfo.scopes) ? user : withholdAdminRole(user);
+}
+
+/**
+ * The per-user tier limit /api/ai/llm applies through its rateLimit middleware: same resolver, same
+ * one-minute window and `rate-limit:<userId>:<path>` bucket. Throws its TooManyRequestsError, with
+ * `Retry-After` already set on the response.
+ */
+function applyUserTierRateLimit(req: Request, res: Response, user: IUserDocument): Promise<void> {
+  const limiter = rateLimit({
+    limit: () => resolveUserRateLimitPerMin(user),
+    windowMs: USER_TIER_RATE_LIMIT_WINDOW_MS,
+    bucket: TURNS_ENDPOINT,
+    subject: () => user.id,
+  });
+  return new Promise((resolve, reject) => {
+    Promise.resolve(limiter(req, res, error => (error ? reject(error) : resolve()))).catch(reject);
+  });
 }
 
 /** The invoke body for a validated request: snake_case wire fields onto the composer's camelCase params. */
@@ -134,6 +155,7 @@ async function storedSnapshot(questId: string): Promise<QuestSnapshot | null> {
   return {
     id: questId,
     status: quest.status,
+    type: quest.type,
     reply: quest.reply,
     replies: quest.replies,
     creditsUsed: quest.creditsUsed,
@@ -223,6 +245,7 @@ export function registerTurnsRoutes(app: Express, track: (p: Promise<void>) => v
       }
       const { user, apiKeyInfo } = caller;
       logger.updateMetadata({ userId: user.id, model: body.model, apiKeyId: apiKeyInfo?.keyId });
+      await applyUserTierRateLimit(req, res, user);
 
       // The same gates, in the same order, as the web composer's /api/ai/llm.
       const billingOrganizationId = await resolveRequestBillingOrgId(caller, body.organization_id);
@@ -300,9 +323,9 @@ export function registerTurnsRoutes(app: Express, track: (p: Promise<void>) => v
       res.setHeader('Connection', 'keep-alive');
       res.flushHeaders();
       write(SSE_KEEPALIVE);
-      write({ type: 'meta', requestId });
+      write(buildMetaEvent(requestId));
       heartbeat = setInterval(() => write(SSE_KEEPALIVE), HEARTBEAT_INTERVAL_MS);
-      write({ type: 'turn', questId, sessionId });
+      write({ type: 'turn', quest_id: questId, session_id: sessionId });
 
       const differ = new TurnReplyDiffer(questId);
       // Frames carry no errorCode, so the closing events come from the stored quest. Chained so a
@@ -366,7 +389,7 @@ export function registerTurnsRoutes(app: Express, track: (p: Promise<void>) => v
       if (!quotaHandedOff) await quota.release();
     }
   });
-  app.use(TURNS_ENDPOINT, handleBodyParserError);
+  app.use(TURNS_ENDPOINT, bodyParserErrorHandler('[TURNS]'));
 
   app.all(TURNS_ENDPOINT, (req: Request, res: Response, next: NextFunction) => {
     const result = checkTurnsMethod(req.method);

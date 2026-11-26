@@ -73,27 +73,30 @@ export function toJsonError(
 /**
  * express.json failures never reach the handler. 415 (unsupported charset or encoding) is outside
  * the contract's status table, so every client fault but an oversized body folds into 400.
+ * `logTag` prefixes the log line of an unexpected parser failure, e.g. `[CLI_LLM]`.
  */
-export function handleBodyParserError(err: unknown, req: Request, res: Response, next: NextFunction): void {
-  if (res.headersSent) return next(err);
-  const requestId = requestIdFrom(flattenHeaders(req.headers));
-  const parserStatus = err instanceof Error ? getHttpStatus(err) : undefined;
-  if (parserStatus === undefined || parserStatus < 400 || parserStatus >= 500) {
-    new Logger({ metadata: { service: 'chatCompletion', endpoint: req.path, requestId } }).error(
-      '[CLI_LLM] Body parser error',
-      { requestId, error: serializeError(err) }
-    );
+export function bodyParserErrorHandler(logTag: string) {
+  return (err: unknown, req: Request, res: Response, next: NextFunction): void => {
+    if (res.headersSent) return next(err);
+    const requestId = requestIdFrom(flattenHeaders(req.headers));
+    const parserStatus = err instanceof Error ? getHttpStatus(err) : undefined;
+    if (parserStatus === undefined || parserStatus < 400 || parserStatus >= 500) {
+      new Logger({ metadata: { service: 'chatCompletion', endpoint: req.path, requestId } }).error(
+        `${logTag} Body parser error`,
+        { requestId, error: serializeError(err) }
+      );
+      res
+        .status(500)
+        .set(REQUEST_ID_HEADER, requestId)
+        .json(buildErrorBody({ error: 'Internal error', requestId }));
+      return;
+    }
+    const type = (err as { type?: unknown }).type;
+    const status = type === 'entity.too.large' ? 413 : 400;
+    const message = err instanceof Error && err.message ? err.message : 'Invalid request body';
     res
-      .status(500)
+      .status(status)
       .set(REQUEST_ID_HEADER, requestId)
-      .json(buildErrorBody({ error: 'Internal error', requestId }));
-    return;
-  }
-  const type = (err as { type?: unknown }).type;
-  const status = type === 'entity.too.large' ? 413 : 400;
-  const message = err instanceof Error && err.message ? err.message : 'Invalid request body';
-  res
-    .status(status)
-    .set(REQUEST_ID_HEADER, requestId)
-    .json(buildErrorBody({ error: message, requestId }));
+      .json(buildErrorBody({ error: message, requestId }));
+  };
 }

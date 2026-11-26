@@ -62,7 +62,7 @@ import { checkClientVersion } from '@bike4mind/server-utils/middlewares/clientVe
 import { flattenHeaders } from '@bike4mind/server-utils/utils/flattenHeaders';
 import { serializeError } from '@bike4mind/server-utils/utils/serializeError';
 import { createMethodGuard } from '@bike4mind/server-utils/utils/allowedMethods';
-import { handleBodyParserError, isUpstreamCallerError, requestIdFrom, toJsonError } from './preStreamErrors';
+import { bodyParserErrorHandler, isUpstreamCallerError, requestIdFrom, toJsonError } from './preStreamErrors';
 import { emitProcessingFailed } from '../processingFailedMetric';
 import { z } from 'zod';
 import { COMPLETION_TIMING_ENABLED, classifyChunk, createCompletionTiming } from './completionTiming';
@@ -495,7 +495,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       if (timing) logger.info('[CLI_TIMING] completion phases', timing.summary());
     }
   });
-  app.use(COMPLETIONS_ENDPOINT, handleBodyParserError);
+  app.use(COMPLETIONS_ENDPOINT, bodyParserErrorHandler('[CLI_LLM]'));
 
   // Express answers an unregistered verb with a bare 404, but the contract documents a 405 with
   // `Allow` (openapi/registerContract.ts) - the same one baseApi and defineLambdaRoute serve.

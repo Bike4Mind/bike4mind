@@ -30,11 +30,13 @@ vi.mock('@bike4mind/database', () => ({
   spendFreezeRepository: {},
   usageEventRepository: {},
   userRepository: { update: db.updateUser },
+  cacheRepository: {
+    tryIncrementWithinLimitFixedWindow: vi.fn(async () => ({ success: true, expiresAt: new Date() })),
+  },
 }));
 
-// Reached through sseRoute's helpers; their real modules define mongoose models.
-vi.mock('@bike4mind/server-utils/entitlements/index', () => ({ getUserEntitlements: vi.fn() }));
-vi.mock('@bike4mind/services/cliCompletions', () => ({ executeCompletion: vi.fn() }));
+const resolveUserRateLimitPerMin = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/server-utils/utils/userRateTier', () => ({ resolveUserRateLimitPerMin }));
 
 vi.mock('@bike4mind/services/creditService', () => ({ assertSpendNotFrozen: vi.fn() }));
 
@@ -118,9 +120,15 @@ const VALID_BODY = { session_id: SESSION_ID, message: 'hi', model: 'claude-opus-
 let server: Server;
 let baseUrl: string;
 let tracked: Promise<void>[] = [];
+// Resolves when the server side of the latest request closes.
+let serverClosed: Promise<void> = Promise.resolve();
 
 beforeAll(async () => {
   const app = express();
+  app.use((_req, res, next) => {
+    serverClosed = new Promise(resolve => res.on('close', () => resolve()));
+    next();
+  });
   registerTurnsRoutes(app, promise => tracked.push(promise));
   await new Promise<void>(resolve => {
     server = app.listen(0, () => {
@@ -159,6 +167,7 @@ function parseEvents(text: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   tracked = [];
+  resolveUserRateLimitPerMin.mockResolvedValue(Infinity);
   resolveContractAuth.mockResolvedValue({ method: 'jwt', userId: USER.id, user: { user: USER } });
   getOrCreateSession.mockResolvedValue({ session: { id: SESSION_ID }, sessionId: SESSION_ID, asyncPromises: [] });
   invoke.fn.mockImplementation(async () => {
@@ -190,6 +199,19 @@ describe('POST /api/v1/turns', () => {
     expect(invoke.fn).not.toHaveBeenCalled();
   });
 
+  it('answers a user whose tier limit resolves to 0 with a JSON 429 before any stream', async () => {
+    resolveUserRateLimitPerMin.mockResolvedValue(0);
+
+    const res = await post(VALID_BODY);
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(res.headers.get('retry-after')).toBe('60');
+    expect(resolveUserRateLimitPerMin).toHaveBeenCalledWith(USER);
+    expect(getOrCreateSession).not.toHaveBeenCalled();
+    expect(processQuest).not.toHaveBeenCalled();
+  });
+
   it('answers a malformed session id with 404 without a lookup', async () => {
     const res = await post({ ...VALID_BODY, session_id: 'not-an-id' });
 
@@ -219,9 +241,9 @@ describe('POST /api/v1/turns', () => {
     expect(events.at(-1)).toBe('[DONE]');
     const parsed = events.slice(0, -1).map(event => SessionTurnStreamEventSchema.parse(JSON.parse(event)));
     expect(parsed.map(event => event.type)).toEqual(['meta', 'turn', 'delta', 'delta', 'delta', 'settled']);
-    expect(parsed[1]).toEqual({ type: 'turn', questId: QUEST_ID, sessionId: SESSION_ID });
+    expect(parsed[1]).toEqual({ type: 'turn', quest_id: QUEST_ID, session_id: SESSION_ID });
     expect(parsed.slice(2, 5).map(event => ('text' in event ? event.text : ''))).toEqual(['Hello', ' wor', 'ld']);
-    expect(parsed[5]).toEqual({ type: 'settled', questId: QUEST_ID, status: 'done', creditsUsed: 3 });
+    expect(parsed[5]).toEqual({ type: 'settled', quest_id: QUEST_ID, status: 'done', failed: false, credits_used: 3 });
     // The web app keeps getting every frame over the websocket.
     expect(forwardSend).toHaveBeenCalledTimes(3);
     expect(invoke.fn).toHaveBeenCalledWith(
@@ -249,16 +271,17 @@ describe('POST /api/v1/turns', () => {
     expect(processQuest).not.toHaveBeenCalled();
     expect(events.at(-1)).toEqual({
       type: 'settled',
-      questId: QUEST_ID,
+      quest_id: QUEST_ID,
       status: 'done',
-      errorCode: 'insufficient_credits',
+      failed: true,
+      error_code: 'insufficient_credits',
     });
   });
 
   it('keeps the turn running when the client disconnects', async () => {
     let finish: () => void = () => {};
     let sender: ClientFrameSender | undefined;
-    let options: { abortSignal?: AbortSignal } | undefined;
+    let options: object | undefined;
     const started = new Promise<void>(resolveStarted => {
       processQuest.mockImplementation(async (_params, _logger, opts) => {
         options = opts;
@@ -272,14 +295,19 @@ describe('POST /api/v1/turns', () => {
 
     const res = await post(VALID_BODY);
     await started;
+    const closed = serverClosed;
     await res.body?.cancel();
+    await closed;
 
+    // After the close: the frame still reaches the websocket and the route's write is a no-op.
     await sendFrame(sender!, { status: 'running', replies: ['still going'] });
     finish();
     await Promise.all(tracked);
 
-    expect(options?.abortSignal).toBeUndefined();
+    // Only the frame sender is handed over: nothing ties the run to the request.
+    expect(Object.keys(options ?? {})).toEqual(['clientMessageSender']);
     expect(forwardSend).toHaveBeenCalledTimes(1);
+    expect(db.findQuest).toHaveBeenCalled();
     expect(handleQuestProcessingFailure).not.toHaveBeenCalled();
     expect(quotaRelease).toHaveBeenCalledTimes(1);
   });
@@ -296,7 +324,12 @@ describe('POST /api/v1/turns', () => {
       failure,
       expect.objectContaining({ questId: QUEST_ID, surface: 'session-turns' })
     );
-    expect(JSON.parse(events.at(-2)!)).toEqual({ type: 'settled', questId: QUEST_ID, status: 'stopped' });
+    expect(JSON.parse(events.at(-2)!)).toEqual({
+      type: 'settled',
+      quest_id: QUEST_ID,
+      status: 'stopped',
+      failed: true,
+    });
     expect(events.at(-1)).toBe('[DONE]');
   });
 
