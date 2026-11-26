@@ -20,7 +20,8 @@ const unfurlInline = keyframes`
 const SERIF = 'Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif';
 const MONO = 'ui-monospace, Menlo, Consolas, monospace';
 
-export type FinaleLook = 'tavern' | 'office';
+export const FINALE_LOOKS = ['tavern', 'office'] as const;
+export type FinaleLook = (typeof FINALE_LOOKS)[number];
 export type FinaleHostArt = { idle: string; cheering: string };
 
 interface Look {

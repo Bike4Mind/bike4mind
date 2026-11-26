@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { FINALE_LOOKS } from '../FinaleBanner';
 
 /**
  * A scene as data: the map, the cast, which zone and pose each agent state takes, the ambience and the copy.
@@ -145,7 +146,7 @@ export const sceneDefinitionSchema = z
       /** Name plates and the board's frame. */
       plate: z.object({ background: z.string().min(1), edge: z.string().min(1), ink: z.string().min(1) }),
       /** How the stage dresses the finale banner over this scene (FinaleBanner.tsx). */
-      finale: z.enum(['tavern', 'office']),
+      finale: z.enum(FINALE_LOOKS),
     }),
     copy: z.object({
       /** The scene's accessible name, e.g. "Tavern". */
