@@ -21,12 +21,18 @@ import { z } from 'zod';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels, resolveDeprecatedModelId } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { apiKeyService } from '@bike4mind/services';
+import {
+  apiKeyService,
+  PlatformCompletionMeter,
+  PlatformCompletionAccountingError,
+  isPlatformCompletionAccountingError,
+  type PlatformCompletionAccountingContext,
+} from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { SlackClient } from '@bike4mind/slack';
 import type { KnownBlock, Block } from '@slack/web-api';
 import type { GitHubIssue, GitHubService } from '@bike4mind/server-utils/services/githubService';
-import type { SecopsTriageConfig, SecopsTriageScanSource } from '@bike4mind/common';
+import type { ModelInfo, SecopsTriageConfig, SecopsTriageScanSource } from '@bike4mind/common';
 import { escapeSlackLine, escapeSlackText } from '@bike4mind/common';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -189,9 +195,18 @@ const HealthAssessmentSchema = z.object({
 interface LLMInit {
   llm: NonNullable<ReturnType<typeof getLlmByModel>>;
   resolvedModelId: string;
+  model: ModelInfo;
+  accounting: PlatformCompletionAccountingContext;
 }
 
-async function initializeLLM(modelId: string, logger: Logger): Promise<LLMInit> {
+async function initializeLLM(
+  modelId: string,
+  logger: Logger,
+  accounting?: PlatformCompletionAccountingContext
+): Promise<LLMInit> {
+  if (!accounting) throw new PlatformCompletionAccountingError('missing_context');
+  if (accounting.attribution.operation !== 'secops_triage')
+    throw new PlatformCompletionAccountingError('invalid_operation');
   const dbAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames };
   const coreKeys = await apiKeyService.getEffectiveLLMApiKeys('system', dbAdapters);
   const apiKeyTable = {
@@ -216,7 +231,7 @@ async function initializeLLM(modelId: string, logger: Logger): Promise<LLMInit> 
     throw new Error(`Failed to initialize LLM for model ${resolvedModelId}`);
   }
 
-  return { llm, resolvedModelId };
+  return { llm, resolvedModelId, model: modelInfo, accounting };
 }
 
 // Strips markdown code fences that Claude models sometimes wrap around JSON responses
@@ -239,47 +254,29 @@ function sanitizeForPrompt(input: string, maxLength = 200): string {
     .slice(0, maxLength);
 }
 
-async function callLLM(
-  llm: NonNullable<ReturnType<typeof getLlmByModel>>,
-  modelId: string,
-  prompt: string
-): Promise<string> {
+async function callLLM(llmInit: LLMInit, prompt: string, callKey: string): Promise<string> {
   let responseText = '';
-  // Guard flag: prevents the streaming callback from writing to responseText after
-  // the timeout fires. Without this, the orphaned llm.complete() call (which keeps
-  // running in the background after Promise.race resolves) would continue appending
-  // to the closed-over variable, wasting memory and connections until Lambda timeout.
-  let settled = false;
-
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-
-  await Promise.race([
-    llm.complete(
-      modelId,
-      [{ role: 'user' as const, content: prompt }],
-      { temperature: 0.3, maxTokens: 2000, stream: false, thinking: { enabled: false, budget_tokens: 0 } },
-      async texts => {
-        if (settled) return; // no-op after timeout fires
-        if (texts?.length) {
-          const chunk = texts.join('');
-          if (responseText.length + chunk.length > LLM_MAX_RESPONSE_SIZE) {
-            throw new Error(`LLM response exceeded maximum size of ${LLM_MAX_RESPONSE_SIZE} bytes`);
-          }
-          responseText += chunk;
-        }
-      }
-    ),
-    new Promise<never>((_, reject) => {
-      timeoutHandle = setTimeout(
-        () => reject(new Error(`LLM call timed out after ${LLM_CALL_TIMEOUT_MS}ms`)),
-        LLM_CALL_TIMEOUT_MS
-      );
-    }),
-  ]).finally(() => {
-    settled = true;
-    clearTimeout(timeoutHandle);
+  const reserve = llmInit.accounting.persistenceReserveMs ?? 15_000;
+  const meter = new PlatformCompletionMeter({
+    ...llmInit.accounting,
+    deadlineAt: Math.min(llmInit.accounting.deadlineAt, Date.now() + LLM_CALL_TIMEOUT_MS + reserve),
   });
-
+  await meter.complete(
+    llmInit.llm,
+    llmInit.model,
+    [{ role: 'user' as const, content: prompt }],
+    { temperature: 0.3, maxTokens: 2000, thinking: { enabled: false, budget_tokens: 0 } },
+    async texts => {
+      if (texts?.length) {
+        const chunk = texts.join('');
+        if (responseText.length + chunk.length > LLM_MAX_RESPONSE_SIZE) {
+          throw new Error(`LLM response exceeded maximum size of ${LLM_MAX_RESPONSE_SIZE} bytes`);
+        }
+        responseText += chunk;
+      }
+    },
+    callKey
+  );
   return responseText.trim();
 }
 
@@ -439,7 +436,11 @@ Respond with ONLY valid JSON (no markdown, no code blocks):
   const prompt = ENRICHMENT_PROMPTS[resolvedSource];
 
   try {
-    const raw = await callLLM(llmInit.llm, llmInit.resolvedModelId, prompt);
+    const raw = await callLLM(
+      llmInit,
+      prompt,
+      `finding-${fingerprint(finding.id, llmInit.accounting.attribution.environment, resolvedSource)}`
+    );
     const parseResult = FindingEnrichmentSchema.safeParse(JSON.parse(stripCodeFences(raw)));
     if (!parseResult.success) {
       logger.warn('[SECOPS-TRIAGE] LLM enrichment response failed schema validation', {
@@ -450,6 +451,7 @@ Respond with ONLY valid JSON (no markdown, no code blocks):
     }
     return parseResult.data;
   } catch (err) {
+    if (isPlatformCompletionAccountingError(err)) throw err;
     logger.warn('[SECOPS-TRIAGE] LLM finding enrichment failed (non-fatal)', {
       finding: finding.id,
       error: err instanceof Error ? err.message : String(err),
@@ -535,7 +537,7 @@ Respond with ONLY valid JSON (no markdown, no code blocks):
 {"assessment": "..."}`;
 
   try {
-    const raw = await callLLM(llmInit.llm, llmInit.resolvedModelId, prompt);
+    const raw = await callLLM(llmInit, prompt, 'health');
     const parseResult = HealthAssessmentSchema.safeParse(JSON.parse(stripCodeFences(raw)));
     if (!parseResult.success) {
       logger.warn('[SECOPS-TRIAGE] LLM health assessment response failed schema validation', {
@@ -545,6 +547,7 @@ Respond with ONLY valid JSON (no markdown, no code blocks):
     }
     return parseResult.data.assessment;
   } catch (err) {
+    if (isPlatformCompletionAccountingError(err)) throw err;
     logger.warn('[SECOPS-TRIAGE] LLM health assessment failed (non-fatal)', {
       error: err instanceof Error ? err.message : String(err),
     });
@@ -817,7 +820,7 @@ function buildSlackSummaryBlocks(
 
 // ─── Service ─────────────────────────────────────────────────────────────────
 
-export function createSecopsTriageService(logger: Logger) {
+export function createSecopsTriageService(logger: Logger, accounting?: PlatformCompletionAccountingContext) {
   return {
     async run(
       payload: SecopsTriagePayload,
@@ -853,9 +856,10 @@ export function createSecopsTriageService(logger: Logger) {
       let llmInit: LLMInit | null = null;
       if (config.llmEnrichment && config.modelId) {
         try {
-          llmInit = await initializeLLM(config.modelId, logger);
+          llmInit = await initializeLLM(config.modelId, logger, accounting);
           logger.info('[SECOPS-TRIAGE] LLM enrichment enabled', { modelId: llmInit.resolvedModelId });
         } catch (err) {
+          if (isPlatformCompletionAccountingError(err)) throw err;
           logger.warn('[SECOPS-TRIAGE] LLM initialization failed — enrichment disabled for this run', {
             error: err instanceof Error ? err.message : String(err),
           });

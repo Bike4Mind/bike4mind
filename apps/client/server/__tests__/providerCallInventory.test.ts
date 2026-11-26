@@ -19,43 +19,46 @@ const debt = (source = raw): ProviderEntry[] =>
   }));
 
 const SRE_INDEX = 'b4m-core/services/src/sreAgentService/index.ts';
-const SRE_METER = 'b4m-core/services/src/sreAgentService/accounting.ts';
+const PLATFORM_METER = 'b4m-core/services/src/billing/platformCompletionMeter.ts';
+const SECOPS_SERVICE = 'apps/workers/src/services/secopsTriageService.ts';
 const repositoryRoot = new URL('../../../../', import.meta.url);
-const sreSources = () =>
-  Object.fromEntries([SRE_INDEX, SRE_METER].map(file => [file, readFileSync(new URL(file, repositoryRoot), 'utf8')]));
-const sreEntries = () =>
+const platformFiles = [SRE_INDEX, PLATFORM_METER, SECOPS_SERVICE];
+const platformSources = () =>
+  Object.fromEntries(platformFiles.map(file => [file, readFileSync(new URL(file, repositoryRoot), 'utf8')]));
+const platformEntries = () =>
   parseProviderCatalog(
     readFileSync(new URL('scripts/unmetered-provider-call-allowlist.txt', repositoryRoot), 'utf8')
-  ).filter(entry => [SRE_INDEX, SRE_METER].some(file => entry.id.startsWith(`${file}#`)));
+  ).filter(entry => platformFiles.some(file => entry.id.startsWith(`${file}#`)));
 
-describe('reviewed SRE provider boundaries', () => {
-  it('recognizes the actual constructor and local settlement boundary without retaining SRE debt', () => {
-    const sources = sreSources();
-    const entries = sreEntries();
-    const scan = scanProviderSources(sources);
-    expect(scan.sites.map(site => site.kind).sort()).toEqual(['completion', 'factory']);
-    expect(entries).toHaveLength(2);
-    expect(entries.every(entry => entry.classification === 'metered')).toBe(true);
+describe('reviewed platform provider boundaries', () => {
+  it('recognizes the shared settlement and owned SRE and SecOps wrappers without retaining their debt', () => {
+    const entries = platformEntries();
+    const scan = scanProviderSources(platformSources());
+    expect(scan.sites.map(site => site.kind).sort()).toEqual(['completion', 'factory', 'factory']);
+    expect(entries).toHaveLength(3);
+    expect(entries.filter(entry => entry.classification === 'metered')).toHaveLength(2);
+    expect(entries.filter(entry => entry.classification === 'forwarded')).toHaveLength(1);
+    expect(entries.some(entry => entry.classification === 'debt')).toBe(false);
     expect(validateProviderCatalog(scan, entries, [])).toEqual([]);
   });
 
   it.each([
     {
-      name: 'removing the constructor',
+      name: 'removing the SRE constructor',
       file: SRE_INDEX,
       before: 'new SreCompletionMeter(this.accounting)',
       after: 'undefined',
       error: 'Missing boundary call',
     },
     {
-      name: 'calling the constructor as an ordinary function',
+      name: 'calling the SRE constructor as an ordinary function',
       file: SRE_INDEX,
       before: 'new SreCompletionMeter',
       after: 'SreCompletionMeter',
       error: 'Missing boundary call',
     },
     {
-      name: 'bypassing the wrapper',
+      name: 'bypassing the SRE wrapper',
       file: SRE_INDEX,
       before: 'await meter.complete(',
       after: 'await llm.complete(',
@@ -63,27 +66,48 @@ describe('reviewed SRE provider boundaries', () => {
     },
     {
       name: 'disconnecting settlement',
-      file: SRE_METER,
+      file: PLATFORM_METER,
       before: 'context.accounting.settle',
       after: 'context.other.settle',
       error: 'Missing boundary call',
     },
+    {
+      name: 'removing the SecOps constructor',
+      file: SECOPS_SERVICE,
+      before: 'new PlatformCompletionMeter',
+      after: 'undefined',
+      error: 'Missing boundary call',
+    },
+    {
+      name: 'calling the SecOps constructor as an ordinary function',
+      file: SECOPS_SERVICE,
+      before: 'new PlatformCompletionMeter',
+      after: 'PlatformCompletionMeter',
+      error: 'Missing boundary call',
+    },
+    {
+      name: 'bypassing the SecOps wrapper',
+      file: SECOPS_SERVICE,
+      before: 'await meter.complete(',
+      after: 'await llmInit.llm.complete(',
+      error: 'Unclassified provider site',
+    },
   ])('rejects $name', ({ file, before, after, error }) => {
-    const sources = sreSources();
+    const sources = platformSources();
     expect(sources[file]).toContain(before);
     sources[file] = sources[file].replaceAll(before, after);
-    expect(validateProviderCatalog(scanProviderSources(sources), sreEntries(), [])).toEqual(
+    expect(validateProviderCatalog(scanProviderSources(sources), platformEntries(), [])).toEqual(
       expect.arrayContaining([expect.stringContaining(error)])
     );
   });
 
   it.each([
     { file: SRE_INDEX, before: 'SreAgentService', after: 'OtherService' },
-    { file: SRE_METER, before: 'SreCompletionMeter', after: 'OtherMeter' },
+    { file: PLATFORM_METER, before: 'PlatformCompletionMeter', after: 'OtherMeter' },
   ])('does not authorize another owner through the $before witness', ({ file, before, after }) => {
-    const sources = sreSources();
+    const sources = platformSources();
     sources[file] = sources[file].replaceAll(before, after);
-    const entries = sreEntries().map(entry => ({
+    const entries = platformEntries().map(entry => ({
       ...entry,
       id: entry.id.replaceAll(`${before}/`, `${after}/`),
       witness: entry.witness?.replaceAll(`${before}/`, `${after}/`),
@@ -93,10 +117,10 @@ describe('reviewed SRE provider boundaries', () => {
     );
   });
 
-  it('does not treat another context settlement method as the SRE accounting boundary', () => {
-    const sources = sreSources();
-    sources[SRE_METER] = sources[SRE_METER].replaceAll('context.accounting.settle', 'context.other.settle');
-    const entries = sreEntries().map(entry => ({
+  it('does not treat another context settlement method as the platform accounting boundary', () => {
+    const sources = platformSources();
+    sources[PLATFORM_METER] = sources[PLATFORM_METER].replaceAll('context.accounting.settle', 'context.other.settle');
+    const entries = platformEntries().map(entry => ({
       ...entry,
       witness: entry.witness?.replace('this.context.accounting.settle', 'this.context.other.settle'),
     }));

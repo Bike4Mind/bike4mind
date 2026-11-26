@@ -29,14 +29,15 @@ const USAGE_BOUNDARIES = new Set([
   'recordToolUsageEvent',
   'settleCompletion',
 ]);
-const SRE_BOUNDARIES: Record<string, string> = {
+const PLATFORM_BOUNDARIES: Record<string, string> = {
   'b4m-core/services/src/sreAgentService/index.ts#SreAgentService/diagnose': 'new SreCompletionMeter',
-  'b4m-core/services/src/sreAgentService/accounting.ts#SreCompletionMeter/complete': 'this.context.accounting.settle',
+  'b4m-core/services/src/billing/platformCompletionMeter.ts#PlatformCompletionMeter/complete':
+    'this.context.accounting.settle',
 };
 const isUsageBoundary = (call: string, owner: string) =>
   USAGE_BOUNDARIES.has(call.split('.').at(-1) ?? '') ||
   /\.usageEvents\.record$/.test(call) ||
-  SRE_BOUNDARIES[owner] === call;
+  PLATFORM_BOUNDARIES[owner] === call;
 
 function ownerOf(node: ts.Node): string {
   const names: string[] = [];
@@ -103,7 +104,7 @@ export function scanProviderSources(sources: Record<string, string>): ProviderSc
           if (
             FACTORIES.has(name) ||
             USAGE_BOUNDARIES.has(name) ||
-            name === 'SreCompletionMeter' ||
+            ['SreCompletionMeter', 'PlatformCompletionMeter'].includes(name) ||
             PROVIDERS[moduleName]?.includes(name)
           )
             imported.set(binding.name.text, name);
@@ -204,7 +205,11 @@ export function scanProviderSources(sources: Record<string, string>): ProviderSc
       const tail = callee.split('.').at(-1) ?? '';
       const ownerKey = `${file}#${owner}`;
       const ownerCalls = calls.get(ownerKey) ?? [];
-      ownerCalls.push(ts.isNewExpression(node) && callee === 'SreCompletionMeter' ? `new ${callee}` : callee);
+      ownerCalls.push(
+        ts.isNewExpression(node) && ['SreCompletionMeter', 'PlatformCompletionMeter'].includes(callee)
+          ? `new ${callee}`
+          : callee
+      );
       calls.set(ownerKey, ownerCalls);
       let kind: string | undefined;
       if (ts.isNewExpression(node) && Object.values(PROVIDERS).flat().includes(callee)) kind = 'sdk-constructor';

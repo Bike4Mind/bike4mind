@@ -112,7 +112,56 @@ const toItem = (doc: LeanRun): SecopsTriageRunItem => ({
   ...(typeof doc.durationMs === 'number' ? { durationMs: doc.durationMs } : {}),
 });
 
+interface ISecopsTriageExecutionDocument {
+  _id: string;
+  completed: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export const SecopsTriageExecutionModel =
+  (mongoose.models.SecopsTriageExecution as Model<ISecopsTriageExecutionDocument> | undefined) ??
+  model<ISecopsTriageExecutionDocument>(
+    'SecopsTriageExecution',
+    new Schema<ISecopsTriageExecutionDocument>(
+      {
+        _id: { type: String, required: true },
+        completed: { type: Boolean, required: true, default: false },
+      },
+      { timestamps: true, versionKey: false }
+    )
+  );
+
+function checkedExecutionId(executionId: string): string {
+  if (!/^secops-execution-[a-f0-9]{64}$/.test(executionId)) throw new Error('Invalid SecOps execution identity');
+  return executionId;
+}
+
 export class SecopsTriageRunRepository {
+  async executionStatus(executionId: string): Promise<'running' | 'completed' | null> {
+    const execution = await SecopsTriageExecutionModel.findById(checkedExecutionId(executionId)).lean();
+    return execution ? (execution.completed ? 'completed' : 'running') : null;
+  }
+
+  async claimExecution(executionId: string): Promise<boolean> {
+    try {
+      await SecopsTriageExecutionModel.create({ _id: checkedExecutionId(executionId), completed: false });
+      return true;
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 11000) return false;
+      throw error;
+    }
+  }
+
+  async completeExecution(executionId: string): Promise<void> {
+    const result = await SecopsTriageExecutionModel.updateOne(
+      { _id: checkedExecutionId(executionId), completed: false },
+      { $set: { completed: true } },
+      { runValidators: true }
+    );
+    if (result.matchedCount !== 1) throw new Error('SecOps execution completion was not persisted');
+  }
+
   async record(input: RecordSecopsTriageRunInput): Promise<SecopsTriageRunItem> {
     const doc = await SecopsTriageRunModel.create({
       ...input,

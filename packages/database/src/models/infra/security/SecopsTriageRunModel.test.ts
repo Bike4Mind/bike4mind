@@ -3,6 +3,7 @@ import type { PipelineStage } from 'mongoose';
 import { setupMongoTest } from '../../../__test__/utils';
 import {
   SecopsTriageRunModel,
+  SecopsTriageExecutionModel,
   secopsTriageRunRepository as repository,
   type RecordSecopsTriageRunInput,
 } from './SecopsTriageRunModel';
@@ -124,5 +125,44 @@ describe('SecopsTriageRunRepository', () => {
     const indexes = SecopsTriageRunModel.schema.indexes();
     expect(indexes).toContainEqual([{ stage: 1, startedAt: -1 }, expect.anything()]);
     expect(indexes).toContainEqual([{ startedAt: 1 }, expect.objectContaining({ expireAfterSeconds: 90 * 86400 })]);
+  });
+});
+
+describe('SecOps durable execution gate', () => {
+  setupMongoTest();
+  const executionId = 'secops-execution-' + 'b'.repeat(64);
+
+  it('allows exactly one concurrent claimant and reports a durable running gate', async () => {
+    const claims = await Promise.all(Array.from({ length: 8 }, () => repository.claimExecution(executionId)));
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    expect(await repository.executionStatus(executionId)).toBe('running');
+    expect(await SecopsTriageExecutionModel.countDocuments()).toBe(1);
+  });
+
+  it('keeps a completed gate after historical run records are deleted', async () => {
+    expect(await repository.executionStatus(executionId)).toBeNull();
+    await repository.claimExecution(executionId);
+    await repository.completeExecution(executionId);
+    await SecopsTriageRunModel.deleteMany({});
+    expect(await repository.executionStatus(executionId)).toBe('completed');
+    expect(await repository.claimExecution(executionId)).toBe(false);
+    expect(SecopsTriageExecutionModel.schema.indexes().every(([, options]) => !('expireAfterSeconds' in options))).toBe(
+      true
+    );
+  });
+
+  it('rejects completion without an existing running claim and fails closed after a lost completion acknowledgment', async () => {
+    await expect(repository.completeExecution(executionId)).rejects.toThrow('not persisted');
+    await repository.claimExecution(executionId);
+    await repository.completeExecution(executionId);
+    await expect(repository.completeExecution(executionId)).rejects.toThrow('not persisted');
+    expect(await repository.executionStatus(executionId)).toBe('completed');
+  });
+
+  it('rejects raw or malformed execution identities before reading or writing', async () => {
+    await expect(repository.claimExecution('raw-message-id')).rejects.toThrow('Invalid');
+    await expect(repository.executionStatus('raw-message-id')).rejects.toThrow('Invalid');
+    await expect(repository.completeExecution('raw-message-id')).rejects.toThrow('Invalid');
+    expect(await SecopsTriageExecutionModel.countDocuments()).toBe(0);
   });
 });

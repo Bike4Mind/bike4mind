@@ -129,6 +129,26 @@ describe('platform usage pricing', () => {
   });
 });
 
+describe('platform operation attribution', () => {
+  it('creates actorless SecOps facts without changing legacy SRE attribution', () => {
+    const secops = createPlatformAttribution(
+      { environment: 'test', operation: 'secops_triage' },
+      { logicalJobId: 'security-job', executionId: 'security-execution' }
+    );
+    const event = pricePlatformUsage({ ...params, attempt: { ...attempt, attribution: secops } });
+    expect(event).toMatchObject({ attribution: secops, source: 'system', creditsCharged: 0 });
+    expect(event).not.toHaveProperty('userId');
+    expect(event).not.toHaveProperty('ownerId');
+    expect(attribution.operation).toBe('sre_diagnosis');
+    expect(() =>
+      createPlatformAttribution(
+        { environment: 'test', operation: 'unknown' as 'secops_triage' },
+        { logicalJobId: 'job', executionId: 'execution' }
+      )
+    ).toThrow();
+  });
+});
+
 describe('platform accounting failure propagation', () => {
   it('does not report settlement success when staging fails', async () => {
     const attempts = { stageUsage: vi.fn().mockRejectedValue(new Error('storage unavailable')) };

@@ -5,7 +5,7 @@ const identity = z.string().min(1).max(128);
 export const PlatformAttribution = z
   .object({
     kind: z.literal('platform_operation'),
-    operation: z.literal('sre_diagnosis'),
+    operation: z.enum(['sre_diagnosis', 'secops_triage']),
     environment: z.enum(['production', 'staging', 'development', 'test']),
     logicalJobId: identity,
     executionId: identity,
