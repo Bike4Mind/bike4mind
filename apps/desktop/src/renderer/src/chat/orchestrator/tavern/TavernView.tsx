@@ -54,7 +54,7 @@ import { useSkinTheme } from '../skins';
 import { stateLampColor } from '../statePalette';
 import { TavernLight, type TavernMood } from './TavernLight';
 import { INNKEEPER_ART, TAVERN_BACKDROP, characterSprite, type CharacterId, type InnkeeperPose } from './tavernArt';
-import { useScenePause, type ScenePauseOptions } from './useScenePause';
+import { useScenePause, type ScenePauseOptions } from '../scene/useScenePause';
 import { VISUALLY_HIDDEN } from '../../../visuallyHidden';
 
 const BUBBLE_MAX = 28;

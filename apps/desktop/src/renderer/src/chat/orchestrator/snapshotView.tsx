@@ -2,7 +2,7 @@ import Box from '@mui/joy/Box';
 import { useMemo, type ComponentType, type ReactNode } from 'react';
 import { acceptViewAction, type ViewAction, type ViewSnapshot } from '@shared/viewSnapshot';
 import type { OrchestratorViewProps } from './OrchestratorStage';
-import { useScenePause, type ScenePauseOptions } from './tavern/useScenePause';
+import { useScenePause, type ScenePauseOptions } from './scene/useScenePause';
 import { runViewAction, toViewSnapshot } from './viewSnapshot';
 
 /** All a snapshot view is given: the read-only picture, and the one way to ask the host for something. */

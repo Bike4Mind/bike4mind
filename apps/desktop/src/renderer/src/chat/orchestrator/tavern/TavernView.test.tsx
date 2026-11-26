@@ -7,7 +7,7 @@ import { agentFixture, createThemedMount, el, query } from '../testUtils';
 import { assignPersonas } from '@shared/agentPersona';
 import { ANNOUNCE_DEBOUNCE_MS } from './announcements';
 import { BAR_COUNTER, DOOR_POINT, INNKEEPER_POINT, OVERFLOW_POINTS, TAVERN_SLOTS, hiddenByCounter } from './scene';
-import { UNFOCUSED_PAUSE_MS } from './useScenePause';
+import { UNFOCUSED_PAUSE_MS } from '../scene/useScenePause';
 import { TavernView, bubbleText, waitingLabel } from './TavernView';
 
 describe('bubbleText for settled and waiting agents', () => {
