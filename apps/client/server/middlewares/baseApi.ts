@@ -94,6 +94,16 @@ interface BaseAPIOptions {
    */
   meterAsKeyManagement?: boolean;
   /**
+   * Requests this returns true for are not charged to the API key's per-minute or per-day counters, for
+   * messages that do no work, such as a protocol handshake. The key is still authenticated and scoped.
+   */
+  skipApiKeyRateLimit?: (req: Request) => boolean;
+  /**
+   * Value of the `WWW-Authenticate` header on this route's 401 answers, naming the credential scheme it takes
+   * (for example `Bearer`), so a client that arrives without one can learn how to authenticate.
+   */
+  authChallenge?: string;
+  /**
    * HTTP methods this route serves (GET implies HEAD). When set, any other method is answered
    * 405 with an `Allow` header AHEAD of the auth chain, so a wrong verb is never misreported as
    * a missing credential or scope. Omit to leave method matching to next-connect, whose
@@ -222,6 +232,21 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
     router.all(methodGuard(allowedMethods));
   }
 
+  const { authChallenge } = resolvedOptions;
+  if (authChallenge) {
+    // The 401 is written by auth middleware that knows nothing of the route, so the header goes on as the
+    // status line is flushed; any other status is left alone.
+    router.use((_req, res, next) => {
+      const writeHead = res.writeHead.bind(res) as (...args: unknown[]) => Response;
+      res.writeHead = ((...args: unknown[]) => {
+        const status = typeof args[0] === 'number' ? args[0] : res.statusCode;
+        if (status === 401 && !res.hasHeader('WWW-Authenticate')) res.setHeader('WWW-Authenticate', authChallenge);
+        return writeHead(...args);
+      }) as typeof res.writeHead;
+      next();
+    });
+  }
+
   // Check request body size to prevent memory exhaustion
   router.use((req, res, next) => {
     const contentLength = req.headers['content-length'];
@@ -279,6 +304,7 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
         apiKeyRateLimit({
           exemptReadsFromDailyLimit: resolvedOptions.exemptReadsFromDailyRateLimit,
           counter: resolvedOptions.meterAsKeyManagement ? 'management' : 'request',
+          skip: resolvedOptions.skipApiKeyRateLimit,
         })
       );
     }

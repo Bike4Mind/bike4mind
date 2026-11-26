@@ -76,11 +76,14 @@ async function listTools(caller: Caller): Promise<Tool[]> {
     });
 }
 
-const toolError = (text: string, stamp?: unknown): CallToolResult => ({
-  content: [{ type: 'text', text }],
-  isError: true,
-  ...(stamp ? { _meta: { stamp } } : {}),
-});
+const toolError = (text: string, meta: { stamp?: unknown; problems?: unknown } = {}): CallToolResult => {
+  const { stamp, problems } = meta;
+  return {
+    content: [{ type: 'text', text }],
+    isError: true,
+    ...(stamp || problems ? { _meta: { ...(stamp ? { stamp } : {}), ...(problems ? { problems } : {}) } } : {}),
+  };
+};
 
 // Refusals and failures come back as an isError result, as the SDK's McpServer answers its own tool errors.
 async function callTool(caller: Caller, name: string, args: unknown): Promise<CallToolResult> {
@@ -104,7 +107,9 @@ async function callTool(caller: Caller, name: string, args: unknown): Promise<Ca
     { timeoutMs: FUNCTION_INVOKE_RUN_TIMEOUT_MS, deadline: caller.deadline, minWaitMs: FUNCTION_MIN_WAIT_MS }
   );
   const answer = invokeAnswer(call);
-  if (answer.status !== 200) return toolError(String(answer.body.error), answer.body.stamp);
+  if (answer.status !== 200) {
+    return toolError(String(answer.body.error), { stamp: answer.body.stamp, problems: answer.body.problems });
+  }
   const output = call.outputs ?? {};
   const result: CallToolResult = {
     // The output alone, so it matches the tool's outputSchema; the stamp rides in _meta and the text block.
@@ -114,7 +119,7 @@ async function callTool(caller: Caller, name: string, args: unknown): Promise<Ca
   };
   // The body travels as an escaped string inside the Lambda payload, so measure it stringified twice.
   if (Buffer.byteLength(JSON.stringify(JSON.stringify(result))) > MAX_ANSWER_BYTES) {
-    return toolError(OUTPUT_TOO_LARGE_MESSAGE, call.stamp);
+    return toolError(OUTPUT_TOO_LARGE_MESSAGE, { stamp: call.stamp });
   }
   return result;
 }
@@ -158,12 +163,29 @@ function toWebRequest(req: Request): globalThis.Request {
   return new globalThis.Request(`http://localhost${req.url ?? '/api/mcp/functions'}`, { method: 'POST', headers });
 }
 
+const HANDSHAKE_METHODS = new Set(['initialize', 'notifications/initialized']);
+
+/**
+ * The two messages a stateless client sends ahead of every tool call. They run no function and answer a fixed
+ * body, so charging them would bill each tool call three times against a key's limit.
+ */
+function isHandshake(req: Pick<Request, 'body'>): boolean {
+  const body: unknown = req.body;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  const { method } = body as { method?: unknown };
+  return typeof method === 'string' && HANDSHAKE_METHODS.has(method);
+}
+
+const userRateLimit = functionsRateLimit('/api/mcp/functions');
+
 const handler = baseApi({
   requiredScopes: [ApiKeyScope.FUNCTIONS_INVOKE],
   allowedMethods: ['POST'],
   maxBodySize: FUNCTION_INVOKE_MAX_BODY_BYTES,
+  skipApiKeyRateLimit: isHandshake,
+  authChallenge: 'Bearer',
 })
-  .use(functionsRateLimit('/api/mcp/functions'))
+  .use((req, res, next) => (isHandshake(req) ? next() : userRateLimit(req, res, next)))
   .post(async (req, res) => {
     const deadline = Date.now() + FUNCTION_MCP_BUDGET_MS;
     const apiKeyId = req.apiKeyInfo?.keyId;
