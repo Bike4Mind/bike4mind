@@ -1348,10 +1348,15 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
     const acceptProjectInvite = async (
       sharerOnProject: Permission[],
       items: { file: unknown; prompt: unknown; session: unknown },
-      minter: { inviterId: string; groups?: string[]; deleted?: boolean } = { inviterId: sharerId }
+      minter: { inviterId: string; groups?: string[]; deleted?: boolean } = { inviterId: sharerId },
+      options: { itemOwnerIsMember?: boolean } = {}
     ) => {
+      const base = makeDoc(sharerOnProject);
       const project = {
-        ...makeDoc(sharerOnProject),
+        ...base,
+        users: options.itemOwnerIsMember
+          ? [...base.users, { userId: itemOwnerId, permissions: [Permission.read] }]
+          : base.users,
         fileIds: ['file-1'],
         systemPrompts: [{ fileId: 'prompt-1' }],
         sessionIds: ['session-1'],
@@ -1392,7 +1397,7 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
       expect(calls.sessions).toStrictEqual([['session-1', propagated(fullLink)]]);
     });
 
-    it('caps each item grant to what the minter holds on that item', async () => {
+    it('passes an item on only when the minter holds share on it, capped to what they hold', async () => {
       const calls = await acceptProjectInvite(fullLink, {
         file: item('file-1', shareLink),
         prompt: item('prompt-1', [Permission.read, Permission.update]),
@@ -1400,6 +1405,22 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
       });
 
       expect(calls.project).toStrictEqual([granted(fullLink)]);
+      expect(calls.files).toStrictEqual([['file-1', propagated(shareLink)]]);
+      expect(calls.sessions).toStrictEqual([]);
+    });
+
+    it('caps each item grant to what the minter holds when the item owner is a project member', async () => {
+      const calls = await acceptProjectInvite(
+        fullLink,
+        {
+          file: item('file-1', shareLink),
+          prompt: item('prompt-1', [Permission.read, Permission.update]),
+          session: item('session-1', [Permission.read]),
+        },
+        { inviterId: sharerId },
+        { itemOwnerIsMember: true }
+      );
+
       expect(calls.files).toStrictEqual([
         ['file-1', propagated(shareLink)],
         ['prompt-1', propagated([Permission.read, Permission.update])],
@@ -1492,7 +1513,8 @@ describe("sharingService - acceptInvite (non-owner inviter's current access)", (
             prompt: ownerHolds('prompt-1', [Permission.read]),
             session: ownerHolds('session-1', memberAttached),
           },
-          { inviterId: ownerId }
+          { inviterId: ownerId },
+          { itemOwnerIsMember: true }
         );
 
         expect(calls.project).toStrictEqual([granted(fullLink)]);

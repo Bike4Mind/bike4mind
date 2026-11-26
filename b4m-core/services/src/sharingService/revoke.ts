@@ -1,11 +1,14 @@
 import {
+  heldPermissions,
   IFabFileRepository,
   IProjectDocument,
+  IShareableDocument,
   IProjectRepository,
   ISessionDocument,
   ISessionRepository,
   IUserRepository,
   IUserShare,
+  Permission,
   RepositoryUpdate,
 } from '@bike4mind/common';
 import { ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
@@ -28,7 +31,59 @@ interface RevokeSharingAdapters {
     projects: IProjectRepository;
     users: IUserRepository;
   };
+  /** Told which users may have lost access, so live subscriptions can be rebuilt after the commit. */
+  onAccessRemoved?: (userIds: string[]) => void;
 }
+
+type SharedItem = IShareableDocument & { id: string; userId: string };
+
+const projectParticipants = (project: Pick<IProjectDocument, 'userId' | 'users'>) => [
+  project.userId,
+  ...project.users.map(u => u.userId),
+];
+
+/**
+ * Project grants on an item are passed on from whoever attached it. Once `userIdToRevoke` loses the
+ * item, every project they take part in that holds it is left without a grantor unless the item's
+ * owner takes part in that project or another participant still holds share on it outside the
+ * project. Such projects lose the item and every row they minted on it. Mutates `document.users`;
+ * returns the projects the item was detached from.
+ */
+const detachFromProjectsWithoutGrantor = async (
+  parameters: {
+    document: SharedItem;
+    type: 'files' | 'sessions';
+    member: NonNullable<Awaited<ReturnType<IUserRepository['findById']>>>;
+    userIdToRevoke: string;
+  },
+  adapters: RevokeSharingAdapters
+): Promise<IProjectDocument[]> => {
+  const { document, type, member, userIdToRevoke } = parameters;
+  const { db } = adapters;
+  const projects = await db.projects.shareable.findAllAccessible(member);
+  const detached: IProjectDocument[] = [];
+  for (const project of projects) {
+    const referenced =
+      type === 'files'
+        ? [...project.fileIds, ...(project.systemPrompts ?? []).map(prompt => prompt.fileId)]
+        : project.sessionIds;
+    if (!referenced.map(String).includes(document.id)) continue;
+    const participants = projectParticipants(project).filter(id => id !== userIdToRevoke);
+    if (participants.includes(document.userId)) continue;
+    const outsideProject = { ...document, users: document.users.filter(u => u.projectId !== project.id) };
+    // Group rows are not consulted: participants' groups are not loaded here, so this fails closed.
+    if (participants.some(id => heldPermissions(outsideProject, id).has(Permission.share))) continue;
+
+    if (type === 'files') {
+      await db.projects.pullFileReferences([document.id], { projectId: project.id });
+    } else {
+      await db.projects.update({ id: project.id, sessionIds: project.sessionIds.filter(id => id !== document.id) });
+    }
+    document.users = outsideProject.users;
+    detached.push(project);
+  }
+  return detached;
+};
 
 /**
  * Revokes sharing for a user on a document.
@@ -52,7 +107,12 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
 
   const member = await db.users.findById(userIdToRevoke);
   if (!member) throw new NotFoundError(`User not found for id: ${userIdToRevoke}`);
-  const document = await dbModel.shareable.findAccessibleById(member, id);
+  // A row without read (e.g. share only) is invisible to the target's own lookup, so fall back to
+  // the revoker's: the owner must be able to remove every row on their document.
+  const revoker = userId === userIdToRevoke ? null : await db.users.findById(userId);
+  const document =
+    (await dbModel.shareable.findAccessibleById(member, id)) ??
+    (revoker ? await dbModel.shareable.findAccessibleById(revoker, id) : null);
   if (!document) throw new NotFoundError(`${type} not found for ${id}`);
 
   // Authorization: only the document owner or the user themselves can revoke sharing
@@ -97,8 +157,24 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
     const pruned = await revokeFromProject({ project, userIdToRevoke }, adapters);
     project.fileIds = pruned.fileIds;
     project.sessionIds = pruned.sessionIds;
-    write = { ...write, fileIds: pruned.fileIds, sessionIds: pruned.sessionIds };
-  } else if (!projectId && type === 'sessions') {
+    project.systemPrompts = pruned.systemPrompts;
+    write = {
+      ...write,
+      fileIds: pruned.fileIds,
+      sessionIds: pruned.sessionIds,
+      systemPrompts: pruned.systemPrompts,
+    };
+  } else if (!projectId) {
+    const detachedFrom = await detachFromProjectsWithoutGrantor(
+      { document: document as SharedItem, type, member, userIdToRevoke },
+      adapters
+    );
+    if (detachedFrom.length > 0) write = grantWrite(document);
+    adapters.onAccessRemoved?.(detachedFrom.flatMap(projectParticipants));
+  }
+  adapters.onAccessRemoved?.([userIdToRevoke]);
+
+  if (!projectId && type === 'sessions') {
     // accept.ts's Session arm also pushes a plain (non-project) grant onto every file in
     // session.knowledgeIds; mirror that here so revoking the session doesn't leave those file
     // grants live. A projectId-tagged entry is independently governed by that project, so it is
@@ -130,15 +206,11 @@ const revokeSessionKnowledgeFileGrants = async (
   const { session, userIdToRevoke } = parameters;
   const { db } = adapters;
 
-  // Reach is bounded by knowledgeIds AS OF THIS CALL, and that list is client-writable by anyone
-  // holding update on the session (sessionService/update.ts access-checks only the ids a write
-  // adds; removals are unchecked). A sharee can therefore detach a file before the owner revokes
-  // them and keep the tagged row: the cascade never visits it. The file's owner can still clear it
-  // with an unscoped revoke, but the session owner doing the revoking may not be that person.
-  // Closing it needs a `find({ 'users.sessionId': session.id })` sweep, which is an unindexed scan
-  // of a high-cardinality collection on every revoke - deliberately not paid here. The tag defends
-  // the destructive direction, which was the exposure; this is the evasive one.
-  const files = await db.fabFiles.findAllByIds(session.knowledgeIds ?? []);
+  // knowledgeIds as of now misses a file detached before this revoke, so rows are also found by tag.
+  const files = uniqueById([
+    ...(await db.fabFiles.findAllByIds(session.knowledgeIds ?? [])),
+    ...(await db.fabFiles.find({ users: { $elemMatch: { userId: userIdToRevoke, sessionId: session.id } } })),
+  ]);
   for (const file of files) {
     // Only rows this session minted. The tag is the authorization: a row carrying `sessionId` was
     // written by accept.ts's propagation, which already required the inviter to hold share on the
@@ -176,15 +248,18 @@ const revokeSessionKnowledgeFileGrants = async (
 export const revokeFromProject = async (
   parameters: { project: IProjectDocument; userIdToRevoke: string },
   adapters: RevokeSharingAdapters
-): Promise<{ fileIds: string[]; sessionIds: string[] }> => {
+): Promise<{ fileIds: string[]; sessionIds: string[]; systemPrompts: IProjectDocument['systemPrompts'] }> => {
   const { project, userIdToRevoke } = parameters;
   const { db } = adapters;
 
-  const files = await db.fabFiles.findAllByIds(project.fileIds);
+  const files = uniqueById(
+    await db.fabFiles.findAllByIds([...project.fileIds, ...(project.systemPrompts ?? []).map(prompt => prompt.fileId)])
+  );
   const sessions = await db.sessions.findAllByIds(project.sessionIds);
 
   let fileIds = project.fileIds;
   let sessionIds = project.sessionIds;
+  let systemPrompts = project.systemPrompts ?? [];
 
   // Everyone else holding a grant this project minted on the leaver's documents. The owner is never in
   // project.users, but addFiles/addSessions grant the owner every document a member contributes.
@@ -209,6 +284,7 @@ export const revokeFromProject = async (
         await revokeFromOthers(file.id, 'files');
 
         fileIds = fileIds.filter(id => id !== file.id);
+        systemPrompts = systemPrompts.filter(prompt => prompt.fileId !== file.id);
       } else {
         await revoke(
           file.userId,
@@ -248,5 +324,8 @@ export const revokeFromProject = async (
     }
   }
 
-  return { fileIds, sessionIds };
+  return { fileIds, sessionIds, systemPrompts };
 };
+
+const uniqueById = <T extends { id: string }>(docs: T[]): T[] =>
+  docs.filter((doc, index) => docs.findIndex(other => other.id === doc.id) === index);

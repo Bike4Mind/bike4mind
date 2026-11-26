@@ -53,6 +53,7 @@ export const leaveProject = async (
     const pruned = await revokeFromProject({ project, userIdToRevoke: userIdToRemove }, adapters);
     project.fileIds = pruned.fileIds;
     project.sessionIds = pruned.sessionIds;
+    project.systemPrompts = pruned.systemPrompts;
   } else {
     // User is leaving voluntarily
     if (project.userId === user.id) {
@@ -62,10 +63,16 @@ export const leaveProject = async (
     const pruned = await revokeFromProject({ project, userIdToRevoke: user.id }, adapters);
     project.fileIds = pruned.fileIds;
     project.sessionIds = pruned.sessionIds;
+    project.systemPrompts = pruned.systemPrompts;
   }
 
   await adapters.db.projects.shareable.updateUserShares(project.id, { remove: { userId: userIdToRemove ?? user.id } });
-  await adapters.db.projects.update({ id: project.id, fileIds: project.fileIds, sessionIds: project.sessionIds });
+  await adapters.db.projects.update({
+    id: project.id,
+    fileIds: project.fileIds,
+    sessionIds: project.sessionIds,
+    systemPrompts: project.systemPrompts,
+  });
 
   return project;
 };

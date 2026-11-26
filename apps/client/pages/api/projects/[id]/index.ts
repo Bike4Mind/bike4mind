@@ -13,6 +13,7 @@ import {
 import { isDuplicateKeyError } from '@bike4mind/server-utils/utils/isDuplicateKeyError';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { respond } from '@server/utils/respond';
+import { rescopeUserSubscriptions } from '@server/websocket/rescopeUserSubscriptions';
 
 const updateProjectBodySchema = z.object({
   name: z.string().optional(),
@@ -102,6 +103,10 @@ const handler = baseApi({ requiredScopes: PROJECTS_READ_OR_WRITE_SCOPES })
     );
 
     await cleanUpRevokedFileReferences(cleanUpTargets, req.logger);
+    await rescopeUserSubscriptions(
+      cleanUpTargets.map(target => target.userId),
+      req.logger
+    );
 
     await logEvent(
       {

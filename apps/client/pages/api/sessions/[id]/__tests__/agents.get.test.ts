@@ -14,6 +14,8 @@ const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | RouteHandler,
   getAttachedAgents: vi.fn(),
   findById: vi.fn(),
+  findAllAccessibleByIds: vi.fn(),
+  findSession: vi.fn(),
   refreshAgentAvatarUrls: vi.fn(),
 }));
 
@@ -34,8 +36,12 @@ vi.mock('@bike4mind/server-utils/utils/sessionAccess', () => ({ assertSessionAcc
 vi.mock('@server/utils/refreshAgentAvatarUrls', () => ({ refreshAgentAvatarUrls: mockRefs.refreshAgentAvatarUrls }));
 
 vi.mock('@bike4mind/database', () => ({
-  sessionRepository: { getAttachedAgents: mockRefs.getAttachedAgents },
-  agentRepository: { findById: mockRefs.findById },
+  sessionRepository: { getAttachedAgents: mockRefs.getAttachedAgents, findById: mockRefs.findSession },
+  agentRepository: {
+    findById: mockRefs.findById,
+    shareable: { findAllAccessibleByIds: mockRefs.findAllAccessibleByIds },
+  },
+  userRepository: { findById: vi.fn(async (id: string) => ({ id, groups: [] })) },
   sessionAgentConfigRepository: {},
   withTransaction: vi.fn(),
 }));
@@ -57,12 +63,19 @@ describe('GET /api/sessions/[id]/agents', () => {
     vi.clearAllMocks();
     mockRefs.refreshAgentAvatarUrls.mockImplementation(async (agents: unknown[]) => agents);
     mockRefs.getAttachedAgents.mockResolvedValue(['mine', 'theirs']);
-    mockRefs.findById.mockImplementation(async (id: string) => ({
+    mockRefs.findSession.mockResolvedValue({ id: 'session-1', userId: 'session-owner' });
+    const agent = (id: string) => ({
       id,
       userId: id === 'mine' ? 'viewer' : 'other',
       name: `agent-${id}`,
       ...OWNER_ONLY_FIELDS,
-    }));
+    });
+    mockRefs.findById.mockImplementation(async (id: string) => agent(id));
+    // The viewer reads its own agent; 'theirs' reaches the session through the session owner's share.
+    const readable: Record<string, string[]> = { viewer: ['mine'], 'session-owner': ['theirs'] };
+    mockRefs.findAllAccessibleByIds.mockImplementation(async (user: { id: string }, ids: string[]) =>
+      ids.filter(id => (readable[user.id] ?? []).includes(id)).map(agent)
+    );
   });
 
   // A session can hold agents the caller does not own and was never shared, so this is the widest
@@ -77,5 +90,16 @@ describe('GET /api/sessions/[id]/agents', () => {
     expect(agents[0]).toEqual({ id: 'mine', userId: 'viewer', name: 'agent-mine', ...OWNER_ONLY_FIELDS });
     expect(agents[1]).toMatchObject({ id: 'theirs', name: 'agent-theirs' });
     for (const field of Object.keys(OWNER_ONLY_FIELDS)) expect(agents[1]).not.toHaveProperty(field);
+  });
+
+  it('omits an attached agent neither the caller nor the session owner can still read', async () => {
+    mockRefs.getAttachedAgents.mockResolvedValue(['mine', 'revoked']);
+    const { req, res } = createMocks({ method: 'GET', query: { id: 'session-1' } });
+    Object.assign(req, { user: { id: 'viewer' } });
+
+    await mockRefs.getHandler!(req as unknown as Request, res as unknown as Response);
+
+    const { agents } = res._getJSONData();
+    expect(agents.map((a: { id: string }) => a.id)).toEqual(['mine']);
   });
 });

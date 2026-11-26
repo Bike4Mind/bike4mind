@@ -4260,6 +4260,10 @@ FabFileSchema.index({ isChunk: 1, 'users.permissions': 1, 'users.userId': 1 });
 // Optimize global access patterns
 FabFileSchema.index({ isChunk: 1, isGlobalRead: 1 });
 
+// Session revoke and delete find the rows a notebook minted by tag (sharingService/revoke.ts,
+// sessionService/delete.ts), including on files no longer attached to it.
+FabFileSchema.index({ 'users.sessionId': 1 }, { sparse: true });
+
 // Group permission indexes
 FabFileSchema.index({ deletedAt: 1, 'groups.groupId': 1, 'groups.permissions': 1 });
 

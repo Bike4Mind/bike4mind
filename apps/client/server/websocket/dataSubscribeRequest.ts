@@ -82,6 +82,7 @@ async function notifySubscribeError(
 // Adds a subscription for the given collection/query; the subscriber-fanout package
 // handles the actual change-stream delivery. Query is scoped to the user's ability here
 // so subscriber-fanout doesn't need to re-check access.
+// Paths that remove access call rescopeUserSubscriptions so this scope is rebuilt.
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async (event, context, logger) => {
   const endpoint = Resource.websocket.managementEndpoint;
   const connectionId = event.requestContext.connectionId;

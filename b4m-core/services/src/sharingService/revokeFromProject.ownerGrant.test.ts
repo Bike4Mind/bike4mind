@@ -69,7 +69,7 @@ describe('revokeFromProject - the owner grant on a departing member documents', 
     expect(holders(sessions.byId.get('member-session'))).toEqual([]);
     // The leaver loses their grant on the owner's file; the remaining member keeps theirs.
     expect(holders(files.byId.get('owner-file'))).toEqual(['other']);
-    expect(pruned).toEqual({ fileIds: ['owner-file'], sessionIds: [] });
+    expect(pruned).toEqual({ fileIds: ['owner-file'], sessionIds: [], systemPrompts: [] });
   });
 
   it('keeps going past a member it cannot reach, and still drops the file from the project', async () => {

@@ -10,6 +10,7 @@ import {
 import { sharingService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@server/sharing/revokedFileReferences';
+import { rescopeUserSubscriptions } from '@server/websocket/rescopeUserSubscriptions';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { Request, Response } from 'express';
 
@@ -40,6 +41,7 @@ const handler = baseApi().use(
     // id and type come after the body spread so URL params win over any body field with the same name.
     // Wrap in a transaction so the guarded doc write and revokeFromProject's side effects are atomic:
     // a ConcurrencyConflictError from a racing grant rolls the whole revoke back (mirrors accept).
+    const lostAccess = new Set<string>();
     const document = await withTransaction(() =>
       sharingService.revoke(
         req.user.id,
@@ -54,6 +56,7 @@ const handler = baseApi().use(
             projects: projectRepository,
             users: userRepository,
           },
+          onAccessRemoved: userIds => userIds.forEach(userId => lostAccess.add(userId)),
         }
       )
     );
@@ -68,6 +71,7 @@ const handler = baseApi().use(
             [{ userId: body.userId, fileIds: (document as ISessionDocument).knowledgeIds ?? [] }]
           : projectTargets;
     await cleanUpRevokedFileReferences(cleanUpTargets, req.logger);
+    await rescopeUserSubscriptions([...lostAccess, ...projectTargets.map(target => target.userId)], req.logger);
 
     return res.json(document);
   }

@@ -4,17 +4,8 @@ import { removeFiles } from './removeFiles';
 import { applyUserSharesChange } from '../__tests__/utils/shareableFake';
 
 /**
- * IUserShare tracks a single projectId, so a user who is both a project member AND holds a
- * separately-accepted direct invite for the same file could not otherwise be told apart from
- * one whose only access came from the project - a bot review on #1151 found that the
- * pushShareable merge fix there makes this reachable via either accept ordering, where before
- * it depended on which grant happened first. A human reviewer then found the first pass of this
- * fix kept the FULL merged permission set (project-derived permissions included) rather than
- * resetting to what the independent direct invite itself grants, and that the per-entry
- * `users.findById` inside this loop is unmemoized inside the route's transaction. These tests
- * pin all three: drop a project-only entry entirely; for one with an accepted direct invite,
- * clear projectId AND reset permissions to just the direct invite's own grant; resolve grantee
- * emails via one batched `findByIds` call, not one per entry.
+ * Detaching a file drops only the rows this project minted on it; direct shares are separate untagged
+ * rows and are never re-created from invite history.
  */
 describe('projectService - removeFiles (project-derived access revocation)', () => {
   const OWNER_ID = 'owner-1';
@@ -100,7 +91,7 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
     // answered 200 having removed nothing, which a status-only assertion happily accepts.
     expect(project.fileIds).toEqual([]);
     expect(db.fabFiles.shareable.updateUserShares.mock.calls).toStrictEqual([
-      [FILE_ID_HEX, { remove: { projectId: PROJECT_ID }, add: [] }],
+      [FILE_ID_HEX, { remove: { projectId: PROJECT_ID } }],
     ]);
     expect(db.projects.update).toHaveBeenCalledTimes(1);
     expect(db.projects.update.mock.calls[0][0]).toStrictEqual({
@@ -133,54 +124,34 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
     await call();
 
     expect(file.users).toEqual([]);
-    expect(db.invites.findAllByDocumentId).toHaveBeenCalledWith(FILE_ID);
   });
 
-  it('keeps a project member with an accepted direct invite, resetting to the direct grant only', async () => {
-    // Project granted [read, update, share] (via pushShareable's union); the direct invite
-    // only ever granted [read, share] - the update permission must NOT survive the revoke.
-    file.users = [
-      {
-        userId: 'member-1',
-        permissions: [Permission.read, Permission.update, Permission.share],
-        projectId: PROJECT_ID,
-      },
-    ];
-    db.users.findByIds = vi.fn(async () => [asUser('member-1', 'member@x.com')]);
-    db.invites.findAllByDocumentId = vi.fn(async () => [
-      {
-        type: InviteType.FabFile,
-        permissions: [Permission.read, Permission.share],
-        recipients: { pending: [], accepted: ['member@x.com'], refused: [] },
-      },
-    ]);
-
-    await call();
-
-    expect(file.users).toEqual([{ userId: 'member-1', permissions: [Permission.read, Permission.share] }]);
-    expect(db.fabFiles.update).not.toHaveBeenCalled();
-  });
-
-  it('unions permissions across more than one accepted direct invite for the same recipient', async () => {
+  it('does not re-create a direct grant from an accepted invite once the direct row is gone', async () => {
     file.users = [{ userId: 'member-1', permissions: [Permission.read], projectId: PROJECT_ID }];
-    db.users.findByIds = vi.fn(async () => [asUser('member-1', 'member@x.com')]);
     db.invites.findAllByDocumentId = vi.fn(async () => [
       {
         type: InviteType.FabFile,
-        permissions: [Permission.read],
-        recipients: { pending: [], accepted: ['member@x.com'], refused: [] },
-      },
-      {
-        type: InviteType.FabFile,
-        permissions: [Permission.share],
+        permissions: [Permission.read, Permission.update, Permission.share],
         recipients: { pending: [], accepted: ['member@x.com'], refused: [] },
       },
     ]);
+    db.users.findByIds = vi.fn(async () => [asUser('member-1', 'member@x.com')]);
 
     await call();
 
-    expect(file.users[0].permissions).toEqual(expect.arrayContaining([Permission.read, Permission.share]));
-    expect(file.users[0].permissions).toHaveLength(2);
+    expect(file.users).toEqual([]);
+    expect(db.invites.findAllByDocumentId).not.toHaveBeenCalled();
+  });
+
+  it("keeps a member's untagged direct row while dropping the project's row", async () => {
+    file.users = [
+      { userId: 'member-1', permissions: [Permission.read, Permission.update], projectId: PROJECT_ID },
+      { userId: 'member-1', permissions: [Permission.read] },
+    ];
+
+    await call();
+
+    expect(file.users).toEqual([{ userId: 'member-1', permissions: [Permission.read] }]);
   });
 
   it('leaves an entry unrelated to this project untouched', async () => {
@@ -191,51 +162,6 @@ describe('projectService - removeFiles (project-derived access revocation)', () 
     expect(file.users).toEqual([
       { userId: 'other-project-member', permissions: [Permission.read], projectId: 'a-different-project' },
     ]);
-  });
-
-  it('skips the invite lookup and the batched user lookup when no entry is project-derived (common case)', async () => {
-    file.users = [{ userId: 'other-project-member', permissions: [Permission.read], projectId: 'a-different-project' }];
-
-    await call();
-
-    expect(db.invites.findAllByDocumentId).not.toHaveBeenCalled();
-    expect(db.users.findByIds).not.toHaveBeenCalled();
-  });
-
-  it('only counts an accepted invite of type FabFile, not an unrelated invite for the same document id', async () => {
-    file.users = [{ userId: 'member-1', permissions: [Permission.read], projectId: PROJECT_ID }];
-    db.users.findByIds = vi.fn(async () => [asUser('member-1', 'member@x.com')]);
-    // Same documentId, but a Session-type invite - must not be mistaken for a FabFile share.
-    db.invites.findAllByDocumentId = vi.fn(async () => [
-      {
-        type: InviteType.Session,
-        permissions: [Permission.read],
-        recipients: { pending: [], accepted: ['member@x.com'], refused: [] },
-      },
-    ]);
-
-    await call();
-
-    expect(file.users).toEqual([]);
-  });
-
-  it('resolves grantee emails with one batched findByIds call, not one findById per project-member entry', async () => {
-    file.users = [
-      { userId: 'member-1', permissions: [Permission.read], projectId: PROJECT_ID },
-      { userId: 'member-2', permissions: [Permission.read], projectId: PROJECT_ID },
-    ];
-    db.invites.findAllByDocumentId = vi.fn(async () => [
-      {
-        type: InviteType.FabFile,
-        permissions: [Permission.read],
-        recipients: { pending: [], accepted: [], refused: [] },
-      },
-    ]);
-
-    await call();
-
-    expect(db.users.findByIds).toHaveBeenCalledTimes(1);
-    expect(db.users.findByIds).toHaveBeenCalledWith(expect.arrayContaining(['member-1', 'member-2']));
   });
 
   it('answers NotFoundError for an unknown user or an inaccessible project', async () => {

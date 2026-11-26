@@ -71,6 +71,8 @@ export const deleteSession = async (
     ...sessionFiles,
     ...generatedFiles,
     ...(await db.fabFiles.findAllByIds(session.knowledgeIds ?? [])),
+    // Files detached from the notebook still carry the rows it minted.
+    ...(await db.fabFiles.find({ 'users.sessionId': session.id })),
   ].filter((file, index, all) => all.findIndex(other => other.id === file.id) === index);
 
   // Cascade BEFORE the tombstone. softDeletePlugin puts `deletedAt: null` on every findOne, and

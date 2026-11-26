@@ -229,6 +229,32 @@ describe('realtimeConnectionRepository filter guards', () => {
   });
 });
 
+describe('realtimeConnectionRepository.dropUserSubscriptions', () => {
+  it("pulls every subscription of the users' live connections and keeps the rows live", async () => {
+    await insertConnection('a1');
+    await insertConnection('a2');
+    await insertConnection('b1', { userId: USER_B });
+    await insertSubscription('shared', ['a1', 'b1']);
+    await insertSubscription('own', ['a2']);
+
+    const dropped = await realtimeConnectionRepository.dropUserSubscriptions([USER_A]);
+
+    expect(dropped.sort()).toEqual(['a1', 'a2']);
+    expect(await subscriberIds('shared')).toEqual(['b1']);
+    expect(await subscriberIds('own')).toBeNull();
+    expect(await endedIds()).toEqual([]);
+  });
+
+  it('skips ended connections and is a no-op for no users', async () => {
+    await insertConnection('a1', { endedAt: NOW });
+    await insertSubscription('stale', ['a1']);
+
+    expect(await realtimeConnectionRepository.dropUserSubscriptions([USER_A])).toEqual([]);
+    expect(await realtimeConnectionRepository.dropUserSubscriptions([])).toEqual([]);
+    expect(await subscriberIds('stale')).toEqual(['a1']);
+  });
+});
+
 describe('realtimeConnectionRepository.reauthenticate', () => {
   it('re-stamps the connection and drops only its subscriptions', async () => {
     await insertConnection('a1', { sid: 's1', tokenVersion: 0 });

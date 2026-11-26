@@ -515,9 +515,15 @@ const acceptProject = async (
   const sessions = await db.sessions.findAllByIds(project.sessionIds);
 
   // Whoever minted the invite passes each attached item on, so the item grant is capped at what they
-  // hold on that item: the rule projectService/addFiles.ts applies to whoever attaches one.
+  // hold on that item: the rule projectService/addFiles.ts applies to whoever attaches one. Passing it
+  // on is a re-share, so it also needs share on the item, unless the item's owner takes part in the
+  // project and so is the grantor.
+  const participants = new Set([project.userId, ...project.users.map(member => member.userId)]);
   const grantOn = (item: IShareableDocument & { userId: string }) => {
-    const granted = inviter ? grantCap(item as ShareableAccessShape, inviter)(permissions) : [];
+    if (!inviter) return null;
+    const granted = participants.has(item.userId)
+      ? grantCap(item as ShareableAccessShape, inviter)(permissions)
+      : reshareableBy(item, inviter, permissions).granted;
     return granted.length > 0 ? { add: [{ userId: user.id, permissions: granted, projectId }] } : null;
   };
 

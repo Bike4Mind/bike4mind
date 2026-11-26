@@ -11,9 +11,13 @@ import type { ChatCompletionContext } from '../ChatCompletionFeatures';
  * mention arm. If this write ever stops happening (or stops mutating the caller's object), that
  * argument breaks and persona summons silently lose delegation.
  */
-const buildContext = (agents: Array<{ id: string; name: string }>) => {
+// `readableBy` maps a user id to the agent ids that user can still read; absent means every agent.
+const buildContext = (agents: Array<{ id: string; name: string }>, readableBy?: Record<string, string[]>) => {
   const attachAgent = vi.fn().mockResolvedValue(undefined);
   const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() };
+  const findAllAccessibleByIds = vi.fn(async (user: { id: string }, ids: string[]) =>
+    agents.filter(a => ids.includes(a.id) && (!readableBy || (readableBy[user.id] ?? []).includes(a.id)))
+  );
   const context = {
     logger,
     user: { id: 'user-1' },
@@ -21,16 +25,18 @@ const buildContext = (agents: Array<{ id: string; name: string }>) => {
       agents: {
         findByTriggerWords: vi.fn().mockResolvedValue(agents),
         findById: vi.fn().mockImplementation(async (id: string) => agents.find(a => a.id === id) ?? null),
+        shareable: { findAllAccessibleByIds },
       },
+      users: { findById: vi.fn(async (id: string) => ({ id, groups: [] })) },
       sessions: { attachAgent },
     },
   } as unknown as ChatCompletionContext;
-  return { context, attachAgent };
+  return { context, attachAgent, findAllAccessibleByIds };
 };
 
 const runDetection = async (
   context: ChatCompletionContext,
-  session: { id: string; agentIds?: string[] },
+  session: { id: string; userId?: string; agentIds?: string[] },
   message: string
 ) => {
   const feature = new AgentDetectionFeature(context);
@@ -78,5 +84,37 @@ describe('AgentDetectionFeature session attachment', () => {
 
     expect(attachAgent).not.toHaveBeenCalled();
     expect(session.agentIds).toEqual(['agent-1']);
+  });
+});
+
+describe('AgentDetectionFeature attached-agent access', () => {
+  const detectAttached = async (readableBy: Record<string, string[]>, sessionOwner = 'user-1') => {
+    const { context, findAllAccessibleByIds } = buildContext([{ id: 'agent-1', name: 'coffee-bot' }], readableBy);
+    const feature = new AgentDetectionFeature(context);
+    await feature.beforeDataGathering({
+      quest: {} as never,
+      session: { id: 'session-1', userId: sessionOwner, agentIds: ['agent-1'] } as never,
+      startParams: {},
+      llm: undefined,
+      model: 'gpt-4',
+      message: 'hello',
+      historyCount: 0,
+      fabFileIds: [],
+      questId: 'quest-1',
+    });
+    return findAllAccessibleByIds;
+  };
+
+  it('drops an attached agent the chatting session owner can no longer read', async () => {
+    const lookup = await detectAttached({ 'user-1': [] });
+    const results = await Promise.all(lookup.mock.results.map(result => result.value));
+    expect(results.flat()).toEqual([]);
+  });
+
+  it('keeps an agent the session owner attached for a collaborator who has no share on it', async () => {
+    const lookup = await detectAttached({ 'owner-1': ['agent-1'] }, 'owner-1');
+    expect(lookup).toHaveBeenCalledWith(expect.objectContaining({ id: 'owner-1' }), ['agent-1']);
+    const results = await Promise.all(lookup.mock.results.map(result => result.value));
+    expect(results.flat().map(agent => agent.id)).toEqual(['agent-1']);
   });
 });

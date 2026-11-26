@@ -45,7 +45,7 @@ describe('projectService - listFiles', () => {
   });
 
   it('withholds fileUrl for a blocked image and does not call getSignedUrl for it', async () => {
-    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
+    (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValue([
       {
         id: 'file-blocked',
         filePath: 'fab-files/blocked.png',
@@ -66,7 +66,7 @@ describe('projectService - listFiles', () => {
   });
 
   it('withholds fileUrl for a pending (undefined moderationStatus) image', async () => {
-    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
+    (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValue([
       {
         id: 'file-pending',
         filePath: 'fab-files/pending.png',
@@ -83,7 +83,7 @@ describe('projectService - listFiles', () => {
   });
 
   it('signs a windowed URL for a clean image without persisting it', async () => {
-    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
+    (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValue([
       {
         id: 'file-clean-image',
         filePath: 'fab-files/clean.png',
@@ -108,7 +108,7 @@ describe('projectService - listFiles', () => {
     const amzDate = signedAt.toISOString().replace(/[-:]|\.\d{3}/g, '');
     const clampedUrl = `https://bucket.example.invalid/doc.pdf?X-Amz-Date=${amzDate}&X-Amz-Expires=600`;
     (mockStorage.getSignedUrl as Mock).mockResolvedValueOnce(clampedUrl);
-    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
+    (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValue([
       { id: 'file-doc', filePath: 'fab-files/doc.pdf', mimeType: 'application/pdf', moderationStatus: 'clean' },
     ]);
 
@@ -124,7 +124,7 @@ describe('projectService - listFiles', () => {
   // like an image, since the declared mimeType is client-controlled and only corrected by
   // the async S3-event scan.
   it('withholds fileUrl for a non-image file that has not cleared moderation (undefined moderationStatus)', async () => {
-    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
+    (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValue([
       {
         id: 'file-non-image',
         filePath: 'fab-files/doc.pdf',
@@ -140,7 +140,7 @@ describe('projectService - listFiles', () => {
   });
 
   it('generates a real URL for a non-image file once moderationStatus is clean', async () => {
-    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
+    (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValue([
       {
         id: 'file-non-image',
         filePath: 'fab-files/doc.pdf',
@@ -160,7 +160,7 @@ describe('projectService - listFiles', () => {
   });
 
   it('signs a non-media file as an attachment', async () => {
-    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
+    (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValue([
       {
         id: 'file-html',
         fileName: 'page.html',
@@ -180,7 +180,7 @@ describe('projectService - listFiles', () => {
   });
 
   it('ignores a stored URL and always signs', async () => {
-    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
+    (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValue([
       {
         id: 'file-clean-image',
         filePath: 'fab-files/clean.png',
@@ -199,7 +199,7 @@ describe('projectService - listFiles', () => {
   });
 
   it('hands out the stable content URL when a builder is passed, without signing S3', async () => {
-    (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([
+    (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValue([
       { id: 'file-clean-image', filePath: 'fab-files/clean.png', mimeType: 'image/png', moderationStatus: 'clean' },
       { id: 'file-pending', filePath: 'fab-files/pending.png', mimeType: 'image/png', moderationStatus: 'pending' },
     ]);
@@ -214,5 +214,18 @@ describe('projectService - listFiles', () => {
     expect(pending.fileUrl).toBeUndefined();
     expect(contentUrl).toHaveBeenCalledTimes(1);
     expect(mockStorage.getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('lists only the project files the caller can still read', async () => {
+    (mockFabFileRepo.shareable.findAllAccessibleByIds as Mock).mockResolvedValue([]);
+
+    const files = await listFiles(userId, { projectId }, adapters());
+
+    expect(mockFabFileRepo.shareable.findAllAccessibleByIds).toHaveBeenCalledWith(
+      expect.objectContaining({ id: userId }),
+      ['file-blocked', 'file-pending', 'file-clean-image', 'file-non-image']
+    );
+    expect(mockFabFileRepo.findAllByIds).not.toHaveBeenCalled();
+    expect(files).toEqual([]);
   });
 });

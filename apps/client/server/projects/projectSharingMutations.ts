@@ -24,6 +24,7 @@ import { cleanUpRevokedFileReferences, projectRevokeCleanupTargets } from '@serv
 import { getInviteTypeName } from '@server/utils/mailer/inviteNotificationEmail';
 import { notifyInvitees, reserveInviteSendBudget } from '@server/utils/inviteSendLimits';
 import type { ProjectMutationContext } from './attachSessionsToProject';
+import { rescopeUserSubscriptions } from '@server/websocket/rescopeUserSubscriptions';
 
 /**
  * The member, invite and system-prompt writes behind /api/projects/[id]/(members|invites|systemPrompts)
@@ -88,6 +89,10 @@ export async function removeProjectMember(
 
   // After the commit, outside its session (see cleanUpDeletedFileReferences).
   await cleanUpRevokedFileReferences(cleanUpTargets, logger);
+  await rescopeUserSubscriptions(
+    cleanUpTargets.map(target => target.userId),
+    logger
+  );
 
   return project;
 }
