@@ -228,6 +228,36 @@ describe('POST /api/quests/[id]/check-timeout', () => {
       expect(body.promptMeta.citables[0].metadata).toEqual({ title: 'doc' });
     });
 
+    it('withholds pendingAction from a sharee on an unchanged quest and on the re-read quest', async () => {
+      const pendingAction = { tool: 'send_email', params: { to: 'x' }, ts: 1 };
+      questRepository.findById.mockResolvedValue(quest({ pendingAction }));
+      sessionRepository.findById.mockResolvedValue(sharedSession());
+      resolveQuestTimeoutRecovery.mockReturnValue(null);
+      const unchanged = post('quest-1');
+      await mockRefs.handler!(unchanged.req, unchanged.res);
+      expect(unchanged.res._getJSONData()).not.toHaveProperty('pendingAction');
+
+      questRepository.findById
+        .mockResolvedValueOnce(quest())
+        .mockResolvedValueOnce(quest({ status: 'done', pendingAction }));
+      resolveQuestTimeoutRecovery.mockReturnValue({ status: 'done', finishReason: 'run_timed_out' });
+      const recovered = post('quest-1');
+      await mockRefs.handler!(recovered.req, recovered.res);
+      expect(recovered.res._getJSONData()).not.toHaveProperty('pendingAction');
+    });
+
+    it('returns pendingAction to the session owner', async () => {
+      const pendingAction = { tool: 'send_email', params: { to: 'x' }, ts: 1 };
+      questRepository.findById.mockResolvedValue(quest({ pendingAction }));
+      sessionRepository.findById.mockResolvedValue(session());
+      resolveQuestTimeoutRecovery.mockReturnValue(null);
+      const { req, res } = post('quest-1');
+
+      await mockRefs.handler!(req, res);
+
+      expect(res._getJSONData().pendingAction).toEqual(pendingAction);
+    });
+
     it('returns promptMeta whole to the session owner', async () => {
       questRepository.findById.mockResolvedValue(quest({ promptMeta: promptMeta() }));
       sessionRepository.findById.mockResolvedValue(session());
