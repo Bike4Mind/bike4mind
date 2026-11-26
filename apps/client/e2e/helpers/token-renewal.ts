@@ -131,6 +131,7 @@ export async function renewExpiringTokens(
           if (!user || !expiresSoon(user.accessToken)) return;
           const tokens = await apiLoginViaOtc(request, user.email);
           target.write({ ...user, ...tokens });
+          console.log(`[token-renewal] renewed a ${target.lock} token for project ${projectName}`);
         });
         if (!locked) console.warn(`[token-renewal] gave up waiting for the ${target.lock} lock`);
       } catch (err) {
