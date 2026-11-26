@@ -140,6 +140,27 @@ describe('sessionTagging', () => {
     expect(h.recordUsage).toHaveBeenCalledTimes(1);
   });
 
+  it('bills once for a completion with no usable tags', async () => {
+    h.completionText = ['not json'];
+
+    await run();
+
+    expect(h.recordUsage).toHaveBeenCalledTimes(1);
+    // latencyMs must time the model call only, not the session write that follows it.
+    expect(h.recordUsage).toHaveBeenCalledWith(expect.objectContaining({ endTime: expect.any(Number) }));
+  });
+
+  it('bills once when a failed attempt stamp is replayed', async () => {
+    h.completionText = ['not json'];
+    h.sessionUpdate.mockRejectedValueOnce(new Error('write failed'));
+
+    await expect(run()).rejects.toThrow('write failed');
+    expect(h.recordUsage).not.toHaveBeenCalled();
+
+    await expect(run()).resolves.toBeUndefined();
+    expect(h.recordUsage).toHaveBeenCalledTimes(1);
+  });
+
   it('still bills a tag result dropped because the writer lost access', async () => {
     h.completionText = ['[{"name": "pulsars", "strength": 9}]'];
     h.sessionUpdate.mockResolvedValue(null);
