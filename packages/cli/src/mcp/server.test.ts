@@ -101,6 +101,16 @@ describe('restrictToolsToKeyScopes', () => {
   });
 
   it.each([
+    ['projects:write', ['list_projects', 'get_project']],
+    ['notebooks:write', ['list_notebooks', 'get_notebook', 'search_knowledge_base']],
+    ['datalake:query', ['list_lakes']],
+    ['files:write', ['list_files', 'get_file']],
+    ['ai:generate', ['get_file']],
+  ])('keeps the read tools listed for a key that holds only %s', async (scope, tools) => {
+    expect(await listedTools([scope])).toEqual(expect.arrayContaining(tools));
+  });
+
+  it.each([
     ['scopes that cannot be read', undefined],
     ['an unidentified key', []],
     ['a failed lookup', new Error('offline')],

@@ -242,6 +242,17 @@ export const TOOL_NAMES = TOOL_META.map(t => t.name);
 
 const KEY_SCOPES_TIMEOUT_MS = 5 * 1000;
 
+/**
+ * Other scopes whose routes also admit a tool's scope (the routes accept any of a set). Must stay in sync with the
+ * routes' requiredScopes: a tool is hidden only when the key holds none of them.
+ */
+const SCOPE_ALTERNATES: Record<string, readonly string[]> = {
+  'notebooks:read': ['notebooks:write'],
+  'projects:read': ['projects:write'],
+  'files:read': ['files:write', 'ai:generate'],
+  'datalake:read': ['datalake:write', 'datalake:query'],
+};
+
 /** The tools registerTools put on each server, by name, so they can be taken back off the list. */
 const toolHandles = new WeakMap<McpServer, Map<string, RegisteredTool>>();
 
@@ -263,7 +274,9 @@ export async function restrictToolsToKeyScopes(server: McpServer, client: B4mApi
   const wanted = new Map(TOOL_META.map(t => [t.name, t.scope]));
   for (const [name, handle] of toolHandles.get(server) ?? []) {
     const scope = wanted.get(name);
-    if (scope && !scopes.includes(scope)) handle.disable();
+    if (scope && ![scope, ...(SCOPE_ALTERNATES[scope] ?? [])].some(accepted => scopes.includes(accepted))) {
+      handle.disable();
+    }
   }
 }
 
