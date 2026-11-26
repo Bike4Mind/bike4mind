@@ -8791,11 +8791,19 @@ describe('ChatCompletionProcess', () => {
           ],
           complete
         );
-        const releaseSpy = vi.spyOn(service, 'releaseReservedCredits');
+        // enforceCredits refuses an unpriced model at admission, so price it to reach the credit hold.
+        mockedGetAvailableModels.mockResolvedValue([
+          { ...(await mockedGetAvailableModels())[0], pricing: { 200_000: { input: 1e-6, output: 2e-6 } } },
+        ]);
+        enableAdminFlags('enforceCredits');
+        mockedUsdToCredits.mockReturnValue(50);
+        const incrementCredits = vi.fn().mockResolvedValue({ id: 'user1', currentCredits: 500 });
+        mockDb.users = { ...mockDb.users, incrementCredits };
 
         await expect(service.process({ body: body(), logger: mockLogger })).resolves.toBeUndefined();
 
         expect(complete).not.toHaveBeenCalled();
+        expect(incrementCredits).not.toHaveBeenCalled();
         expect(mockDb.quests.update).toHaveBeenCalledWith(
           expect.objectContaining({ reply: EMPTY_CONVERSATION_REPLY, type: 'error', status: 'done' })
         );
@@ -8804,7 +8812,6 @@ describe('ChatCompletionProcess', () => {
           expect.objectContaining({ questId: expect.anything() })
         );
         expect(emptyConversationErrorLogs()).toHaveLength(0);
-        expect(releaseSpy).toHaveBeenCalled();
       });
 
       it('settles the same way when a backend sanitizer refuses the conversation', async () => {

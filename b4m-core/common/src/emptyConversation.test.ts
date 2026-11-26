@@ -40,6 +40,20 @@ describe('hasReadableConversationMessage', () => {
       [{ role: 'user', content: [{ type: 'image_url', image_url: { url: 'https://example.com/a.png' } }] }],
     ],
     [
+      'an assistant turn that only carries tool calls',
+      [
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: 't1', type: 'function', function: { name: 'web_search', arguments: '{}' } }],
+        } as IMessage,
+      ],
+    ],
+    [
+      'a tool_result-only user message',
+      [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'x' }] }],
+    ],
+    [
       'a blank prompt with an attached file as a user message',
       [
         { role: 'user', content: 'Attached file contents' },
