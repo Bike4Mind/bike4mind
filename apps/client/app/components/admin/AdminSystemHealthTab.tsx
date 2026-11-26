@@ -304,11 +304,19 @@ const MAIL_DELIVERY_LABELS: Record<SystemHealthResponse['email']['transport'], s
 };
 
 const MAIL_SETTING_LABELS: Record<string, { label: string; help: string }> = {
-  MAIL_FROM: { label: 'Sender address', help: 'the address system emails are sent from' },
+  MAIL_FROM: {
+    label: 'Sender address',
+    help: 'the address system emails are sent from when the mailFrom admin setting is empty',
+  },
   MAIL_HOST: { label: 'SMTP host', help: 'the mail server to connect to' },
   MAIL_PORT: { label: 'SMTP port', help: 'the port on the mail server' },
   MAIL_USERNAME: { label: 'SMTP username', help: 'the login for the mail server' },
   MAIL_PASSWORD: { label: 'SMTP password', help: 'the password for the mail server' },
+};
+
+const MAIL_SENDER_SOURCE_LABELS: Record<NonNullable<SystemHealthResponse['email']['senderSource']>, string> = {
+  setting: 'Set in admin settings (mailFrom)',
+  secret: 'From the MAIL_FROM secret',
 };
 
 const ConfigStatusChip = ({ configured, testId }: { configured: boolean; testId?: string }) => (
@@ -723,6 +731,15 @@ const AdminSystemHealthTab = () => {
                   {MAIL_SETTING_LABELS[key] && (
                     <Typography level="body-xs" sx={{ color: 'admin.inkMuted', overflowWrap: 'anywhere' }}>
                       {key}: {MAIL_SETTING_LABELS[key].help}
+                    </Typography>
+                  )}
+                  {key === 'MAIL_FROM' && email.senderSource && (
+                    <Typography
+                      level="body-xs"
+                      sx={{ color: 'admin.ink' }}
+                      data-testid="system-health-email-sender-source"
+                    >
+                      {MAIL_SENDER_SOURCE_LABELS[email.senderSource]}
                     </Typography>
                   )}
                 </Stack>

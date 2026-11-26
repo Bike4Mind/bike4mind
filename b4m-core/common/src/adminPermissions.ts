@@ -90,6 +90,8 @@ export const FULL_ADMIN_SETTING_KEYS: ReadonlySet<string> = new Set([
   'allowTrustedDevices',
   // Sets how large a signup grant may be while the signup assessment policy is off (checkSignupGrantSave).
   'signupGrantUnprotectedMaxCredits',
+  // The From line of every system email, sign-in codes and password resets included.
+  'mailFrom',
 ]);
 
 type AdminIdentity = {

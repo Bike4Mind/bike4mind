@@ -144,6 +144,41 @@ describe('AdminSystemHealthTab', () => {
     expect(screen.queryByTestId('system-health-email-secret-hint-MAIL_HOST')).not.toBeInTheDocument();
   });
 
+  it.each([
+    ['setting', 'Set in admin settings (mailFrom)'],
+    ['secret', 'From the MAIL_FROM secret'],
+  ])('says the sender comes from the %s without printing it', async (senderSource, label) => {
+    const sesEmail = {
+      configured: true,
+      transport: 'ses',
+      secrets: { MAIL_FROM: true },
+      missingSecrets: [],
+      optionalSecrets: [],
+      senderSource,
+    };
+    respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, email: sesEmail } }) });
+    renderTab();
+
+    const sender = await screen.findByTestId('system-health-email-secret-MAIL_FROM');
+    expect(within(sender).getByTestId('system-health-email-sender-source')).toHaveTextContent(label);
+    expect(sender).not.toHaveTextContent('@');
+  });
+
+  it('names no sender source when no sender is set', async () => {
+    const sesEmail = {
+      configured: false,
+      transport: 'ses',
+      secrets: { MAIL_FROM: false },
+      missingSecrets: ['MAIL_FROM'],
+      optionalSecrets: [],
+    };
+    respond({ [HEALTH_URL]: () => Promise.resolve({ data: { ...HEALTH, email: sesEmail } }) });
+    renderTab();
+
+    await screen.findByTestId('system-health-email-secret-MAIL_FROM');
+    expect(screen.queryByTestId('system-health-email-sender-source')).not.toBeInTheDocument();
+  });
+
   it('gives a set command for every missing SMTP secret', async () => {
     const smtpEmail = {
       configured: false,
