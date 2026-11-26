@@ -29,6 +29,7 @@ import {
   RESUME_FAILED_NOTICE,
   RESUME_FELL_BACK_NOTICE,
   START_FAILED_NOTICE,
+  openingPromptOf,
   useCoreTutorialLauncher,
 } from './useCoreTutorialLauncher';
 
@@ -123,5 +124,27 @@ describe('useCoreTutorialLauncher', () => {
     await act(() => launcher.current.resume('first-steps'));
     expect(transport.start).not.toHaveBeenCalled();
     expect(navigate).toHaveBeenCalledWith({ to: '/notebooks/$id', params: { id: 'old' } });
+  });
+});
+
+describe('openingPromptOf', () => {
+  const stepsOf = (steps: unknown[]) => ({ steps }) as unknown as Pick<TutorialRunModule, 'steps'>;
+  const attach = { id: 'attach', type: 'attach', title: 'Add', body: '' };
+  const ask = { id: 'ask', type: 'prompt', turn: 0, prompt: 'Hello?', title: 'Ask', body: '' };
+
+  it('returns the prompt of a first step that sends turn 0', () => {
+    expect(openingPromptOf(stepsOf([ask, { id: 'done', type: 'bridge' }]))).toBe('Hello?');
+  });
+
+  it('returns nothing when an attach step comes first, even if a later step sends turn 0', () => {
+    expect(openingPromptOf(stepsOf([attach, ask]))).toBeUndefined();
+  });
+
+  it('returns nothing for a first prompt step that is not turn 0', () => {
+    expect(openingPromptOf(stepsOf([{ ...ask, turn: 1 }]))).toBeUndefined();
+  });
+
+  it('returns nothing for a tutorial with no steps', () => {
+    expect(openingPromptOf(stepsOf([]))).toBeUndefined();
   });
 });

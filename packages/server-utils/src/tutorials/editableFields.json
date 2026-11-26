@@ -29,6 +29,25 @@
       "body"
     ]
   },
+  "grounded-answers": {
+    "grounded-answers-attach": [
+      "title",
+      "body",
+      "doneBody"
+    ],
+    "grounded-answers-ask": [
+      "title",
+      "body"
+    ],
+    "grounded-answers-check": [
+      "title",
+      "body"
+    ],
+    "grounded-answers-done": [
+      "title",
+      "body"
+    ]
+  },
   "artifacts": {
     "artifacts-ask": [
       "title",
