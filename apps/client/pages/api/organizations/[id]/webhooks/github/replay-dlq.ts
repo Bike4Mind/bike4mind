@@ -57,7 +57,7 @@ interface ReplayResponse {
   };
 }
 
-const handler = baseApi().post(
+const handler = baseApi({ auth: 'jwtOnly' }).post(
   asyncHandler<{}, unknown, ReplayRequest, { id?: string }>(async (req, res) => {
     const orgId = req.query.id!;
     const user = req.user!;

@@ -4,21 +4,21 @@ import type { ScopeBaseline } from './routeScopePosture';
 const LEGACY_SEED = `
 0014144d7a31 00459418c5d4 0082e20e5e16 012943bc9f1f 015fe5574654 019613c66472 01e76397a5b1 025026e73656
 02a9a8784972 02db23b9c09d 02eb81a2d4be 03ae80759d70 0499f2fb2938 04c2eb056241 059f95b85ce8
-069c0fd3979b 0788614b3938 07c79827305e 07dcf88475fe 080ed3e0d392 085a16311592 085f7b671c0e 08e7e98a46ea
-0aabf881da2b 0b337074c70f 0c88b6367241 0d6ae17c640a 0e4aea3f65e2 0f41949eaec1
+069c0fd3979b 0788614b3938 07c79827305e 07dcf88475fe 085a16311592 085f7b671c0e 08e7e98a46ea
+ 0c88b6367241 0d6ae17c640a 0e4aea3f65e2 0f41949eaec1
 1072c65e46a4 10dbc40ebbe9 10f24ae25362 115f3f769671 12482b7e1ad0 129566209214 1321a72682a9
 1684e10bfdb3 17e8900be450 194285aca1ba 1aaca6dce28e 1bb806fd997f
 1bc6f6451909 206ac1b5c273 22394c3ae59f 23c5dbe38c62
 243cad0a8ac5 25067d35251b 258fbe859b6d 25bcdf101b50 25ce8ddf9d2b
 29051873ed26 2920ec150470 2a04f7bff6fe 2bf7b61bed84 2bff116a55f5 2c025eb3b73c
 2c901735a4cb 2d305da3cdc4 2d3670ecd606 2e37fbac941b 2e3ac54b7154
-2ed882bb22ae 2ef37c2e2c94 2f0ab631adc3 2f234de390db 2f91883ed973 2fdc2e0b829c
+ 2ef37c2e2c94 2f0ab631adc3 2f234de390db 2f91883ed973
 31c617980486 32f2089e6d27 3463552d7759 350efa8ccb14 35884ed714cb 369e060a227e 3781b2e67763
 37a70e432b71 37cba665495b 3979778768d8 3a6efe7298ed 3aa0321b6274
-3bb083db8e64 3df999299a2d 3e3eaf9cd77c 3e4176be1c48 3ec72e3ac0a3 3effb03d9325
+ 3df999299a2d 3e3eaf9cd77c 3e4176be1c48 3ec72e3ac0a3 3effb03d9325
 40f556547602 413f7c8082e4 419f21991350 41a8f5c2b662 41f918864b1c 42e07254368d 434a8e4932ed
 43d112295f48 46bd586deb06 49bddae03ab9 4b1fbd0505df 4b38e95bd3e3 4b56c2365175
-4bd858496fa6 4bdf4b58eefe 4be8154314f1 4dc25ea3603f 5086931d9a00
+4bd858496fa6 4be8154314f1 5086931d9a00
 5104cfb8d929 51423d9e0878 5171252d9a94 51947f2b1cdb 51cf666f59e7 53d06dab635c
 545593ba3989 548b1206f618 55b27aa4d619 5605b2684050 58e7cd021cb6 5a5583cb1274
 5d5074ebd89b 60ffb54be1c8 642b95025886 64bf2def6df8 64ecbfe8b19b 65a4fc3788a6 65e21f6e4e9c
@@ -26,12 +26,12 @@ const LEGACY_SEED = `
 6e4748fb4c51 6e5c5d7e8628 6ed0cb009120 6f6415cc0c9e 704dec55a202
 71962a5dc759 747dbc66d426 74d86b0154ca 759e9e7d0711
 76467e0ca19b 7754cd457960 777dd2c3b707 77d0050dc89d 793331087f34 795061ea8886
-79b8cbfc6191 79ea94f9b88b 7a0b85223940 7a50ea2ea194 7ce094888133
+ 79ea94f9b88b 7a0b85223940 7a50ea2ea194 7ce094888133
 80c347fac5c3 87151090a57a 887df910134d 888d16d5150f 8a6e6e9471e0 8ad42d260760
-8cba600510be 8f30f4df4e00 9010936ef52e 9055466fcd66 915da41cefea 915f3bafe4aa
+8cba600510be 9010936ef52e 9055466fcd66 915da41cefea 915f3bafe4aa
 91e44cbba12e 9254086e6ed4 94bbfbdc2d93 964d26f17aa0
 9753176e5bb6 979461b1272f 983d9ce4696f 98fb4183f353 994a7f7c9794
-99fa0c084e36 9a026e700cfa 9a1ff7e1d12e 9a4341780250 9cfe2eb5678c 9e33e2f983fb 9e52b5b6346b 9edad7f1553a
+99fa0c084e36 9a026e700cfa 9a1ff7e1d12e 9a4341780250 9cfe2eb5678c 9e33e2f983fb 9edad7f1553a
 9f37736e6fd4 9f3c722a7f67 9f3d3f1ad7fd 9fe9a48f4854 a16323739af9 a18d2ff783bc a280c00afed4 a2a7c12f14d5
 a3f668fd4337 a506d4524398 a55e1ffa0a01 a5c186a4566f a60937820a10 a71db4c94101
 a72eeda922cd a83f1d351296 a85ea22e23aa a8d5a258a0c1 a9971548b046 aada9ea4dafb ab12e849ff49
@@ -42,12 +42,12 @@ c4fae3cb4fe3 c540d14fc295 c791ba46d0aa c85527a2a3c4
 c87f0ad2714d c93de48dc431 c9e85a6882b7 cb023f64b05c cd0d66e9428d
 cf3724707a21 cf69d9fa323d d044ae74b577 d1700eeb02c3 d233b56c881c
 d312a05b0b11 d3e467aeaff4 d3eaab3ea5bc d62a191ecb73 d6ea87dfd1f3 d72c4c7fb8cb d7d544e14816
-d8960e4f9824 d935bc3fc33f d9ef50186023 db2f2ec79ba9 db38b5af6ebf dba77c4f75e1 dcb472615f55 decee2b17e42
+d8960e4f9824 d935bc3fc33f d9ef50186023 db2f2ec79ba9 db38b5af6ebf dba77c4f75e1 decee2b17e42
 e1f44ac43bb5 e23d092bb96b e382e8b70179 e45612c7685b e469c9c36006 e46ab1a21ce4
 e57e7baff157 e595cbe31df0 e5b445a66b3b ea1c26f079c0 ea47451367b2 eb064860e4cb eb393164d18a
-eb489128dd54 eb8ffcc904f4 ec21ea5d7155 ed3e6176e5c7 ee1a91584891 f01fbbb5a514
-f077a8409874 f2a758fff8dc f2b0a5d37469 f3a75784b4ba f3eaddde86e8 f582657aa6d2
-f6c79f784d66 f7313baf7c87 f7b1abb973f8 f835f59b19c4 f87ac4f79b9c f968e17e377e f9b399174d48
+eb489128dd54 eb8ffcc904f4 ec21ea5d7155 ee1a91584891 f01fbbb5a514
+f077a8409874 f2a758fff8dc f2b0a5d37469 f3eaddde86e8 f582657aa6d2
+ f7b1abb973f8 f87ac4f79b9c f968e17e377e f9b399174d48
 fab5d2fb8c6e fad1aeec6013 fbb811957a79 fc6ae97a0af2 ff38b81ff8b8
 `;
 
@@ -74,8 +74,6 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/app-files/generate-presigned-url',
     '/api/app-files/get-file-url',
     '/api/app-files/update-tags',
-    '/api/artifacts/[id]',
-    '/api/artifacts/[id]/versions/[version]',
     '/api/auth/github/authorize',
     '/api/auth/github/disconnect',
     '/api/auth/mfa/status',
@@ -169,19 +167,15 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/mcp-servers/[id]',
     '/api/mcp-servers/[id]/connect',
     '/api/mcp-servers/[id]/disconnect',
-    '/api/mcp-servers/[id]/webhooks/github',
-    '/api/mcp-servers/[id]/webhooks/github/secret',
     '/api/mcp-servers/atlassian/cancel-selection',
     '/api/mcp-servers/atlassian/connect',
     '/api/mcp-servers/atlassian/disconnect',
     '/api/mcp-servers/atlassian/finalize',
     '/api/mcp-servers/atlassian/pending-resources',
-    '/api/mcp-servers/atlassian/refresh',
     '/api/mcp-servers/notion/connect',
     '/api/mcp-servers/notion/disconnect',
     '/api/mcp-servers/notion/pages',
     '/api/mcp-servers/notion/settings',
-    '/api/mcp/confirm',
     '/api/mcp/delete-attachment',
     '/api/mcp/download-attachment',
     '/api/mcp/github/repositories',
@@ -214,12 +208,6 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/organizations/[id]/feedback-report/[feedbackId]',
     '/api/organizations/[id]/feedback-report/items',
     '/api/organizations/[id]/feedback-summary',
-    '/api/organizations/[id]/github/connection',
-    '/api/organizations/[id]/github/rate-limit',
-    '/api/organizations/[id]/github/repositories',
-    '/api/organizations/[id]/github/rotate-key',
-    '/api/organizations/[id]/github/rotate-pat',
-    '/api/organizations/[id]/github/test',
     '/api/organizations/[id]/groups',
     '/api/organizations/[id]/groups/[groupId]',
     '/api/organizations/[id]/groups/[groupId]/members',
@@ -229,10 +217,6 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/organizations/[id]/members',
     '/api/organizations/[id]/pendingUsers',
     '/api/organizations/[id]/upload-logo',
-    '/api/organizations/[id]/webhooks/github',
-    '/api/organizations/[id]/webhooks/github/replay-dlq',
-    '/api/organizations/[id]/webhooks/github/rotate-secret',
-    '/api/organizations/[id]/webhooks/github/test',
     '/api/organizations/create-dev',
     '/api/organizations/stats',
     '/api/organizations/subscriptions/subscribe',
@@ -329,7 +313,6 @@ export const ROUTE_SCOPE_BASELINE: ScopeBaseline = {
     '/api/webhooks/deliveries/[id]/retry',
     '/api/webhooks/github/subscriptions',
     '/api/webhooks/github/subscriptions/[id]',
-    '/api/webhooks/jira/config',
     '/api/webhooks/jira/subscriptions',
     '/api/webhooks/jira/subscriptions/[id]',
     '/api/work-items',

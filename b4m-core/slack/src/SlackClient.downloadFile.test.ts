@@ -1,6 +1,4 @@
-import http from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SlackClient } from './SlackClient';
 
 vi.mock('./di/registry', () => ({
@@ -16,62 +14,82 @@ vi.mock('@slack/web-api', () => ({
 }));
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
+const bytes = Buffer.from([0, 1, 2, 250, 251, 252]);
+const FILE_URL = 'https://files.slack.com/files-pri/T1-F1/download/f.bin';
+
+type Hop = { url: string; auth: string | undefined };
+
+function stubFetch(routes: Record<string, Response | (() => Response)>): Hop[] {
+  const hops: Hop[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: URL | string, init?: RequestInit) => {
+      const url = String(input);
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      hops.push({ url, auth: headers.Authorization });
+      const route = routes[url];
+      if (!route) return new Response('nope', { status: 404 });
+      return typeof route === 'function' ? route() : route;
+    })
+  );
+  return hops;
+}
+
+const redirect = (location: string) => () => new Response(null, { status: 302, headers: { Location: location } });
+const ok = () => new Response(bytes, { status: 200 });
 
 describe('SlackClient.downloadFile', () => {
-  const bytes = Buffer.from([0, 1, 2, 250, 251, 252]);
-  const seenAuth: Array<string | undefined> = [];
-  let server: http.Server;
-  let port: number;
+  const download = (url: string) => new SlackClient('xoxb-test-token', logger).downloadFile(url, 'f.bin');
 
-  beforeAll(async () => {
-    server = http.createServer((req, res) => {
-      seenAuth.push(req.headers.authorization);
-      if (req.url === '/file') {
-        res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
-        res.end(bytes);
-      } else if (req.url === '/same-host-redirect') {
-        res.writeHead(302, { Location: `http://127.0.0.1:${port}/file` });
-        res.end();
-      } else if (req.url === '/other-host-redirect') {
-        res.writeHead(302, { Location: `http://localhost:${port}/file` });
-        res.end();
-      } else {
-        res.writeHead(404);
-        res.end('nope');
-      }
-    });
-    await new Promise<void>(resolve => server.listen(0, '0.0.0.0', resolve));
-    port = (server.address() as AddressInfo).port;
-  });
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.unstubAllGlobals());
 
-  afterAll(() => new Promise<void>(resolve => server.close(() => resolve())));
-
-  const download = (pathname: string) =>
-    new SlackClient('xoxb-test-token', logger).downloadFile(`http://127.0.0.1:${port}${pathname}`, 'f.bin');
-
-  it('returns the exact bytes and sends the bot token as a bearer credential', async () => {
-    seenAuth.length = 0;
-    const buffer = await download('/file');
-    expect(Buffer.isBuffer(buffer)).toBe(true);
+  it('returns the exact bytes and sends the bot token to the Slack file host', async () => {
+    const hops = stubFetch({ [FILE_URL]: ok });
+    const buffer = await download(FILE_URL);
     expect(buffer.equals(bytes)).toBe(true);
-    expect(seenAuth).toEqual(['Bearer xoxb-test-token']);
+    expect(hops).toEqual([{ url: FILE_URL, auth: 'Bearer xoxb-test-token' }]);
   });
 
   it('rejects when Slack answers with an error status', async () => {
-    await expect(download('/missing')).rejects.toThrow();
+    stubFetch({});
+    await expect(download(FILE_URL)).rejects.toThrow();
   });
 
-  it('keeps the credential across a redirect within the same host', async () => {
-    seenAuth.length = 0;
-    const buffer = await download('/same-host-redirect');
-    expect(buffer.equals(bytes)).toBe(true);
-    expect(seenAuth).toEqual(['Bearer xoxb-test-token', 'Bearer xoxb-test-token']);
+  it.each([
+    'https://attacker.example/f.bin',
+    'http://files.slack.com/files-pri/T1-F1/f.bin',
+    'https://files.slack.com.attacker.example/f.bin',
+    'https://files.slack.com:8443/f.bin',
+    'https://user@files.slack.com/f.bin',
+    'http://127.0.0.1/internal',
+  ])('never contacts a URL outside the Slack file hosts: %s', async url => {
+    const hops = stubFetch({ [url]: ok });
+    await expect(download(url)).rejects.toThrow();
+    expect(hops).toEqual([]);
   });
 
-  it('drops the credential when a redirect leaves the host', async () => {
-    seenAuth.length = 0;
-    const buffer = await download('/other-host-redirect');
+  it('keeps the credential across a redirect within the Slack file hosts', async () => {
+    const next = 'https://files.slack.com/files-pri/T1-F1/f.bin?origin=1';
+    const hops = stubFetch({ [FILE_URL]: redirect(next), [next]: ok });
+    const buffer = await download(FILE_URL);
     expect(buffer.equals(bytes)).toBe(true);
-    expect(seenAuth).toEqual(['Bearer xoxb-test-token', undefined]);
+    expect(hops.map(h => h.auth)).toEqual(['Bearer xoxb-test-token', 'Bearer xoxb-test-token']);
+  });
+
+  it('drops the credential when a redirect leaves the Slack file hosts', async () => {
+    const next = 'https://cdn.example/f.bin';
+    const hops = stubFetch({ [FILE_URL]: redirect(next), [next]: ok });
+    await download(FILE_URL);
+    expect(hops).toEqual([
+      { url: FILE_URL, auth: 'Bearer xoxb-test-token' },
+      { url: next, auth: undefined },
+    ]);
+  });
+
+  it('refuses a redirect off https', async () => {
+    const hops = stubFetch({ [FILE_URL]: redirect('http://cdn.example/f.bin') });
+    await expect(download(FILE_URL)).rejects.toThrow();
+    expect(hops).toHaveLength(1);
   });
 });

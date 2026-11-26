@@ -25,6 +25,7 @@ import {
   type IAgentDocument,
   type IFabFileDocument,
   type IOrganizationDocument,
+  type ISessionDocument,
   type ISlackChannelConfigDocument,
 } from '@bike4mind/common';
 import type { SlackMessage } from './thread-intelligence/types';
@@ -268,6 +269,13 @@ export class CommandHandler {
       // Set default notebook: "/notebook set [notebook-id]"
       const notebookId = command.replace('/notebook set ', '').trim();
 
+      const Session = getSlackDb().Session as mongoose.Model<ISessionDocument>;
+      const owned =
+        Types.ObjectId.isValid(notebookId) && (await Session.exists({ _id: notebookId, userId: this.user.id }));
+      if (!owned) {
+        return `Notebook \`${notebookId}\` not found or doesn't belong to you.`;
+      }
+
       const slackSettings = this.user.slackSettings || {};
       await updateUserSlackSettings(this.user.id, {
         ...slackSettings,
@@ -339,7 +347,8 @@ export class CommandHandler {
     fabFileIds: string[] = [],
     questId?: string,
     waitForCompletion: boolean = true,
-    additionalTools: string[] = []
+    additionalTools: string[] = [],
+    untrustedHistory: string = ''
   ): Promise<string | null> {
     try {
       const User = getSlackDb().User as mongoose.Model<IUserDocument>;
@@ -356,9 +365,11 @@ export class CommandHandler {
       // systemPrompt is the single source of all system-level content
       // (navigate_view guard, pending action context, Slack conversation context, etc.)
       // assembled by the caller (events.ts) before being passed here.
-      const extraContextMessages: Array<{ role: 'system'; content: string }> = systemPrompt?.trim()
+      const extraContextMessages: Array<{ role: 'system'; content: string; perTurn?: boolean }> = systemPrompt?.trim()
         ? [{ role: 'system' as const, content: systemPrompt }]
         : [];
+      // perTurn moves channel history into the user turn, out of the system prompt.
+      if (untrustedHistory) extraContextMessages.push({ role: 'system', content: untrustedHistory, perTurn: true });
 
       if (statusCallback) await statusCallback(`${createLoadingBar(40)} Getting AI response...`);
 

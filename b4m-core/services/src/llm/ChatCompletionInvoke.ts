@@ -31,6 +31,7 @@ import {
 import { getAvailableModels, resolveSuccessorChain } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
+import { admitsPrivateFileInputs } from './questStartBody';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 import { IChatCompletionServiceOptions, QuestStartBodySchema } from './ChatCompletionFeatures';
 import {
@@ -108,6 +109,7 @@ export class ChatCompletionInvoke {
     apiKeyBillingOwnerType,
     oauthClientId,
     adminRoleWithheld,
+    fileInputsAllowed,
     visitId,
   }: {
     body: z.infer<typeof ChatCompletionInvokeParamsSchema>;
@@ -122,6 +124,8 @@ export class ChatCompletionInvoke {
     oauthClientId?: string;
     /** See QuestStartBodySchema.adminRoleWithheld. */
     adminRoleWithheld?: boolean;
+    /** Trusted private-file admission from the authenticated door, never the public body. */
+    fileInputsAllowed?: boolean;
     /** Read by the door from the request's visit cookie - never from `body` (see QuestStartBodySchema.visitId). */
     visitId?: string;
   }) {
@@ -133,9 +137,9 @@ export class ChatCompletionInvoke {
       params,
       sessionId,
       message,
-      messageFileIds,
+      messageFileIds: requestedMessageFileIds,
       historyCount,
-      fabFileIds,
+      fabFileIds: requestedFabFileIds,
       dashboardParams,
       questId,
       enableMementos,
@@ -168,6 +172,10 @@ export class ChatCompletionInvoke {
       toolMode,
       timezone,
     } = ChatCompletionInvokeParamsSchema.parse(body);
+
+    const admittedFileInputs = admitsPrivateFileInputs({ authOrigin, apiKeyId, fileInputsAllowed });
+    const messageFileIds = admittedFileInputs ? requestedMessageFileIds : [];
+    const fabFileIds = admittedFileInputs ? requestedFabFileIds : [];
 
     // Parallelize independent operations: API keys, session, organization, and the correction
     // target. The correction lookup rides this batch rather than the quest batch below because its
@@ -589,6 +597,7 @@ export class ChatCompletionInvoke {
         deniedTools,
         authOrigin,
         apiKeyId,
+        fileInputsAllowed,
         ...(apiKeyBillingOwnerType ? { apiKeyBillingOwnerType } : {}),
         ...(adminRoleWithheld ? { adminRoleWithheld } : {}),
         ...(visitId ? { visitId } : {}),

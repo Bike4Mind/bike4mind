@@ -59,7 +59,7 @@ function getWebhookUrl(routingToken: string): string {
   return `${baseUrl}/api/webhooks/jira/${routingToken}`;
 }
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   // POST - Create Jira webhook config
   .post(
     asyncHandler<object, IJiraWebhookConfigResponse, IJiraWebhookConfigRequest>(async (req, res) => {

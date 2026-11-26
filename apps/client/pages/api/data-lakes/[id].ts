@@ -1,5 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import {
+  DATA_LAKE_READ_SCOPES,
+  assertDataLakeShareScope,
+  assertDataLakeWriteScope,
+} from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -106,6 +110,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     assertDataLakeWriteScope(req);
     const { id } = req.query as { id: string };
     const params = UpdateDataLakeRequestInput.parse(req.body);
+    // Setting or clearing a gate field changes who can read the lake, as the visibility route does.
+    if (params.requiredUserTag !== undefined || params.requiredEntitlement !== undefined) {
+      assertDataLakeShareScope(req);
+    }
     // This is the write boundary for a DB LAKE's preferred prompt, and one of two places that owns
     // the session-activatable allowlist - the other is PUT /api/data-lakes/:id/settings, the sibling
     // write path for a STATIC (registry) lake's overlay. Reject a non-activatable id here (fail loud,
