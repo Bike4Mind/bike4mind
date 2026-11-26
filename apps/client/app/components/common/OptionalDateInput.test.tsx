@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { FormControl } from '@mui/joy';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes/themePrimitives';
 import { OptionalDateInput } from './OptionalDateInput';
@@ -117,5 +118,51 @@ describe('OptionalDateInput', () => {
     expect(screen.getByTestId('expiry').closest('.MuiInput-root')).not.toHaveClass('Mui-error');
     rerender(<Harness initial="2031-02-03" error />);
     expect(screen.getByTestId('expiry').closest('.MuiInput-root')).toHaveClass('Mui-error');
+  });
+
+  describe('inside a FormControl', () => {
+    const InControl = ({
+      initial,
+      control,
+      own,
+    }: {
+      initial: string;
+      control: { error?: boolean; disabled?: boolean };
+      own?: { error?: boolean; disabled?: boolean };
+    }) => (
+      <CssVarsProvider theme={appTheme}>
+        <FormControl {...control}>
+          <OptionalDateInput
+            value={initial}
+            onChange={() => undefined}
+            emptyLabel="No expiry"
+            setLabel="Set expiry date"
+            clearLabel="Remove expiry date"
+            initialDate={() => '2030-01-15'}
+            testId="expiry"
+            {...own}
+          />
+        </FormControl>
+      </CssVarsProvider>
+    );
+    const rootOf = (testId: string) => screen.getByTestId(testId).closest('.MuiInput-root');
+
+    it("takes the FormControl's error and disabled when it sets none of its own", () => {
+      render(<InControl initial="2031-02-03" control={{ error: true, disabled: true }} />);
+      expect(rootOf('expiry')).toHaveClass('MuiInput-colorDanger');
+      expect(screen.getByTestId('expiry')).toBeDisabled();
+    });
+
+    it("lets its own props win over the FormControl's, as Joy's fields do", () => {
+      render(
+        <InControl
+          initial="2031-02-03"
+          control={{ error: true, disabled: true }}
+          own={{ error: false, disabled: false }}
+        />
+      );
+      expect(rootOf('expiry')).not.toHaveClass('Mui-error');
+      expect(screen.getByTestId('expiry')).toBeEnabled();
+    });
   });
 });

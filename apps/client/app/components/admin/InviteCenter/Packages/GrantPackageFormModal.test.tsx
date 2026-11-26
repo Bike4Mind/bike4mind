@@ -597,3 +597,18 @@ describe('GrantPackageFormModal package fields', () => {
     expect(api.createGrantPackage).toHaveBeenCalledWith(expect.objectContaining({ reason: expect.any(String) }));
   });
 });
+
+describe('GrantPackageFormModal expiry error', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('outlines a past expiry as errored on a new package, and clears it for a future one', () => {
+    renderModal(null);
+    const expiryRoot = () => screen.getByTestId('grant-package-expires-input').closest('.MuiInput-root');
+    fireEvent.click(screen.getByTestId('grant-package-expires-input-set-btn'));
+    type('grant-package-expires-input', '2025-01-01');
+    expect(expiryRoot()).toHaveClass('MuiInput-colorDanger');
+
+    type('grant-package-expires-input', '2099-01-01');
+    expect(expiryRoot()).not.toHaveClass('MuiInput-colorDanger');
+  });
+});

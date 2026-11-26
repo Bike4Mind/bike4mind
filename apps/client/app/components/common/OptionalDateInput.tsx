@@ -18,8 +18,12 @@ interface OptionalDateInputProps {
   min?: string;
   max?: string;
   size?: 'sm' | 'md';
-  /** Disables the input and both buttons, so the field cannot be opened, edited or cleared. */
+  /**
+   * Disables the input and both buttons, so the field cannot be opened, edited or cleared.
+   * Left unset, the date input follows a wrapping FormControl's `disabled`; the buttons do not.
+   */
   disabled?: boolean;
+  /** Left unset, the date input follows a wrapping FormControl's `error`; the set button does not. */
   error?: boolean;
   'aria-label'?: string;
   /** Goes on the native date input; the empty label and the buttons get `-empty`, `-set-btn` and `-clear-btn` suffixes. */
@@ -43,8 +47,8 @@ export const OptionalDateInput: FC<OptionalDateInputProps> = ({
   min,
   max,
   size = 'md',
-  disabled = false,
-  error = false,
+  disabled: disabledProp,
+  error: errorProp,
   'aria-label': ariaLabel,
   testId,
 }) => {
@@ -52,6 +56,8 @@ export const OptionalDateInput: FC<OptionalDateInputProps> = ({
   const setButtonRef = useRef<HTMLButtonElement>(null);
   const pendingFocus = useRef<'input' | 'set' | null>(null);
   const [focusedWithin, setFocusedWithin] = useState(false);
+  const disabled = disabledProp ?? false;
+  const error = errorProp ?? false;
   // A disabled input loses focus without a reliable blur event, which would otherwise leave focusedWithin stuck.
   const [wasDisabled, setWasDisabled] = useState(disabled);
   if (disabled !== wasDisabled) {
@@ -105,8 +111,9 @@ export const OptionalDateInput: FC<OptionalDateInputProps> = ({
         type="date"
         size={size}
         value={value}
-        disabled={disabled}
-        error={error}
+        // The raw props, not the defaulted ones: an explicit false would override a wrapping FormControl.
+        disabled={disabledProp}
+        error={errorProp}
         onChange={event => onChange(event.target.value)}
         endDecorator={
           <IconButton
