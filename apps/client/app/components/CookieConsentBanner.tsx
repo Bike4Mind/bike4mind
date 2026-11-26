@@ -12,6 +12,7 @@ import { CONSENT_KEY, publishResolvedConsent, resolveConsent } from '@client/app
 import { clearAttributionCookies, flushUtmCapture } from '@client/app/utils/utmCapture';
 import { releaseVisitBeacon } from '@client/app/utils/visitBeacon';
 import { beaconPage } from '@client/app/utils/pageBeacon';
+import { useTutorialPicker } from '@client/app/components/tutorial/core/tutorialPickerStore';
 
 type Consent = 'granted' | 'denied';
 
@@ -103,6 +104,9 @@ export function CookieConsentBanner() {
   const [asking, setAsking] = useState(false);
   const settingsOpen = useCookieSettings(s => s.isOpen);
   const closeSettings = useCookieSettings(s => s.close);
+  // The unprompted ask waits out a tutorial walk, whose steps point at the composer this bar covers. Consent stays
+  // unset meanwhile, which tracks nothing; a reopen from settings still shows at once.
+  const walkOnScreen = useTutorialPicker(s => s.walkOnScreen);
   const firstActionRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
@@ -135,7 +139,7 @@ export function CookieConsentBanner() {
     if (trigger && document.activeElement === document.body) trigger.focus();
   }, [settingsOpen]);
 
-  if (!asking && !settingsOpen) return null;
+  if ((!asking || walkOnScreen) && !settingsOpen) return null;
 
   // With nothing in force yet there is nothing to manage, so a reopen shows the first-run ask.
   const current = resolveConsent();

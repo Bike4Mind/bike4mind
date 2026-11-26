@@ -23,12 +23,17 @@ export function getComposerCreditUi(params: {
   hasModels: boolean;
   lowWarningDismissed: boolean;
   lowThreshold: number;
+  /**
+   * A core tutorial walk runs in this notebook. Its turns replay a recording and never reach a model, so the message
+   * box stays; anything else typed there is still refused at send (validateChatInput).
+   */
+  tutorialWalk?: boolean;
 }): ComposerCreditUi {
   const { enforceCredits, effectiveCredits, exhaustedByVoice, hasModels } = params;
   const exhausted = effectiveCredits <= 0 || exhaustedByVoice;
   const low = !exhausted && effectiveCredits < params.lowThreshold;
   return {
-    replaceComposer: enforceCredits && exhausted && hasModels,
+    replaceComposer: enforceCredits && exhausted && hasModels && !params.tutorialWalk,
     lowCreditsNotice: enforceCredits && low && hasModels && !params.lowWarningDismissed,
     toolbarBlocked: enforceCredits && exhausted,
   };
