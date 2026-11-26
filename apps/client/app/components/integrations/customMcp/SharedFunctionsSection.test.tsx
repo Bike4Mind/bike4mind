@@ -124,6 +124,38 @@ describe('SharedFunctionsSection', () => {
     expect(screen.getByTestId('shared-function-summary').textContent).toContain(
       'Its name, description, or schemas changed since your review'
     );
+    expect(screen.queryByTestId('shared-function-changes')).toBeNull();
+  });
+
+  it('lists each change to the interface since the review, field by field', () => {
+    h.shared = [
+      {
+        ...REVIEWED,
+        status: 'pending_review',
+        review: { ...REVIEWED.review!, current: false },
+        changes: [
+          { path: 'description', side: null, field: '', kind: 'description_changed' },
+          { path: 'inputs.factor', side: 'inputs', field: 'factor', kind: 'added' },
+          {
+            path: 'outputs.deflection.unit',
+            side: 'outputs',
+            field: 'deflection',
+            kind: 'unit_changed',
+            before: 'm',
+            after: 'mm',
+          },
+        ],
+      },
+    ];
+    renderSection();
+    const items = within(screen.getByTestId('shared-function-changes'))
+      .getAllByTestId('shared-function-change')
+      .map(item => item.textContent);
+    expect(items).toEqual([
+      'the function changed its description',
+      'input factor was added',
+      'output deflection changed unit from m to mm',
+    ]);
   });
 
   it('shows the conflict message when the interface changed during the review', () => {

@@ -16,8 +16,8 @@ vi.mock('@client/app/hooks/data/callableFunctions', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/hooks/data/callableFunctions')>()),
   useCallableFunctionShare: () => h.share,
   useShareCallableFunction: () => h.save,
+  lookupCallableFunctionRecipient: h.lookup,
 }));
-vi.mock('@client/app/hooks/data/skills', () => ({ lookupUserByEmail: h.lookup }));
 vi.mock('@client/app/hooks/data/projects', () => ({
   useGetJoinedProjects: () => ({
     data: [
@@ -106,6 +106,7 @@ describe('ShareFunctionDialog', () => {
     fireEvent.change(screen.getByTestId('python-function-share-email'), { target: { value: 'one@example.com' } });
     fireEvent.click(screen.getByTestId('python-function-share-add-btn'));
     await waitFor(() => expect(screen.getByTestId('python-function-share-person').textContent).toBe('Person One'));
+    expect(h.lookup).toHaveBeenCalledWith('fn-1', 'one@example.com');
     expect(submit).toBeDisabled();
 
     fireEvent.click(screen.getByTestId('python-function-share-confirm'));
