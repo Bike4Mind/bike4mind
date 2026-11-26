@@ -1330,7 +1330,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   gap('service:infra/searxng.ts:Searxng', 'fef5f4ce5e094d32525bb4a13828a34b67ba75a38ab72c70e526ba908c31f049'),
   gap(
     'service:infra/subscriberFanout.ts:subscriberFanoutV2',
-    'f22fd878b4415013dafdb60fd0699f5d6c10695f02eccb2450ff66d0388323d6'
+    '93a5312a4a0ff8b50927169d7801ec022068b8f1c7aa5f6b75afff7f1c3451ba'
   ),
   gap(
     'sesRule:infra/emailIngestion.ts:emailReceiptRule',

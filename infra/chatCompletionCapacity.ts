@@ -1,5 +1,5 @@
 /**
- * Fargate capacity for the ChatCompletion service.
+ * Fargate capacity for the ChatCompletion and subscriberFanoutV2 services.
  *
  * Previews are single-tenant, always-on, and tolerate interruption, and AWS bills Spot well
  * below on-demand, so they run on Spot. `undefined` off-preview is deliberate: SST's
