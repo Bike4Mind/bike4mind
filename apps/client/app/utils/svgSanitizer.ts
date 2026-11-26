@@ -51,9 +51,9 @@ const decodeCssEscapes = (css: string): string =>
 const isInDocumentOrInline = (target: string): boolean => /^['"]?\s*(?:#|data:)/i.test(target.trim());
 
 /** True when CSS text would fetch anything other than an in-document (#id) or data: resource. */
-export function cssHasRemoteReference(css: string): boolean {
+export function cssHasRemoteReference(css: string, { allowImport = false } = {}): boolean {
   for (const match of decodeCssEscapes(css).matchAll(CSS_FETCH)) {
-    if (match[0].startsWith('@') || !isInDocumentOrInline(match[1] ?? '')) return true;
+    if (match[0].startsWith('@') ? !allowImport : !isInDocumentOrInline(match[1] ?? '')) return true;
   }
   return false;
 }
@@ -151,7 +151,9 @@ export const MERMAID_RESOURCE_CONFIG = {
 
 /** Throws when a diagram definition would make the rendered SVG fetch an external resource. */
 export function assertNoRemoteDiagramResources(definition: string): void {
-  if (cssHasRemoteReference(definition)) {
+  // Diagram CSS only reaches a rule body (classDef, style), where @import is inert, and themeCSS is
+  // locked by MERMAID_RESOURCE_CONFIG, so "@import" here is label text.
+  if (cssHasRemoteReference(definition, { allowImport: true })) {
     throw new Error('Diagrams cannot load external images or stylesheets');
   }
 }

@@ -110,6 +110,10 @@ describe('assertNoRemoteDiagramResources', () => {
     expect(() => assertNoRemoteDiagramResources('graph TD\n A\n style A fill:url(https://example.com/x)')).toThrow();
   });
 
+  it('accepts @import as label text', () => {
+    expect(() => assertNoRemoteDiagramResources('graph TD\n A["@import rules"]-->B')).not.toThrow();
+  });
+
   it('accepts a diagram that mentions a URL as label text', () => {
     expect(() => assertNoRemoteDiagramResources('graph TD\n A["https://example.com/docs"]-->B')).not.toThrow();
   });
