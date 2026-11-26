@@ -36,8 +36,7 @@ const props: OrchestratorViewProps = {
   personas: assignPersonas(roster),
 };
 const indicators = (root: ParentNode = document) => [...root.querySelectorAll('[data-pr-number]')];
-const agentIndicators = () =>
-  indicators().filter(badge => !badge.closest('[data-testid="orchestrator-tavern-quest-board"]'));
+const agentIndicators = () => indicators().filter(badge => !badge.closest('[data-testid$="-quest-board"]'));
 
 beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = {

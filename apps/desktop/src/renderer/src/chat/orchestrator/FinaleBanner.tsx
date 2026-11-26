@@ -3,8 +3,6 @@ import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import { finaleStats, formatWallTime, questSucceeded } from './finale';
-import { OfficePortrait } from './office/OfficeArt';
-import { OFFICE_PARENT } from './office/officeCast';
 import type { AgentView } from './roster';
 import type { RunSpendView } from './runSpend';
 import { INNKEEPER_ART } from './tavern/tavernArt';
@@ -23,6 +21,7 @@ const SERIF = 'Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", 
 const MONO = 'ui-monospace, Menlo, Consolas, monospace';
 
 export type FinaleLook = 'tavern' | 'office';
+export type FinaleHostArt = { idle: string; cheering: string };
 
 interface Look {
   ink: string;
@@ -129,7 +128,7 @@ function StatChip({
  * The finale card, muted when not every agent finished done. `scene` pins it over the top of the scene art;
  * `inline` sets it in the flow above a Board or Table so it never covers their rows. `spend` is the run's
  * settled total from the server; until it arrives, or when there is none, the card shows the local estimate.
- * `look` dresses it for the scene it sits on.
+ * `look` dresses it for the scene it sits on, and `hostArt` is that scene's host, the Innkeeper by default.
  */
 export function FinaleBanner({
   agents,
@@ -137,6 +136,7 @@ export function FinaleBanner({
   onDismiss,
   placement = 'scene',
   look: lookId = 'tavern',
+  hostArt = INNKEEPER_ART,
   spend,
 }: {
   agents: readonly AgentView[];
@@ -145,6 +145,7 @@ export function FinaleBanner({
   onDismiss(): void;
   placement?: 'scene' | 'inline';
   look?: FinaleLook;
+  hostArt?: FinaleHostArt;
 }) {
   const look = LOOKS[lookId];
   const stats = finaleStats(agents);
@@ -198,42 +199,27 @@ export function FinaleBanner({
         '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
       }}
     >
-      {lookId === 'office' ? (
-        <Box
-          sx={{
-            width: 52,
-            height: 52,
-            flexShrink: 0,
-            display: 'flex',
-            alignItems: 'flex-end',
-            justifyContent: 'center',
-            overflow: 'hidden',
-            border: `2px solid ${look.ink}`,
-            bgcolor: '#aebbab',
-            '& svg': { width: 42, height: 50 },
-          }}
-        >
-          <OfficePortrait name={OFFICE_PARENT} resting={succeeded} />
-        </Box>
-      ) : (
-        <Box
-          component="img"
-          src={succeeded ? INNKEEPER_ART.cheering : INNKEEPER_ART.idle}
-          alt=""
-          draggable={false}
-          sx={{
-            width: 52,
-            height: 52,
-            flexShrink: 0,
-            objectFit: 'contain',
-            imageRendering: 'pixelated',
-            borderRadius: '50%',
-            border: `2px solid ${rule}`,
-            bgcolor: '#2a1a0c',
-            boxShadow: 'inset 0 0 8px rgba(0, 0, 0, 0.6)',
-          }}
-        />
-      )}
+      <Box
+        component="img"
+        src={succeeded ? hostArt.cheering : hostArt.idle}
+        alt=""
+        draggable={false}
+        sx={{
+          width: 52,
+          height: 52,
+          flexShrink: 0,
+          objectFit: 'contain',
+          imageRendering: 'pixelated',
+          ...(lookId === 'office'
+            ? { border: `2px solid ${look.ink}`, bgcolor: '#aebbab' }
+            : {
+                borderRadius: '50%',
+                border: `2px solid ${rule}`,
+                bgcolor: '#2a1a0c',
+                boxShadow: 'inset 0 0 8px rgba(0, 0, 0, 0.6)',
+              }),
+        }}
+      />
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, minWidth: 0 }}>
         <Typography
           component="h2"

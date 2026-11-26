@@ -102,11 +102,11 @@ describe('OrchestratorStage', () => {
       );
     });
 
-    it('renders the Office scene with zero agents and the plain empty line', async () => {
+    it("renders the Office scene with zero agents and the Office's empty line", async () => {
       await renderEmpty('office');
       expect(el('orchestrator-empty-state').contains(el('fake-office'))).toBe(true);
       expect(el('orchestrator-empty-state').textContent).toContain(
-        'No agents yet. Describe the work and it will be split across agents.'
+        'No tasks yet. Describe the work and the Manager will split it across the team.'
       );
     });
   });
@@ -376,7 +376,7 @@ describe('OrchestratorStage', () => {
     );
     expect(el('orchestrator-ambient-status').textContent).toBe('The office is quiet');
     expect(el('office-settled').dataset.settled).toBe('true');
-    expect(el('orchestrator-needs-you-card').textContent).toContain('The orchestrator needs you');
+    expect(el('orchestrator-needs-you-card').textContent).toContain('The Manager needs you');
     expect(el('orchestrator-stage').textContent).not.toContain('Innkeeper');
     act(() => el('orchestrator-needs-you-open-btn').click());
     expect(wake).toHaveBeenCalledTimes(1);

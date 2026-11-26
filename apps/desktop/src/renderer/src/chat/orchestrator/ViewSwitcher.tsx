@@ -37,8 +37,9 @@ import type { AgentDetailsSkin } from './AgentPeekDrawer';
 import { SkinMenuSection } from './SkinMenuSection';
 import { SoundPackMenuSection } from './SoundPackMenuSection';
 import { PaneSessionMenu, type PaneSessionChoices } from './PaneSessionMenu';
-import type { FinaleLook } from './FinaleBanner';
+import type { FinaleHostArt, FinaleLook } from './FinaleBanner';
 import type { SceneDefinition } from './scene/sceneDefinition';
+import { OFFICE_SCENE } from './office/officeScene';
 import { TAVERN_SCENE } from './tavern/tavernScene';
 
 type ViewGroup = 'scene' | 'layout';
@@ -50,6 +51,8 @@ export interface SceneStageInfo {
   /** Answers every agent request in its own dialogue box, so the stage and composer leave theirs out. */
   inSceneDecisions: boolean;
   finale: FinaleLook;
+  /** The host's portrait on the finale banner; the Innkeeper if unset. */
+  hostArt?: FinaleHostArt;
   /** The scene's lines for the settled Needs-you card, the quiet header, the talk button and the empty stage. */
   copy: { host: string; quiet: string; talk: string; empty: string };
 }
@@ -59,6 +62,7 @@ const frameworkScene = (scene: SceneDefinition): SceneStageInfo => ({
   host: true,
   inSceneDecisions: true,
   finale: scene.look.finale,
+  hostArt: scene.cast.host.sprites,
   copy: scene.copy.stage,
 });
 
@@ -114,18 +118,7 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
       dark: { background: '#222d2a', border: '#4c5f58' },
       radius: '2px',
     },
-    // Not on the scene framework yet: its own manager at the desk, but no dialogue box.
-    scene: {
-      host: true,
-      inSceneDecisions: false,
-      finale: 'office',
-      copy: {
-        host: 'The orchestrator',
-        quiet: 'The office is quiet',
-        talk: 'Type to talk to Manager',
-        empty: 'No agents yet. Describe the work and it will be split across agents.',
-      },
-    },
+    scene: frameworkScene(OFFICE_SCENE),
   },
   board: {
     label: 'Board',

@@ -3,7 +3,7 @@ import { Aquarium } from './aquarium/Aquarium';
 import { BoardView } from './BoardView';
 import { Constellation } from './Constellation';
 import { PlanView } from './PlanView';
-import { OfficeView } from './office/OfficeView';
+import { OFFICE_SCENE } from './office/officeScene';
 import type { OrchestratorViewProps } from './OrchestratorStage';
 import type { OrchestratorViewId } from './orchestratorPrefs';
 import { sceneView } from './scene/SceneStage';
@@ -15,6 +15,7 @@ import { TileWall } from './TileWall';
 import { Transit } from './Transit';
 
 const TavernView = sceneView(TAVERN_SCENE);
+const OfficeView = sceneView(OFFICE_SCENE);
 const TileWallView = snapshotView(TileWall, { displayName: 'TileWallView' });
 const SwimlanesView = snapshotView(Swimlanes, { displayName: 'SwimlanesView' });
 const ConstellationView = snapshotView(Constellation, { displayName: 'ConstellationView' });
