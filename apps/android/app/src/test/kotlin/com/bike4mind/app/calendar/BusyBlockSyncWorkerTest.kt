@@ -74,6 +74,17 @@ class BusyBlockSyncWorkerTest {
     }
 
     @Test
+    fun endingTheSessionDropsTheTriggerAndResetsTheThrottle() {
+        BusyBlockSyncWorker.arm(app)
+        var resets = 0
+
+        BusyBlockSyncWorker.endSession(app) { resets++ }
+
+        assertEquals(listOf(WorkInfo.State.CANCELLED), work().map { it.state })
+        assertEquals(1, resets)
+    }
+
+    @Test
     fun aRunWhileSignedOutNeitherSyncsNorReArms() = runTest {
         var syncs = 0
         var rearms = 0

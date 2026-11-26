@@ -67,6 +67,12 @@ class BusyBlockSyncWorker(context: Context, parameters: WorkerParameters) : Coro
             WorkManager.getInstance(context).cancelUniqueWork(NAME)
         }
 
+        /** Drops the armed trigger and the throttle, so the next account neither inherits a sync nor skips its first. */
+        fun endSession(context: Context, resetThrottle: () -> Unit) {
+            cancel(context)
+            resetThrottle()
+        }
+
         /** Arms the trigger while the server has the feature on and drops it once it is off; null changes nothing. */
         fun follow(context: Context, enabled: Boolean?) {
             when (enabled) {

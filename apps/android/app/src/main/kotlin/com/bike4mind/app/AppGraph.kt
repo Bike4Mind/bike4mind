@@ -191,8 +191,7 @@ class AppGraph(context: Context, val environment: ServerEnvironment) {
      * this one's gallery, from memory or disk, and its calendar trigger must never write to the next account.
      */
     suspend fun onSessionEnded() {
-        BusyBlockSyncWorker.cancel(appContext)
-        busyBlockSyncer.reset()
+        BusyBlockSyncWorker.endSession(appContext, busyBlockSyncer::reset)
         capture.discardAll()
         mediaFirstPages.invalidate()
         mediaImages.clear()
