@@ -29,3 +29,29 @@ describe('ClientMessageSender - failed sends', () => {
     expect(deleteByConnectionId).toHaveBeenCalledWith('c-gone');
   });
 });
+
+describe('ClientMessageSender - key scope', () => {
+  const logger = { info: vi.fn(), log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('skips sockets opened with a key that does not receive user fanout', async () => {
+    const findByUserId = vi
+      .fn()
+      .mockResolvedValue([
+        { connectionId: 'c-jwt' },
+        { connectionId: 'c-chat-key', scopes: ['ai:chat'] },
+        { connectionId: 'c-bridge-key', scopes: ['cc-bridge:connect'] },
+        { connectionId: 'c-read-key', scopes: ['notebooks:read'] },
+      ]);
+    mocks.sendToConnection.mockResolvedValue(undefined);
+    const sender = new ClientMessageSender(
+      { connections: { findByUserId, deleteByConnectionId: vi.fn() } },
+      logger as never
+    );
+
+    await sender.sendToClient('user-1', 'https://ws.example.com/test', { action: 'heartbeat' } as never);
+
+    expect(mocks.sendToConnection.mock.calls.map(([id]) => id)).toEqual(['c-jwt', 'c-chat-key']);
+  });
+});

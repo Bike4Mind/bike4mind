@@ -6,6 +6,7 @@ import { useConversation, type ProjectBindingController } from './useChat';
 import { setWorktreeByDefault } from './worktreeDefault';
 import type { ChatProject } from '@shared/chat';
 import { newSessionInProject } from './newSessionInProject';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -47,6 +48,7 @@ describe('projectPicker', () => {
       vi.stubGlobal('requestAnimationFrame', () => 0);
       vi.stubGlobal('cancelAnimationFrame', () => undefined);
       (window as unknown as { b4m: unknown }).b4m = {
+        host: chatBackedHostBridge(),
         chat: {
           getSession: async () => ({ id: SESSION, messages: [], project: PROJECT }),
           getQueuedMessages: async () => [],
@@ -76,7 +78,12 @@ describe('projectPicker', () => {
     it('starts the newly picked folder in a worktree when the user wants that by default', async () => {
       setWorktreeByDefault(true);
       pickProjectDirectory.mockResolvedValue('/other');
-      inspectProject.mockResolvedValue({ isRepository: true, branches: ['main'], currentBranch: 'main' });
+      inspectProject.mockResolvedValue({
+        directory: '/other',
+        isRepository: true,
+        branches: ['main'],
+        currentBranch: 'main',
+      });
       updateProject.mockResolvedValue({ ok: true, session: PROJECT });
 
       await act(async () => binding.pickDirectory());
@@ -88,7 +95,12 @@ describe('projectPicker', () => {
 
     it('leaves the worktree off by default', async () => {
       pickProjectDirectory.mockResolvedValue('/other');
-      inspectProject.mockResolvedValue({ isRepository: true, branches: ['main'], currentBranch: 'main' });
+      inspectProject.mockResolvedValue({
+        directory: '/other',
+        isRepository: true,
+        branches: ['main'],
+        currentBranch: 'main',
+      });
       updateProject.mockResolvedValue({ ok: true, session: PROJECT });
 
       await act(async () => binding.pickDirectory());
@@ -105,7 +117,7 @@ describe('projectPicker', () => {
     it('leaves the worktree off for a folder that cannot hold one', async () => {
       setWorktreeByDefault(true);
       pickProjectDirectory.mockResolvedValue('/plain');
-      inspectProject.mockResolvedValue({ isRepository: false, branches: [], currentBranch: null });
+      inspectProject.mockResolvedValue({ directory: '/plain', isRepository: false, branches: [], currentBranch: null });
       updateProject.mockResolvedValue({ ok: true, session: PROJECT });
 
       await act(async () => binding.pickDirectory());

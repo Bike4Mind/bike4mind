@@ -266,12 +266,9 @@ When you get the tool result back, summarize it conversationally for voice.`;
         });
 
         instructions = buildVoiceInstructions(baseInstructions, historyContext);
-        console.log(
-          `[Voice Session] Added ${chronologicalHistory.length} history items to context (${instructions.length} chars)`
-        );
       }
     } catch (error) {
-      console.error('[Voice Session] Failed to fetch history for context:', error);
+      req.logger.error('Failed to fetch history for context', { error });
       // Continue without history context - don't fail the session
     }
   }

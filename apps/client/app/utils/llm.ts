@@ -12,6 +12,7 @@ import { QueryClient } from '@tanstack/react-query';
 import perfLogger from './performanceLogger';
 import { replaceQueryData, setOptimisticQueryData, updateSingleQueryDataFast, type Optimistic } from './react-query';
 import { useStreamingState } from '../hooks/useStreamingState';
+import { randomUuid } from '@bike4mind/common';
 
 function getErrorMessage(error: unknown): string {
   if (isAxiosError(error)) {
@@ -51,7 +52,7 @@ export function isOptimisticId(id: string | null | undefined): boolean {
 }
 
 export function createOptimisticSessionId(): string {
-  return `${OPTIMISTIC_PREFIX}session-${crypto.randomUUID()}`;
+  return `${OPTIMISTIC_PREFIX}session-${randomUuid()}`;
 }
 
 /**

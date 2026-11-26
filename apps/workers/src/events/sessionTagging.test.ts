@@ -170,6 +170,15 @@ describe('sessionTagging', () => {
     expect(h.recordUsage).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the generated tag names out of the logs', async () => {
+    h.completionText = ['[{"name": "pulsars", "strength": 9}]'];
+
+    await run();
+
+    const logged = JSON.stringify([logger.info, logger.warn, logger.error, logger.debug].map(fn => fn.mock.calls));
+    expect(logged).not.toContain('pulsars');
+  });
+
   it('spends nothing and writes nothing when the payer cannot fund the operation', async () => {
     h.payerCanFund.mockResolvedValue(false);
 

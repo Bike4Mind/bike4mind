@@ -4,7 +4,10 @@ import {
   BriefComposeStartError,
   startBriefComposition,
   startEventBrief,
+  startBlockBrief,
+  startFollowUpComposition,
   startScheduledBrief,
+  type BlockBriefDeps,
   type ScheduledBriefDeps,
 } from './startBriefComposition';
 import { BRIEF_MIN_GAP_MS, SCHEDULED_BRIEF_MIN_GAP_MS } from './briefSchedule';
@@ -114,12 +117,40 @@ describe('startBriefComposition', () => {
 });
 
 type GatedOver = {
+  hasReminders?: boolean;
   user?: object | null;
   inFlight?: IAssistantBrief | null;
   hasRuns?: boolean;
   claimed?: boolean;
   straddling?: Date | null;
 };
+
+describe('startFollowUpComposition', () => {
+  it('creates a follow-up row with the memo, never reusing an in-flight brief, and keeps the memo off the event', async () => {
+    const deps = makeDeps({ inFlight: stored({ status: 'composing' }) });
+    await startFollowUpComposition('u1', { transcript: 'Email Sam', timeZone: 'UTC' }, deps);
+    expect(deps.briefs.findActiveComposing).not.toHaveBeenCalled();
+    expect(deps.briefs.createComposing).toHaveBeenCalledWith({
+      userId: 'u1',
+      periodStart: now,
+      periodEnd: now,
+      origin: 'followUp',
+      followUpInput: { transcript: 'Email Sam', timeZone: 'UTC' },
+    });
+    expect(deps.publishCompose).toHaveBeenCalledWith({ briefId: 'b1', userId: 'u1' });
+  });
+
+  it('discards the row when the event is rejected', async () => {
+    const deps = makeDeps();
+    deps.publishCompose.mockRejectedValue(new BriefComposeRejectedError());
+    await expect(startFollowUpComposition('u1', { transcript: 'memo' }, deps)).rejects.toMatchObject({
+      name: BriefComposeStartError.name,
+      retrySafe: true,
+    });
+    expect(deps.briefs.discardComposing).toHaveBeenCalledWith('b1');
+    expect(deps.briefs.createComposing.mock.calls[0][0].followUpInput).toEqual({ transcript: 'memo' });
+  });
+});
 
 const PREVIOUS_START = new Date('2026-11-17T01:00:00Z');
 const enabledUser = { preferences: { briefSchedule: { enabled: true } } };
@@ -135,6 +166,7 @@ const makeGatedDeps = (over: GatedOver = {}) => {
     },
     hasRunsSince: vi.fn().mockResolvedValue(over.hasRuns ?? true),
     hasPendingEmails: vi.fn().mockResolvedValue(false),
+    hasDueReminders: vi.fn().mockResolvedValue(over.hasReminders ?? false),
   };
 };
 const asDeps = (deps: ReturnType<typeof makeGatedDeps>) => deps as unknown as ScheduledBriefDeps;
@@ -175,6 +207,12 @@ describe.each([
     expect(await start('u1', asDeps(deps))).toBe('in_flight');
     expect(deps.publishCompose).not.toHaveBeenCalled();
     expect(deps.users.releaseBriefStart).toHaveBeenCalledWith('u1', now, PREVIOUS_START);
+  });
+
+  it('counts a due reminder as activity when nothing else happened', async () => {
+    const deps = makeGatedDeps({ hasRuns: false, hasReminders: true });
+    expect(await start('u1', asDeps(deps))).toBe('enqueued');
+    expect(deps.hasDueReminders).toHaveBeenCalledWith('u1', now);
   });
 
   it('counts a run that finished after the last brief as activity', async () => {
@@ -221,5 +259,36 @@ describe.each([
     deps.publishCompose.mockRejectedValue(cause);
     deps.users.releaseBriefStart.mockRejectedValue(new Error('release failed'));
     await expect(start('u1', asDeps(deps))).rejects.toMatchObject({ retrySafe: true, cause });
+  });
+});
+
+describe('startBlockBrief held-runs summary', () => {
+  const block = { start: new Date('2026-11-17T04:00:00Z'), end: new Date('2026-11-17T05:00:00Z') };
+  const optedIn = { preferences: { busyBlockBrief: { enabled: true } } };
+  const makeBlockDeps = (over: { user?: object; hasRuns?: boolean } = {}) => ({
+    ...makeGatedDeps({ user: over.user ?? optedIn }),
+    hasRunsBetween: vi.fn().mockResolvedValue(over.hasRuns ?? false),
+    hasEmailsBetween: vi.fn().mockResolvedValue(false),
+    notifyHeldRuns: vi.fn().mockResolvedValue(undefined),
+  });
+  const asBlockDeps = (deps: ReturnType<typeof makeBlockDeps>) => deps as unknown as BlockBriefDeps;
+
+  it('sends none when the opt-in is off, since no push was held', async () => {
+    const deps = makeBlockDeps({ user: { preferences: { busyBlockBrief: { enabled: false } } } });
+    expect(await startBlockBrief('u1', block, asBlockDeps(deps))).toBe('busy_off');
+    expect(deps.notifyHeldRuns).not.toHaveBeenCalled();
+  });
+
+  it('sends one for a block with no activity to brief', async () => {
+    const deps = makeBlockDeps();
+    expect(await startBlockBrief('u1', block, asBlockDeps(deps))).toBe('no_activity');
+    expect(deps.notifyHeldRuns).toHaveBeenCalledWith('u1', block);
+    expect(deps.publishCompose).not.toHaveBeenCalled();
+  });
+
+  it('sends none when the block brief starts', async () => {
+    const deps = makeBlockDeps({ hasRuns: true });
+    expect(await startBlockBrief('u1', block, asBlockDeps(deps))).toBe('enqueued');
+    expect(deps.notifyHeldRuns).not.toHaveBeenCalled();
   });
 });

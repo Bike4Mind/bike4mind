@@ -711,6 +711,11 @@ async function gitRun(
   return launch && gitExec(launch);
 }
 
+/** The only variables a query may `set`: where git finds config, and the CONFIG_ENV_PREFIX names signingQuery gives `--config-env`. */
+const QUERY_ENVIRONMENT =
+  /^(HOME|XDG_CONFIG_HOME|GIT_CONFIG_(NOSYSTEM|GLOBAL|SYSTEM)|GIT_CEILING_DIRECTORIES|B4M_CONFIG_ENV_\d+)$/;
+const CONFIG_ENV_PREFIX = 'B4M_CONFIG_ENV_';
+
 /** Changes to a query's env: `set` variables, and whether it keeps the GIT_CONFIG_{NOSYSTEM,GLOBAL,SYSTEM} files of this process. */
 interface GitEnvironment {
   set?: Readonly<Record<string, string>>;
@@ -742,11 +747,20 @@ async function gitLaunch(
     )
   );
   for (const name of Object.keys(environment?.set ?? {})) {
+    if (!QUERY_ENVIRONMENT.test(name)) return null;
     for (const held of Object.keys(env)) if (held.toUpperCase() === name.toUpperCase()) delete env[held];
   }
   Object.assign(env, environment?.set);
   // GIT_ALLOW_PROTOCOL=none also stops a lazy fetch on git older than GIT_NO_LAZY_FETCH (2.39.4 and 2.45.1).
-  const settings = { GIT_ATTR_SOURCE: EMPTY_TREE, GIT_NO_LAZY_FETCH: '1', GIT_ALLOW_PROTOCOL: 'none' };
+  // A trace2 variable outranks the trace2.*Target config a query's config file may set.
+  const settings = {
+    GIT_ATTR_SOURCE: EMPTY_TREE,
+    GIT_NO_LAZY_FETCH: '1',
+    GIT_ALLOW_PROTOCOL: 'none',
+    GIT_TRACE2: '0',
+    GIT_TRACE2_EVENT: '0',
+    GIT_TRACE2_PERF: '0',
+  };
   Object.assign(env, settings);
   // Through wsl.exe only the variables WSLENV names reach Linux git.
   if (inherited)
@@ -1364,12 +1378,49 @@ async function signingQuery(
     )
       return null;
   }
+  const placed = placeConfigEnv(call);
+  if (placed === null) return null;
   const globals = [
     ...(call.gitDir !== null ? [`--git-dir=${call.gitDir}`] : []),
     ...(call.workTree !== null ? [`--work-tree=${call.workTree}`] : []),
-    ...call.settings,
+    ...placed.settings,
   ];
-  return { globals, environment: { set: call.env, keepConfigFiles: true } };
+  return { globals, environment: { set: placed.env, keepConfigFiles: true } };
+}
+
+/**
+ * `call`'s settings and env with each variable a `--config-env` names moved to a CONFIG_ENV_PREFIX name, so the
+ * script picks values but never which variables the query's git starts with. Null when a name or variable cannot be placed.
+ */
+function placeConfigEnv(call: GitSigningCall): { settings: string[]; env: Record<string, string> } | null {
+  const env: Record<string, string> = {};
+  const moved = new Set<string>();
+  const settings: string[] = [];
+  for (let at = 0; at < call.settings.length; at++) {
+    const word = call.settings[at] as string;
+    const separate = word === '--config-env';
+    if (!separate && !word.startsWith('--config-env=')) {
+      settings.push(word);
+      continue;
+    }
+    const spec = separate ? call.settings[++at] : word.slice('--config-env='.length);
+    // git takes the variable name from after the last `=`.
+    const split = spec?.lastIndexOf('=') ?? -1;
+    if (spec === undefined || split <= 0) return null;
+    const name = spec.slice(split + 1);
+    const value = Object.hasOwn(call.env, name) ? call.env[name] : undefined;
+    if (!/^[A-Za-z_]\w*$/.test(name) || value === undefined) return null;
+    const placed = `${CONFIG_ENV_PREFIX}${Object.keys(env).length}`;
+    moved.add(name);
+    env[placed] = value;
+    settings.push('--config-env', `${spec.slice(0, split)}=${placed}`);
+  }
+  for (const [name, value] of Object.entries(call.env)) {
+    if (moved.has(name)) continue;
+    if (!QUERY_ENVIRONMENT.test(name) || name.startsWith(CONFIG_ENV_PREFIX)) return null;
+    env[name] = value;
+  }
+  return { settings, env };
 }
 
 /** git exits 1, printing nothing, when no key matches; a warning on stderr means a file it could not read. */

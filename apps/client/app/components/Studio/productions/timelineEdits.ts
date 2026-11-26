@@ -9,6 +9,7 @@ import {
   type StudioTimelineTrack,
   type StudioTimelineTrackKind,
   type StudioVideoClip,
+  randomUuid,
 } from '@bike4mind/common';
 
 /**
@@ -26,7 +27,7 @@ export const DEFAULT_CAPTION_CLIP_MS = 3_000;
 export const MIN_CLIP_MS = 100;
 
 /** Ids match the spec's `^[A-Za-z0-9_-]{1,64}$`; a UUID is 36 characters, so the prefix keeps it under 64. */
-export const mintTimelineId = (prefix: 'track' | 'clip' | 'out'): string => `${prefix}-${crypto.randomUUID()}`;
+export const mintTimelineId = (prefix: 'track' | 'clip' | 'out'): string => `${prefix}-${randomUuid()}`;
 
 const replaceTrack = (timeline: StudioTimeline, track: StudioTimelineTrack): StudioTimeline => ({
   ...timeline,

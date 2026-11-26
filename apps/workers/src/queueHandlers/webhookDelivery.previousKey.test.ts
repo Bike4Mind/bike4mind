@@ -41,6 +41,7 @@ vi.mock('@bike4mind/server-utils/utils/cloudwatch', () => ({
 
 import { WebhookDeliveryStatus } from '@bike4mind/common';
 import { dispatch } from './webhookDelivery';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
 
 const secretFixture = 'webhook-secret-fixture';
 
@@ -77,6 +78,7 @@ describe('webhookDelivery dispatch with a secret stored under the previous encry
     previousKey = generateEncryptionKey();
     h.config.SECRET_ENCRYPTION_KEY = generateEncryptionKey();
     h.config.SECRET_ENCRYPTION_KEY_PREVIOUS = previousKey;
+    configureSecretsAtRest(h.config.SECRET_ENCRYPTION_KEY, h.config.SECRET_ENCRYPTION_KEY_PREVIOUS);
     h.findByOrganizationId.mockResolvedValue({ secret: encryptSecret(secretFixture, previousKey) });
     h.fetchMock.mockResolvedValue({ ok: true, status: 200, headers: new Headers() });
   });

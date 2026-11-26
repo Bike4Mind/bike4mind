@@ -28,7 +28,6 @@ const execution = (id: string, overrides: Record<string, unknown> = {}) => ({
   userId: `user-${id}-0123456789abcdef`,
   sessionId: `session-${id}`,
   questId: `quest-${id}`,
-  query: `Summarise the quarterly report for ${id}`,
   model: 'claude-test',
   status: 'running',
   totalCreditsUsed: 1.5,

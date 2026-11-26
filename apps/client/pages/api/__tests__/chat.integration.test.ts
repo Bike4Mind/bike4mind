@@ -189,23 +189,11 @@ vi.mock('@bike4mind/services', async orig => {
   };
 });
 
-const invokeOptions = vi.hoisted(() => ({ value: undefined as unknown }));
-
-vi.mock('@bike4mind/server-utils/billing/meterPlatformCompletion', async orig => ({
-  ...(await orig<typeof import('@bike4mind/server-utils/billing/meterPlatformCompletion')>()),
-  createCompletionMeter: vi.fn(),
-}));
-
 vi.mock('@bike4mind/services/llm', async orig => {
   const actual = await orig<Record<string, unknown>>();
   class MockChatCompletionInvoke {
-    constructor(options: unknown) {
-      invokeOptions.value = options;
-    }
     prefetchedSession = undefined;
     prefetchedOrganization = undefined;
-    questMasterStartId = 'server-admitted-start';
-    questAdmittedAs = 'free';
     invoke = (...a: unknown[]) => mockInvoke(...a);
   }
   // The wait=true path constructs this directly; the async-path tests never reach it.
@@ -314,7 +302,13 @@ vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', async orig => 
 }));
 
 import handler from '../chat';
-import { ApiKeyScope, BadRequestError, CreditHolderType, TooManyRequestsError } from '@bike4mind/common';
+import {
+  FILE_READ_TOOL_NAMES,
+  ApiKeyScope,
+  BadRequestError,
+  CreditHolderType,
+  TooManyRequestsError,
+} from '@bike4mind/common';
 import { Types } from 'mongoose';
 
 const VALID_KEY = 'sk-test-valid-key';
@@ -464,7 +458,7 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
   });
 
   it('denies the data-lake tools to a chat key without any data-lake scope', async () => {
-    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.READ_FILES]);
     const { req, res } = fire();
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
@@ -475,12 +469,21 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     ]);
   });
 
-  it('denies nothing to a chat key that holds datalake:write', async () => {
-    validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
+  it('denies nothing to a chat key that holds datalake:write and files:read', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE, ApiKeyScope.READ_FILES]);
     const { req, res } = fire();
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
     expect((mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toBeUndefined();
+  });
+
+  it('denies the file-reading tools to a chat key without files:read', async () => {
+    validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect((mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools).toEqual([
+      ...FILE_READ_TOOL_NAMES,
+    ]);
   });
 
   it('hands invoke() an apiKey origin and the key id, so a tool-driven lake write is audited as the key', async () => {
@@ -490,21 +493,28 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     expect(mockInvoke.mock.calls[0][0]).toEqual(expect.objectContaining({ authOrigin: 'apiKey', apiKeyId: 'k1' }));
   });
 
-  it("hands the request's key to the QuestMaster completion meter", async () => {
-    validateWithScopes([ApiKeyScope.AI_CHAT]);
-    const { req, res } = fire();
+  it.each([
+    ['key without read', VALID_KEY, [ApiKeyScope.AI_CHAT], false],
+    ['key with read', VALID_KEY, [ApiKeyScope.AI_CHAT, ApiKeyScope.READ_FILES], true],
+    ['session', null, [ApiKeyScope.AI_CHAT], true],
+  ] as const)('stamps trusted file admission for %s on both chat paths', async (_, apiKey, scopes, allowed) => {
+    validateWithScopes([...scopes]);
+    const { req, res } = fire({
+      apiKey,
+      body: {
+        message: 'hello',
+        sessionId: 'sess-1',
+        wait: true,
+        fileInputsAllowed: true,
+      },
+    });
     await handler(req, res);
-    const { createCompletionMeter: createMeter } = invokeOptions.value as {
-      createCompletionMeter: (opts: { organizationId: string | null; featureLabel: string }) => unknown;
-    };
-    createMeter({ organizationId: null, featureLabel: 'QuestMaster planning' });
-
-    const { createCompletionMeter } = await import('@bike4mind/server-utils/billing/meterPlatformCompletion');
-    expect(createCompletionMeter).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.anything(),
-      'QuestMaster planning',
-      expect.objectContaining({ apiKeyId: 'k1' })
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockInvoke.mock.calls[0][0]).toEqual(expect.objectContaining({ fileInputsAllowed: allowed }));
+    expect(mockProcess.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        body: expect.objectContaining({ fileInputsAllowed: allowed }),
+      })
     );
   });
 
@@ -977,23 +987,6 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
         expect(mockInvoke).not.toHaveBeenCalled();
       });
 
-      it("hands the key's billing owner type to the QuestMaster completion meter", async () => {
-        const { req, res } = fire();
-        await handler(req, res);
-        const { createCompletionMeter: createMeter } = invokeOptions.value as {
-          createCompletionMeter: (opts: { organizationId: string | null; featureLabel: string }) => unknown;
-        };
-        createMeter({ organizationId: orgId, featureLabel: 'QuestMaster planning' });
-
-        const { createCompletionMeter } = await import('@bike4mind/server-utils/billing/meterPlatformCompletion');
-        expect(createCompletionMeter).toHaveBeenCalledWith(
-          expect.anything(),
-          expect.anything(),
-          'QuestMaster planning',
-          expect.objectContaining({ apiKeyId: 'k1', apiKeyBillingOwnerType: CreditHolderType.Organization })
-        );
-      });
-
       it('checks the freeze against the key org, the key and its user', async () => {
         mockFindActiveFreeze.mockResolvedValueOnce({
           scopeType: 'Organization',
@@ -1070,7 +1063,6 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
   describe('tool selection', () => {
     type InvokedBody = {
       tools?: string[];
-      enableQuestMaster?: boolean;
       enableMementos?: boolean;
       enableAgents?: boolean;
     };
@@ -1084,7 +1076,7 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       expect(invokedBody().tools).toEqual(['web_search']);
     });
 
-    // The named tool is intent to enable tools, nothing more. QuestMaster/Mementos/Agents
+    // The named tool is intent to enable tools, nothing more. Mementos/Agents
     // stay off, matching smart mode's conservative defaults rather than the legacy
     // enableTools path's full-capability defaults.
     it('enables only tools for a tools-without-toolMode request, not the other capabilities', async () => {
@@ -1092,7 +1084,6 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       const { req, res } = fire({ body: { message: 'hi', sessionId: 'sess-1', tools: ['web_search'] } });
       await handler(req, res);
       expect(invokedBody()).toMatchObject({
-        enableQuestMaster: false,
         enableMementos: false,
         enableAgents: false,
       });
@@ -1115,7 +1106,7 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       expect(invokedBody().tools).toEqual([]);
-      expect(invokedBody().enableQuestMaster).toBe(false);
+      expect(invokedBody().enableAgents).toBe(false);
     });
 
     // No endpoint enumerates the valid ids, so a dropped id must be reported or a typo is
@@ -1171,7 +1162,7 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       expect(invokedBody().tools).toEqual([]);
-      expect(invokedBody().enableQuestMaster).toBe(false);
+      expect(invokedBody().enableAgents).toBe(false);
       expect(res._getJSONData().tools).toBeUndefined();
     });
 
@@ -1239,10 +1230,11 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       await handler(req, res);
       expect(invokedBody()).toMatchObject({
         tools: ['web_search'],
-        enableQuestMaster: true,
         enableMementos: true,
         enableAgents: true,
       });
+      // The legacy full-capability default no longer includes the retired QuestMaster plan.
+      expect(invokedBody()).not.toHaveProperty('enableQuestMaster');
     });
 
     // The unchanged legacy path (what the voice agent_request portal sends): enableTools with
@@ -1262,7 +1254,6 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       await handler(req, res);
       expect(invokedBody()).toMatchObject({
         tools: [],
-        enableQuestMaster: false,
         enableMementos: false,
         enableAgents: false,
       });
@@ -1511,73 +1502,26 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     expect(res._getJSONData().promptDetails).toEqual(DETAILS);
   });
 
-  it('carries the server admission id into the blocking process body', async () => {
-    const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
-    await handler(req, res);
-    expect(res._getStatusCode()).toBe(200);
-    expect(mockProcess).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({ questMasterStartId: 'server-admitted-start', questAdmittedAs: 'free' }),
-      })
-    );
-  });
-
-  it('ignores client-supplied admission fields on the blocking path', async () => {
-    const { req, res } = fire({
-      body: {
-        message: 'hello',
-        sessionId: 'sess-1',
-        wait: true,
-        questMasterStartId: 'client-forged',
-        questAdmittedAs: 'subscriber',
-      },
-    });
-    await handler(req, res);
-    expect(res._getStatusCode()).toBe(200);
-    expect(mockProcess).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({ questMasterStartId: 'server-admitted-start', questAdmittedAs: 'free' }),
-      })
-    );
-  });
-
-  it.each([true, false])('returns a typed allowance refusal without processing (wait=%s)', async wait => {
-    mockInvoke.mockRejectedValueOnce(
-      new ForbiddenError('Free quest already started', {
-        errorCode: 'free_quest_limit_reached',
-      })
-    );
-    const { req, res } = fire({
-      body: { message: 'hello', sessionId: 'sess-1', wait, enableTools: true, enableQuestMaster: true },
-    });
-    await handler(req, res);
-    expect(res._getStatusCode()).toBe(403);
-    expect(res._getJSONData()).toMatchObject({ errorCode: 'free_quest_limit_reached' });
-    expect(mockInvoke).toHaveBeenCalledTimes(1);
-    expect(mockProcess).not.toHaveBeenCalled();
-  });
-
+  // enableQuestMaster is deprecated and ignored: the in-chat plan is retired, so a legacy caller
+  // that still sends it gets an ordinary turn, and nothing about the plan reaches invoke or process.
   it.each([true, false])(
-    'runs legacy tools without QuestMaster after the free start is spent (wait=%s)',
+    'runs an ordinary turn for a request that still sends enableQuestMaster (wait=%s)',
     async wait => {
-      mockInvoke.mockImplementationOnce(async ({ body }) => {
-        expect(body.enableQuestMaster).toBe(true);
-        throw new ForbiddenError('Free quest already started', { errorCode: 'free_quest_limit_reached' });
+      const { req, res } = fire({
+        body: { message: 'hello', sessionId: 'sess-1', wait, enableTools: true, enableQuestMaster: true },
       });
-      const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait, enableTools: true } });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
-      expect(mockInvoke).toHaveBeenCalledTimes(2);
-      expect(mockInvoke).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          body: expect.objectContaining({ enableQuestMaster: false, enableMementos: true, enableAgents: true }),
-        })
-      );
-      expect(mockDeleteSession).not.toHaveBeenCalled();
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+      const invoked = (mockInvoke.mock.calls[0][0] as { body: Record<string, unknown> }).body;
+      expect(invoked).not.toHaveProperty('enableQuestMaster');
+      expect(invoked).toMatchObject({ enableMementos: true, enableAgents: true });
       if (wait) {
-        expect(mockProcess).toHaveBeenCalledWith(
-          expect.objectContaining({ body: expect.objectContaining({ enableQuestMaster: false }) })
-        );
+        const processed = (mockProcess.mock.calls[0][0] as { body: Record<string, unknown> }).body;
+        expect(processed).not.toHaveProperty('enableQuestMaster');
+        expect(processed).not.toHaveProperty('questMasterStartId');
+        expect(processed).not.toHaveProperty('questAdmittedAs');
+        expect(processed).not.toHaveProperty('questMaster');
       } else {
         expect(mockProcess).not.toHaveBeenCalled();
       }

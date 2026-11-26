@@ -7,6 +7,7 @@ import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -99,6 +100,7 @@ beforeEach(() => {
   );
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
+      host: chatBackedHostBridge(),
       chat: quietBridge({
         listSessions: async () => listed,
         createSession: (request?: { mode?: string }) => createSession(request),
@@ -118,6 +120,8 @@ beforeEach(() => {
         },
       }),
       sidebar: quietBridge({ getSections: async () => EMPTY_SIDEBAR_SECTIONS }),
+      auth: quietBridge({ getState: async () => null }),
+      productions: quietBridge({ list: async () => ({ ok: true, value: { items: [], nextSkip: null } }) }),
       // No Studio bridge: the place frame must still draw, with the pane saying it is not connected.
       studio: undefined,
       getAppInfo: () => new Promise(() => {}),
@@ -236,12 +240,12 @@ describe('places on the rail', () => {
     expect(find('studio-productions-empty')).not.toBeNull();
   });
 
-  it('draws Studio as a place: the media in the sidebar, Create in its own Studio session', async () => {
+  it('draws Studio as a place like web Studio: no sidebar, the medium rail in the pane, Create in its own Studio session', async () => {
     await mount();
     await act(async () => el('place-rail-studio-btn').click());
     expect(find('sidebar')).toBeNull();
-    expect(el('sidebar-place-title').textContent).toBe('Studio');
-    expect(find('studio-sidebar-image-btn')).not.toBeNull();
+    expect(find('sidebar-place-title')).toBeNull();
+    expect(find('studio-medium-rail')).not.toBeNull();
     expect(el('studio-area-create').getAttribute('aria-selected')).toBe('true');
     expect(find('studio-create')).not.toBeNull();
     // Create no longer borrows the Chat conversation, so it no longer names one.
@@ -305,10 +309,10 @@ describe('places on the rail', () => {
     expect(find('sidebar')).toBeNull();
     expect(find('place-rail')).not.toBeNull();
     // The digit chord only switches place; the sidebar stays as it was.
-    await press({ key: '3', code: 'Digit3', ctrlKey: true });
-    expect(find('studio-sidebar')).toBeNull();
+    await press({ key: '2', code: 'Digit2', ctrlKey: true });
+    expect(find('sidebar')).toBeNull();
     await press({ key: 'b', code: 'KeyB', metaKey: true });
-    expect(find('studio-sidebar')).not.toBeNull();
+    expect(find('sidebar')).not.toBeNull();
   });
 
   it('reopens a collapsed sidebar from any rail icon, and hides it from the active one', async () => {

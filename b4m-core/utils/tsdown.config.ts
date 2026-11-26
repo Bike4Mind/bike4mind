@@ -38,6 +38,7 @@ export default defineConfig({
     // database repositories, migration scripts) import it without dragging the whole utils
     // barrel - which reaches artifactParser and other modules - into their graph or tests.
     'src/security/index.ts',
+    'src/security/testing.ts',
     // Kind-agnostic provider interface, registry and errors shared by videoProviders and musicProviders. Own entry
     // so a music job can import the shared error classes without pulling in the video adapters.
     'src/generationProviders/index.ts',

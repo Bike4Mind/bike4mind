@@ -1,5 +1,5 @@
 import { parse as shellParse } from 'shell-quote';
-import { classifyCommandRisk, INTERPRETERS, NETWORK_FETCHERS } from './commandRisk.js';
+import { classifyCommandRisk, INTERPRETERS, isComment, NETWORK_FETCHERS, scanShellCommand } from './commandRisk.js';
 
 /**
  * Session approval scope for shell commands. An "allow for this session" answer on a shell tool
@@ -303,7 +303,7 @@ function optionsAreReadOnly(args: readonly string[], grammar: OptionGrammar): bo
 
 /** Options controlling how a deliberately approved build/script executes still need a fresh ask. */
 const REFUSED_OPTIONS: Readonly<Record<string, { long: readonly string[]; short?: string }>> = {
-  go: { long: ['-exec', '-toolexec', '-vettool'] },
+  go: { long: ['-exec', '--exec', '-toolexec', '--toolexec', '-vettool', '--vettool'] },
   cargo: { long: ['--config'] },
 };
 
@@ -509,13 +509,15 @@ export function sessionCommandPrefixes(command: string): string[] | null {
   const text = command.replace(/\s+$/, '');
   if (text.length === 0) return null;
   if (hasShellExpansion(text)) return null;
-  if (/[\n\r`]/.test(text) || text.includes('$(') || text.includes('<(') || text.includes('>(')) return null;
+  // Bash splits words only on space and tab; any other whitespace would tokenize differently.
+  if (/[^\S \t]/.test(text) || /`/.test(text) || text.includes('$(') || text.includes('<(') || text.includes('>('))
+    return null;
   if (classifyCommandRisk(text).level === 'high') return null;
 
   let tokens: ShellToken[];
   try {
     // Expansions were rejected above; retain the callback as a fail-closed parsing guard.
-    tokens = shellParse(text, key => `$${key}`);
+    tokens = shellParse(scanShellCommand(text).text, key => `$${key}`);
   } catch {
     return null;
   }
@@ -530,6 +532,8 @@ export function sessionCommandPrefixes(command: string): string[] | null {
     words = [];
     return true;
   };
+
+  if (tokens.some(isComment)) return null;
 
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];

@@ -3,7 +3,7 @@
  *
  * Shared object-level authorization for routes that act on a caller-supplied
  * session id (or a quest id, which is bound to a session). Mirrors the
- * questMasterPlanAccess.ts convention: throw typed HTTPError subclasses that
+ * convention the plan access helper used: throw typed HTTPError subclasses that
  * baseApi's errorHandler maps to a status code.
  *
  * canAccessSession's write arm delegates to canUpdateShareable (the same predicate the chat path

@@ -21,13 +21,16 @@ import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.edit
 import androidx.lifecycle.lifecycleScope
+import com.bike4mind.app.calendar.BusyBlockSyncWorker
 import com.bike4mind.app.ui.AppRoot
 import com.bike4mind.app.ui.B4MTheme
 import com.bike4mind.kit.links.IncomingUri
 import com.bike4mind.kit.links.PendingRoute
 import com.bike4mind.kit.links.Route
 import com.bike4mind.kit.push.PushRoute
+import com.bike4mind.kit.shortcuts.AppShortcut
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
@@ -76,6 +79,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // The user may have changed the notification setting while the app was away.
         syncNotificationPermission()
+        syncBusyBlocks()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -84,6 +88,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
+        // A launcher shortcut (res/xml/shortcuts.xml) waits through sign-in like a link.
+        AppShortcut.fromAction(intent?.action)?.let { return open(it.route) }
         val uri = intent?.data?.toString() ?: return handlePushTap(intent)
         val graph = (application as B4MApplication).graph.value ?: return
         when (val incoming = IncomingUri.classify(uri, graph.oauth, graph.environment.baseUrl)) {
@@ -153,6 +159,12 @@ class MainActivity : ComponentActivity() {
         val graph = (application as B4MApplication).graph.value ?: return
         val allowed = NotificationManagerCompat.from(this).areNotificationsEnabled()
         lifecycleScope.launch { graph.push.onNotificationsAllowed(allowed) }
+    }
+
+    // The calendar may have changed while the app was away; the syncer's throttle absorbs quick re-resumes.
+    private fun syncBusyBlocks() {
+        val graph = (application as B4MApplication).graph.value ?: return
+        lifecycleScope.launch(Dispatchers.IO) { BusyBlockSyncWorker.syncInForeground(applicationContext, graph) }
     }
 
     /** Android 13+ needs a runtime grant; ask at the first signed-in moment, once per install. */

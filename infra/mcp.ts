@@ -34,7 +34,7 @@ export const mcpHandler = new sst.aws.Function('mcpHandler', {
     // new runtime dependency; infra/__tests__/mcpInstallCoverage.test.ts checks it
     // against the copied packages' package.json; deps deliberately left out, and
     // why, are its NOT_INSTALLED list.
-    install: ['@modelcontextprotocol/sdk', '@octokit/rest', 'zod', 'dayjs', 'unzipper', 'axios', 'yaml'],
+    install: ['@modelcontextprotocol/sdk', '@octokit/rest', 'zod', 'dayjs', 'jszip', 'axios', 'yaml'],
     esbuild: {
       // Mark workspace packages as external to prevent bundling, allowing runtime resolution
       external: ['@bike4mind/mcp', '@bike4mind/common'],

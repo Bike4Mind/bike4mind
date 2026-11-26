@@ -47,7 +47,8 @@ import { openedAs, sealedAs, versionedCipher } from '../secrets/versionedCipher.
 import { machineView } from '../models/fit';
 import { LOCAL_NETWORK_HINT, localNetworkHint, withLocalNetworkHint } from './localNetworkHint';
 import type { FetchLike, OllamaEnvironment, OpenAICompatibleProduct } from '@bike4mind/local-models';
-import type { SecretCipher, StoreFile } from '../chat/mcp/McpServerStore';
+import type { StoreFile } from '../chat/mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
 import * as chat from '@shared/chat';
 import type { ChatModelOption } from '@shared/chat';
 import type { ProcessProbe } from './adoptedServers';
@@ -3719,7 +3720,7 @@ describe('credentials never leak', () => {
       return reply;
     };
 
-    const listModels = async () => out.ipc(`reply ${IPC_CHANNELS.chatListModels}`, await local.models());
+    const listModels = async () => out.ipc('reply chat:list-models', await local.models());
 
     /** A chat turn as ChatService runs it: events go to the renderer, a failure's message to the log, renderer and history. */
     const chat = async (model: string, signal?: AbortSignal) => {

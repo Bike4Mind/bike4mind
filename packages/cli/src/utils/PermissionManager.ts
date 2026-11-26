@@ -25,6 +25,8 @@ export class PermissionManager {
   private sessionTrustedTools: Set<string> = new Set();
   /** toolName -> command scopes approved for the session (see trustCommandForSession). */
   private sessionTrustedCommands: Map<string, Set<string>> = new Map();
+  /** toolName -> exact command texts approved for the session (see trustExactCommandForSession). */
+  private sessionTrustedExactCommands: Map<string, Set<string>> = new Map();
   private deniedTools: Set<string> = new Set();
   private _sandboxMode: SandboxMode = 'disabled';
   private _sandboxActive = false;
@@ -139,7 +141,9 @@ export class PermissionManager {
    * Get list of all trusted tools
    */
   getTrustedTools(): string[] {
-    return Array.from(this.trustedTools).sort();
+    return Array.from(this.trustedTools)
+      .filter(toolName => this.catalog.canTrust(toolName))
+      .sort();
   }
 
   /**
@@ -230,6 +234,24 @@ export class PermissionManager {
   }
 
   /**
+   * Trust, for the current session, later calls of this tool with exactly this command text run
+   * in this directory. Used where the command does not come from the model (lifecycle hooks), so
+   * it is never scoped.
+   */
+  trustExactCommandForSession(toolName: string, command: string, cwd: string): boolean {
+    if (this.deniedTools.has(toolName)) return false;
+    const approved = this.sessionTrustedExactCommands.get(toolName) ?? new Set<string>();
+    approved.add(JSON.stringify([cwd, command]));
+    this.sessionTrustedExactCommands.set(toolName, approved);
+    return true;
+  }
+
+  isExactCommandSessionTrusted(toolName: string, command: string, cwd: string): boolean {
+    if (this.deniedTools.has(toolName)) return false;
+    return this.sessionTrustedExactCommands.get(toolName)?.has(JSON.stringify([cwd, command])) ?? false;
+  }
+
+  /**
    * Check if a tool is trusted for the current session
    */
   isSessionTrusted(toolName: string): boolean {
@@ -251,6 +273,7 @@ export class PermissionManager {
   clearSessionTrust(): void {
     this.sessionTrustedTools.clear();
     this.sessionTrustedCommands.clear();
+    this.sessionTrustedExactCommands.clear();
     this.sandboxEscalationApprovals.clear();
   }
 

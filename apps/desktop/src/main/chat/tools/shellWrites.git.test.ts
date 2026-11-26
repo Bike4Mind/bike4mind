@@ -215,6 +215,39 @@ describe('signing config queries', () => {
     }
   });
 
+  it('gives a --config-env value to git under a name of its own, never the one the script chose', async () => {
+    const traced = join(base, 'config-env-trace');
+    expect(await gitPrettyConfig(repo, call(['--config-env=format.pretty=GIT_TRACE'], { GIT_TRACE: traced }))).toEqual([
+      { key: 'format.pretty', value: traced },
+    ]);
+    expect(existsSync(traced)).toBe(false);
+  });
+
+  it('keeps each --config-env value apart when one variable is named twice', async () => {
+    const settings = ['--config-env=format.pretty=ONE', '--config-env=pretty.a=ONE', '--config-env=pretty.b=TWO'];
+    expect(await gitPrettyConfig(repo, call(settings, { ONE: 'one', TWO: 'two' }))).toEqual([
+      { key: 'format.pretty', value: 'one' },
+      { key: 'pretty.a', value: 'one' },
+      { key: 'pretty.b', value: 'two' },
+    ]);
+  });
+
+  it('runs no query for a script variable outside the config locations', async () => {
+    expect(await gitSigningConfig(repo, call([], { LD_PRELOAD: join(base, 'lib.so') }))).toBeNull();
+    expect(await gitSigningConfig(repo, call([], { B4M_CONFIG_ENV_0: 'true' }))).toBeNull();
+  });
+
+  it('writes no trace2 output a config file the script points at asks for', async () => {
+    const traced = join(base, 'trace2-target');
+    const global = join(base, 'trace2-config');
+    writeFileSync(
+      global,
+      `[trace2]\n\tnormalTarget = ${traced}\n\teventTarget = ${traced}\n\tperfTarget = ${traced}\n`
+    );
+    expect(await gitSigningConfig(repo, call([], { GIT_CONFIG_GLOBAL: global }))).toEqual([]);
+    expect(existsSync(traced)).toBe(false);
+  });
+
   it('fails the query for a --config-env variable it is not given', async () => {
     expect(await gitSigningConfig(repo, call(['--config-env', 'commit.gpgsign=SIGNV_NONE']))).toBeNull();
     expect(await gitPrettyConfig(repo, call(['--config-env=format.pretty=SIGNV_NONE']))).toBeNull();

@@ -1,5 +1,5 @@
 import { type IMongoDocument } from '.';
-import { type ApiKeyScopeValue } from './UserApiKeyTypes';
+import { ApiKeyScope, type ApiKeyScopeValue, CONFINED_API_KEY_SCOPES } from './UserApiKeyTypes';
 
 export type ConnectionSource = 'cli' | 'web';
 
@@ -34,6 +34,23 @@ export interface IConnection {
   /** When reauth_connection last re-stamped the row. Subscriber entries older than this were made
    *  under the previous token, and the sweep drops them. */
   reauthAt?: Date;
+}
+
+/** Key scopes whose socket receives the user's own pushes: chat streams, notifications, Keep commands. */
+export const USER_FANOUT_API_KEY_SCOPES: readonly ApiKeyScopeValue[] = [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE];
+
+/**
+ * Whether a socket gets the frames fanned out to every connection of its user (sendToClient in
+ * packages/server-utils/src/websocket/utils.ts and ClientMessageSender in b4m-core/utils). A JWT
+ * socket records no scopes and always does; an API-key socket does only when its key holds one of
+ * {@link USER_FANOUT_API_KEY_SCOPES} and no confined scope. Frames meant for one socket go through
+ * sendToConnection and are unaffected.
+ */
+export function receivesUserFanout(connection: Pick<IConnection, 'scopes'>): boolean {
+  const held = connection.scopes;
+  if (!held?.length) return true;
+  if (held.some(scope => (CONFINED_API_KEY_SCOPES as readonly ApiKeyScopeValue[]).includes(scope))) return false;
+  return USER_FANOUT_API_KEY_SCOPES.some(scope => held.includes(scope));
 }
 
 export interface IConnectionDocument extends Omit<IConnection, 'userId'>, IMongoDocument {

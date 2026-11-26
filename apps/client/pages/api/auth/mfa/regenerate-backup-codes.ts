@@ -29,7 +29,7 @@ const handler = baseApi({ auth: 'jwtOnly' })
 
         res.json({ backupCodes: result.backupCodes });
       } catch (error: any) {
-        console.error('Error regenerating backup codes:', error);
+        req.logger.error('Error regenerating backup codes', { error });
         res.status(400).json({ error: error.message || 'Failed to regenerate backup codes' });
       }
     })

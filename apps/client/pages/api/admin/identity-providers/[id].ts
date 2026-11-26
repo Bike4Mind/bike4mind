@@ -1,4 +1,9 @@
-import { identityProviderRepository, withTransaction, type IIdentityProviderDocument } from '@bike4mind/database';
+import {
+  identityProviderRepository,
+  isSameOktaAudience,
+  withTransaction,
+  type IIdentityProviderDocument,
+} from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
@@ -29,6 +34,7 @@ function diffIdentityProvider(existing: IIdentityProviderDocument, updated: IIde
 
 const handler = adminApi({
   adminPermissions: { GET: 'settings:manage', PUT: 'settings:manage', DELETE: 'settings:manage' },
+  fullAdminMethods: ['PUT'],
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(async (req, res) => {
@@ -47,7 +53,7 @@ const handler = adminApi({
 
       return respond(res, identityProviderResponseSchema, idp);
     } catch (error) {
-      console.error('Error fetching identity provider:', error);
+      req.logger.error('Error fetching identity provider', { error });
       if (error instanceof NotFoundError) {
         return res.status(404).json({ error: error.message });
       }
@@ -79,6 +85,17 @@ const handler = adminApi({
         const existing = await identityProviderRepository.findById(id);
         if (!existing) {
           throw new NotFoundError('Identity provider not found');
+        }
+
+        // updateIDP drops a stored secret whose audience changed; ask for it instead of saving a
+        // provider that can no longer sign anyone in.
+        if (
+          oktaConfig &&
+          !oktaConfig.clientSecret &&
+          existing.oktaConfig?.audience &&
+          !isSameOktaAudience(oktaConfig.audience, existing.oktaConfig.audience)
+        ) {
+          throw new BadRequestError('Re-enter the client secret when changing the Okta audience');
         }
 
         const updated = await identityProviderRepository.updateIDP(id, {
@@ -117,7 +134,7 @@ const handler = adminApi({
 
       return respond(res, identityProviderResponseSchema, updatedIdp);
     } catch (error) {
-      console.error('Error updating identity provider:', error);
+      req.logger.error('Error updating identity provider', { error });
       if (error instanceof NotFoundError) {
         return res.status(404).json({ error: error.message });
       }
@@ -161,7 +178,7 @@ const handler = adminApi({
 
       return res.json({ success: true, message: 'Identity provider deleted successfully' });
     } catch (error) {
-      console.error('Error deleting identity provider:', error);
+      req.logger.error('Error deleting identity provider', { error });
       if (error instanceof NotFoundError) {
         return res.status(404).json({ error: error.message });
       }

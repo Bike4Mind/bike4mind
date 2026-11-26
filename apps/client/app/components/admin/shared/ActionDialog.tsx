@@ -79,6 +79,9 @@ export type ActionDialogProps = {
  * The one dialog for audited admin writes (DESIGN_GUIDE.md section 4), built on the AdminDialog
  * shell, which supplies the focus trap, Esc to close and focus return to the opener.
  */
+// The expected value renders as inline code, which collapses whitespace runs, so match what the admin sees.
+const collapseWhitespace = (value: string) => value.replace(/\s+/g, ' ').trim();
+
 export const ActionDialog: React.FC<ActionDialogProps> = props =>
   props.open ? <ActionDialogForm key={props.formKey} {...props} /> : null;
 
@@ -111,7 +114,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
 
-  const typedMatches = !typedConfirm || typedValue.trim() === typedConfirm.expected;
+  const typedMatches = !typedConfirm || collapseWhitespace(typedValue) === collapseWhitespace(typedConfirm.expected);
   const baseHint =
     (reasonRequired && !isAdminReasonComplete(reason, reasonMinLength) ? adminReasonHint(reasonMinLength) : null) ??
     (!typedMatches && typedConfirm ? `Type the ${typedConfirm.noun} exactly to confirm.` : null);
@@ -202,7 +205,7 @@ const ActionDialogForm: React.FC<ActionDialogProps> = ({
                     sx={{ display: 'inline' }}
                     data-testid={`${testId}-typed-expected`}
                   >
-                    {typedConfirm.expected}
+                    {collapseWhitespace(typedConfirm.expected)}
                   </Typography>{' '}
                   to confirm.
                   <Typography

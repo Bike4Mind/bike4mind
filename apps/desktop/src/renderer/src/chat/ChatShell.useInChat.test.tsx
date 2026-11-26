@@ -9,6 +9,7 @@ import { installedCache } from '../models/installedCache';
 import type { ChatWith } from '../models/modelTarget';
 import { desktopTheme } from '../theme';
 import { ChatShell } from './ChatShell';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -132,6 +133,7 @@ const deleteSession = vi.fn(async () => undefined);
 function stubBridge() {
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
+      host: chatBackedHostBridge(),
       chat: quietBridge({
         defaultsForNewSession: async () => ({ model: HOSTED, approvalMode: 'auto', reasoningEffort: 'default' }),
         listSessions: async () => [summary('old-1', HOSTED)],
@@ -260,7 +262,7 @@ describe('Use in chat', () => {
     await act(async () => offered?.('local', 'qwen3.5:0.8b')?.());
     expect(createSession).not.toHaveBeenCalled();
     await sendDraft();
-    expect(deleteSession).toHaveBeenCalledWith('fresh-1');
+    expect(deleteSession).toHaveBeenCalledWith('fresh-1', false);
     expect(document.querySelector('[data-testid="chat-send-error"]')?.textContent).toContain('draft settings');
     createSession.mockRejectedValueOnce(new Error('disk full'));
     await sendDraft();
@@ -273,7 +275,7 @@ describe('Use in chat', () => {
     await openModels();
     await act(async () => offered?.('local', 'qwen3.5:0.8b')?.());
     await sendDraft();
-    expect(deleteSession).toHaveBeenCalledWith('fresh-1');
+    expect(deleteSession).toHaveBeenCalledWith('fresh-1', false);
     expect(document.querySelector('[data-testid="chat-send-error"]')?.textContent).toContain(
       'Could not remove the unsent'
     );

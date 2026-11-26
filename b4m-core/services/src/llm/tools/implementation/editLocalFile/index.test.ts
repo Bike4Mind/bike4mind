@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { promises, existsSync } from 'fs';
-import { mkdtemp, writeFile, readFile, rm } from 'fs/promises';
+import { mkdir, mkdtemp, writeFile, readFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { createHash } from 'crypto';
@@ -63,6 +63,20 @@ describe('editLocalFile: authorization precedes any content read (path-auth bypa
       /Access denied/
     );
     expect(readSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('editLocalFile: git directories are not writable', () => {
+  it('refuses to edit .git/config inside an allowed directory and leaves it unchanged', async () => {
+    const allowed = await freshDir('b4m-allowed-');
+    await mkdir(join(allowed, '.git'));
+    const config = join(allowed, '.git', 'config');
+    await writeFile(config, '[core]\n\tbare = false\n');
+
+    await expect(
+      editTool([allowed]).toolFn({ path: config, old_string: 'bare = false', new_string: 'fsmonitor = runner' })
+    ).rejects.toThrow(/inside a \.git directory/);
+    expect(await readFile(config, 'utf8')).toBe('[core]\n\tbare = false\n');
   });
 });
 

@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import {
   FUNCTION_CONTRACT_LIMITS,
@@ -20,10 +23,12 @@ import {
   classifyGuestError,
   liveCallableFunctionChildren,
   runCallableFunctionInChild,
+  runTimeoutAfterDownload,
   sweepCallableFunctionChildren,
   type CallableFunctionLimits,
   type CallableFunctionRunPayload,
 } from './runtimeParent';
+import { CALLABLE_FUNCTION_DATA_DOWNLOAD_BUDGET_MS } from './runtimeData';
 
 vi.mock('node:child_process', async importOriginal => {
   const actual = await importOriginal<typeof import('node:child_process')>();
@@ -355,6 +360,81 @@ describe('runCallableFunctionInChild', () => {
   it("never sizes the Lambda past Lambda's 900 s maximum", () => {
     expect(CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS).toBeLessThanOrEqual(900);
   });
+
+  it("counts the data download against the call's own limit, so download and run never pass it", () => {
+    const ceiling = CALLABLE_FUNCTION_LIMITS.timeoutMs;
+    const lastMs = CALLABLE_FUNCTION_LAMBDA_TIMEOUT_SECONDS * 1000 - CALLABLE_FUNCTION_PARENT_MARGIN_MS;
+    for (const timeoutMs of [1000, CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS, ceiling]) {
+      // The download's own budget is the smaller of its cap and the call's limit.
+      const budgetMs = Math.min(CALLABLE_FUNCTION_DATA_DOWNLOAD_BUDGET_MS, timeoutMs);
+      for (const downloadMs of [0, 1, budgetMs / 2, budgetMs]) {
+        const runMs = runTimeoutAfterDownload(timeoutMs, downloadMs);
+        expect(downloadMs + runMs).toBeLessThanOrEqual(timeoutMs);
+        expect(downloadMs + CALLABLE_FUNCTION_START_BUDGET_MS + runMs).toBeLessThanOrEqual(lastMs);
+      }
+    }
+    expect(runTimeoutAfterDownload(CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS, 20_000)).toBe(10_000);
+    expect(runTimeoutAfterDownload(1000, 1500)).toBe(0);
+  });
+
+  it('ends a call whose cold download stalls as a timeout within its own limit, not the ceiling', async () => {
+    const dataCacheDir = mkdtempSync(path.join(tmpdir(), 'fn-data-stall-'));
+    const csv = Buffer.from('x,y\n1,2\n');
+    const data = [
+      {
+        name: 'points.csv',
+        prefix: 'fn1',
+        sha256: createHash('sha256').update(csv).digest('hex'),
+        bytes: csv.length,
+        url: 'https://data.example.com/signed',
+      },
+    ];
+    const fetchData = async (_url: string, { signal }: { signal: AbortSignal }) =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            signal.addEventListener('abort', () => controller.error(signal.reason));
+          },
+        })
+      );
+    // The dispatcher waits the call's limit plus the start budget and margin; the runtime must be done before that.
+    const result = await runCallableFunctionInChild(
+      { ...timed(reply({}), 1500), data },
+      { childPath: CHILD, pyodideDir: FIXTURES, limits: { timeoutMs: 60_000 }, dataCacheDir, fetchData }
+    );
+    expect(result.outcome).toBe('timeout');
+    expect(result.startMs).toBeUndefined();
+    expect(result.durationMs).toBeGreaterThanOrEqual(1400);
+    expect(result.durationMs).toBeLessThan(1500 + CALLABLE_FUNCTION_PARENT_MARGIN_MS);
+    expect(spawn).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it('leaves the run only what the download left of the call limit', async () => {
+    const dataCacheDir = mkdtempSync(path.join(tmpdir(), 'fn-data-parent-'));
+    const csv = Buffer.from('x,y\n1,2\n');
+    const data = [
+      {
+        name: 'points.csv',
+        prefix: 'fn1',
+        sha256: createHash('sha256').update(csv).digest('hex'),
+        bytes: csv.length,
+        url: 'https://data.example.com/signed',
+      },
+    ];
+    const fetchData = async (_url: string, { signal }: { signal: AbortSignal }) => {
+      await sleep(1500, undefined, { signal });
+      return new Response(new Uint8Array(csv));
+    };
+    const result = await runCallableFunctionInChild(
+      { ...timed({ mode: 'hang' }, 3000), data },
+      { childPath: CHILD, pyodideDir: FIXTURES, limits: { timeoutMs: 10_000 }, dataCacheDir, fetchData }
+    );
+    expect(result.outcome).toBe('timeout');
+    expect(result.startMs).toBeDefined();
+    // From the download's start to the run's end, which without the count would be about 4.5 s.
+    expect(runMs(result)).toBeGreaterThanOrEqual(3000);
+    expect(runMs(result)).toBeLessThan(4000);
+  }, 30_000);
 
   it.runIf(process.platform === 'linux' || process.platform === 'darwin')(
     'kills a child over the memory cap',

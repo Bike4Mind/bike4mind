@@ -36,7 +36,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 
 ## Summary
 
-1292 routes: 139 contracted, 11 aliases of another route, 360 with no static caller in `apps/client/app`.
+1294 routes: 139 contracted, 11 aliases of another route, 360 with no static caller in `apps/client/app`.
 
 | Area | Routes | Contracted | jwt+key | jwt | optional | handler | No static caller |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -59,7 +59,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | blog-integration | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | briefcase | 3 | 0 | 3 | 0 | 0 | 0 | 0 |
 | business-links | 5 | 0 | 5 | 0 | 0 | 0 | 0 |
-| callable-functions | 11 | 0 | 0 | 11 | 0 | 0 | 0 |
+| callable-functions | 13 | 0 | 0 | 13 | 0 | 0 | 0 |
 | cc-bridge | 6 | 0 | 5 | 0 | 0 | 1 | 4 |
 | chat | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
 | chat-completion-status | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
@@ -123,8 +123,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | publish | 21 | 0 | 11 | 1 | 6 | 3 | 10 |
 | pyodide-sandbox | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | qa | 2 | 0 | 2 | 0 | 0 | 0 | 2 |
-| quest-master-plans | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| quest-plans | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | quests | 5 | 0 | 4 | 1 | 0 | 0 | 0 |
 | react-artifact-sandbox | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
 | referrals | 3 | 0 | 0 | 2 | 0 | 1 | 1 |
@@ -133,7 +131,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | roll | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
 | search-image | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | security | 5 | 0 | 4 | 1 | 0 | 0 | 1 |
-| sessions | 30 | 1 | 27 | 2 | 0 | 1 | 4 |
+| sessions | 29 | 1 | 26 | 2 | 0 | 1 | 3 |
 | settings | 7 | 0 | 4 | 0 | 0 | 3 | 1 |
 | skills | 22 | 0 | 3 | 19 | 0 | 0 | 0 |
 | sky-greeting | 1 | 0 | 0 | 0 | 0 | 1 | 0 |
@@ -758,6 +756,8 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/callable-functions` | GET, POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]` | GET, PATCH, DELETE | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/calls` | GET | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/[id]/data` | POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
+| `/api/callable-functions/[id]/data/[name]` | GET, DELETE | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/examples` | PUT | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/grants` | GET, PUT, DELETE | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
 | `/api/callable-functions/[id]/pin` | POST | jwt | - | - | no | - | 1: `hooks/data/callableFunctions.ts` |
@@ -1479,19 +1479,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/qa/runs` | POST | jwt+key | `qa:ingest` | - | no | - | 0 |
 | `/api/qa/uploads` | POST | jwt+key | `qa:ingest` | - | no | - | 0 |
 
-### quest-master-plans
-
-| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/quest-master-plans/[id]` | GET | jwt+key | - | - | no | - | 1: `hooks/data/quests.ts` |
-
-### quest-plans
-
-| Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `/api/quest-plans/[id]/export` | POST | jwt+key | - | - | no | - | 1: `hooks/data/useQuestExport.ts` |
-| `/api/quest-plans/[id]/progress` | PATCH | jwt+key | - | - | no | - | 1: `hooks/data/quests.ts` |
-
 ### quests
 
 | Route | Methods | Auth | Scopes | Permissions | Contract | Alias of | Callers |
@@ -1583,7 +1570,6 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/sessions/[id]/favorite` | POST, DELETE | jwt+key | - | - | no | - | 1: `hooks/data/sessions.ts` |
 | `/api/sessions/[id]/files` | ? | handler | - | - | no | - | 1: `hooks/data/fabFileQueries.ts` |
 | `/api/sessions/[id]/generated-media` | GET | jwt | - | - | no | - | 1: `hooks/data/generatedMedia.ts` |
-| `/api/sessions/[id]/questmaster-plans` | GET | jwt+key | - | - | no | - | 0 |
 | `/api/sessions/[id]/summary` | POST | jwt+key | - | - | no | - | 1: `utils/sessionsAPICalls.ts` |
 | `/api/sessions/[id]/surface` | PATCH | jwt+key | `notebooks:write` | - | no | - | 1: `utils/sessionsAPICalls.ts` |
 | `/api/sessions/[id]/tag` | POST | jwt+key | - | - | no | - | 1: `utils/sessionsAPICalls.ts` |

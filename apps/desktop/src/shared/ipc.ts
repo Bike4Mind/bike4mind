@@ -1,8 +1,11 @@
+import type { HostBridgeApi } from './hostBridge';
+import type { HostResult } from './hostProtocol';
 import type { SkinSummary, SoundPackSummary } from './mods';
-import type { NewSessionDefaults } from './sessionDefaults';
 import type { StudioApi } from './studioIpc';
-import type { PendingTaskDecision, RolePolicy, TaskAction, TaskDecisionAnswer } from './orchestration';
-import type { AppWorktree, WorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
+import type { LibraryApi } from './library';
+import type { ProductionsApi } from './productions';
+import type { PendingTaskDecision, RolePolicy, TaskAction } from './orchestration';
+import type { AppWorktree, SessionWorktreeRemoval, WorktreeSweepItem } from './worktreeRemoval';
 import type { LoopResult, LoopState } from './loop';
 import type { RunSpend } from './runSpend';
 import type { PromptCacheTtl } from '@bike4mind/common';
@@ -39,7 +42,6 @@ import type {
 import type {
   AddAttachmentsResult,
   BackgroundProcessInfo,
-  ChatApprovalAnswer,
   ChatApprovalMode,
   ChatArtifactContent,
   ChatArtifactLibrary,
@@ -59,8 +61,6 @@ import type {
   ChatMoveToBackgroundResult,
   ChatHeldRelay,
   ChatQueueEvent,
-  ChatQueuedMessage,
-  ChatSession,
   ChatSessionMode,
   ChatSessionStatusEvent,
   ChatSessionExportResult,
@@ -70,12 +70,9 @@ import type {
   ChatVideoJob,
   ChatVideoLinkResult,
   CreateCodeSessionRequest,
-  ProjectInspection,
-  RecentFolder,
   ContextBoundaryResult,
   ReasoningEffortSetting,
   EditMessageRequest,
-  SendMessageRequest,
   SendMessageResult,
   SpawnSuggestionResult,
   StartSpawnSuggestionRequest,
@@ -148,6 +145,7 @@ import type {
 } from './models';
 import type { AccountUsageResult, LocalUsageResult, UsageWindowId } from './usage';
 import type { FleetState } from './fleet';
+import type { LaunchSignals } from './launchSignals';
 import type {
   ModelBuildReport,
   ModelCaptureRequestEvent,
@@ -174,6 +172,8 @@ import type { WatchDecision, WatchPreferences, WatchPreferencesPatch, WatchSnaps
  * anything that needs a token is a main-process job.
  */
 export const IPC_CHANNELS = {
+  hostRequest: 'host:request',
+  hostNotification: 'host:notification',
   studioGet: 'studio:get',
   studioPage: 'studio:page',
   studioJobAction: 'studio:job-action',
@@ -183,6 +183,16 @@ export const IPC_CHANNELS = {
   studioUploadReference: 'studio:upload-reference',
   studioAssetAction: 'studio:asset-action',
   studioChanged: 'studio:changed',
+  libraryPage: 'library:page',
+  libraryMedia: 'library:media',
+  libraryLocate: 'library:locate',
+  productionsList: 'productions:list',
+  productionsGet: 'productions:get',
+  productionsRename: 'productions:rename',
+  productionsReorder: 'productions:reorder',
+  productionsRenders: 'productions:renders',
+  productionsRender: 'productions:render',
+  productionsMedia: 'productions:media',
   getAppInfo: 'app:get-info',
   setTheme: 'app:set-theme',
   authGetState: 'auth:get-state',
@@ -211,7 +221,6 @@ export const IPC_CHANNELS = {
   fleetSendNow: 'fleet:send-now',
   /** main -> renderer push of the integration's state; never carries the key. */
   fleetStateChanged: 'fleet:state-changed',
-  chatListModels: 'chat:list-models',
   /** main -> renderer: a model server's slow listing finished, or late effort levels rebuilt the hosted list. */
   chatModelsChanged: 'chat:models-changed',
   chatListSuggestionModels: 'chat:list-suggestion-models',
@@ -247,8 +256,6 @@ export const IPC_CHANNELS = {
   chatSetRolePolicy: 'chat:set-role-policy',
   chatTaskAction: 'chat:task-action',
   chatListTaskDecisions: 'chat:list-task-decisions',
-  /** The user's answer on a worker's decision card. Renderer -> main only; no tool reaches it. */
-  chatAnswerTaskDecision: 'chat:answer-task-decision',
   /** main -> renderer push; the whole list of decisions workers wait on the user for. */
   chatTaskDecisions: 'chat:task-decisions',
   /**
@@ -256,33 +263,24 @@ export const IPC_CHANNELS = {
    * there is deliberately no tool, no MCP surface and no model-facing path to this channel.
    */
   chatSetApprovalMode: 'chat:set-approval-mode',
-  chatSetSessionArchived: 'chat:set-session-archived',
+  chatConfirmArchive: 'chat:confirm-archive',
   chatExportSession: 'chat:export-session',
   chatExportLocalData: 'chat:export-local-data',
   chatListSessions: 'chat:list-sessions',
   chatCreateSession: 'chat:create-session',
-  chatDraftDefaults: 'chat:draft-defaults',
-  chatCreateCodeSession: 'chat:create-code-session',
   chatUpdateProject: 'chat:update-project',
   chatPickProjectDirectory: 'chat:pick-project-directory',
-  chatListRecentFolders: 'chat:list-recent-folders',
-  chatRemoveRecentFolder: 'chat:remove-recent-folder',
-  chatInspectProject: 'chat:inspect-project',
+  chatLaunchSignals: 'chat:launch-signals',
   chatWorkspaceChanges: 'chat:workspace-changes',
   chatAddContextDirectory: 'chat:add-context-directory',
   chatRemoveContextDirectory: 'chat:remove-context-directory',
-  chatGetSession: 'chat:get-session',
-  chatRenameSession: 'chat:rename-session',
-  chatDeleteSession: 'chat:delete-session',
   chatInspectWorktreeRemoval: 'chat:inspect-worktree-removal',
   chatListWorktrees: 'chat:list-worktrees',
   chatRemoveWorktrees: 'chat:remove-worktrees',
   chatRevealWorktree: 'chat:reveal-worktree',
-  chatSendMessage: 'chat:send-message',
   chatLoopCommand: 'chat:loop-command',
   chatGetLoop: 'chat:get-loop',
   chatLoopChanged: 'chat:loop-changed',
-  chatStopReply: 'chat:stop-reply',
   chatContinueReply: 'chat:continue-reply',
   chatEditMessage: 'chat:edit-message',
   chatRegenerateReply: 'chat:regenerate-reply',
@@ -294,17 +292,13 @@ export const IPC_CHANNELS = {
   chatCompactContext: 'chat:compact-context',
   chatSuggestNextPrompt: 'chat:suggest-next-prompt',
   chatGetRunSpend: 'chat:get-run-spend',
-  chatGetQueued: 'chat:get-queued',
-  chatCancelQueued: 'chat:cancel-queued',
   chatGetHeldRelays: 'chat:get-held-relays',
   chatResolveHeldRelay: 'chat:resolve-held-relay',
-  chatSendQueuedNow: 'chat:send-queued-now',
   /** main -> renderer push; one session's queue of typed-ahead messages changed. */
   chatQueueChanged: 'chat:queue-changed',
   chatStartSpawnSuggestion: 'chat:start-spawn-suggestion',
   chatStartSideChat: 'chat:start-side-chat',
   chatDismissSpawnSuggestion: 'chat:dismiss-spawn-suggestion',
-  chatRespondToApproval: 'chat:respond-to-approval',
   chatPickAttachments: 'chat:pick-attachments',
   chatAddAttachments: 'chat:add-attachments',
   chatReadAttachment: 'chat:read-attachment',
@@ -786,8 +780,8 @@ export interface BrowserTabRequest {
 /** The request half of starting a session; see CreatedSession for the reply. */
 export interface CreateSessionRequest {
   /**
-   * The user sidebar section the new session belongs to. Main assigns it right after minting the
-   * id and before replying, so the row never shows in the default groups first.
+   * The user sidebar section the new session belongs to. The renderer places the new session in it
+   * right after the host creates it, before the row first shows.
    */
   sectionId?: string;
   /** Omitted means Chat. Code sessions start through their own request; see CreateCodeSessionRequest. */
@@ -807,11 +801,17 @@ export interface CreatedSession {
   placementFailed?: boolean;
 }
 
+/** What session/setArchived asks before archiving a parent with sub-sessions. */
+export type ArchiveQuestion = NonNullable<HostResult<'session/setArchived'>['confirmationRequired']>;
+
+/** The user's yes, with the finished sub-sessions they chose to archive along with the parent. */
+export type ArchiveAnswer = { confirmed: true; archiveChildIds: string[] };
+
 /** A Code session's create request, plus the same optional section the Chat one takes. */
-export type CreateCodeSessionIpcRequest = CreateCodeSessionRequest & CreateSessionRequest;
+export type PlacedCodeSessionRequest = CreateCodeSessionRequest & CreateSessionRequest;
 
 /** A Code session's create reply - `ok: false` never carries placement. */
-export type CreateCodeSessionIpcResult = ({ ok: true } & CreatedSession) | { ok: false; error: string };
+export type PlacedCodeSessionResult = ({ ok: true } & CreatedSession) | { ok: false; error: string };
 
 /** The whole surface exposed on `window.b4m`. Mirrored in src/preload/index.d.ts. */
 /**
@@ -844,6 +844,9 @@ export interface OrchestrateMiniApi {
 
 export interface DesktopApi {
   studio: StudioApi;
+  host: HostBridgeApi;
+  library: LibraryApi;
+  productions: ProductionsApi;
   getAppInfo(): Promise<AppInfo>;
   /** App-menu items (Cmd+N, Cmd+,) that act on the renderer's views. */
   appMenu: {
@@ -980,12 +983,6 @@ export interface DesktopApi {
   };
   chat: {
     /**
-     * Models this deployment offers the agent, from the server's own catalog. `force` skips
-     * the main-process cache, which is what a "try again" affordance needs; `'local'` re-reads
-     * device and server models but keeps the cached hosted list.
-     */
-    listModels(force?: boolean | 'local'): Promise<ChatModelCatalog>;
-    /**
      * A model server's listing finished, or a model's effort levels arrived, after the list was read; read it again
      * without forcing.
      */
@@ -1048,15 +1045,17 @@ export interface DesktopApi {
     taskAction(sessionId: string, action: TaskAction): Promise<ChatSessionSummary>;
     /** Decisions workers in this account wait on the user for; seeds what onTaskDecisions then replaces. */
     listTaskDecisions(): Promise<PendingTaskDecision[]>;
-    answerTaskDecision(sessionId: string, decisionId: string, answer: TaskDecisionAnswer): Promise<void>;
     onTaskDecisions(listener: (decisions: PendingTaskDecision[]) => void): () => void;
     /**
      * Set how much this conversation may do without asking. Called from the composer pill, in
      * response to the user clicking it, and from nowhere else - see IPC_CHANNELS above.
      */
     setApprovalMode(sessionId: string, mode: ChatApprovalMode): Promise<ChatSessionSummary | null>;
-    /** Move a conversation into or out of the sidebar's Archived section. Reversible. */
-    setSessionArchived(sessionId: string, archived: boolean): Promise<ChatSessionSummary | null>;
+    /**
+     * Asks this machine's user, in a native dialog, the question session/setArchived answered
+     * with; null when they cancel. Local only, whichever host the session lives on.
+     */
+    confirmArchive(question: ArchiveQuestion): Promise<ArchiveAnswer | null>;
     /** Save a conversation as Markdown or JSON, by the extension picked in the save dialog. Rejects on a write failure. */
     exportSession(sessionId: string): Promise<ChatSessionExportResult>;
     /** Export this account's local conversations, their files, and project memories into a selected folder. */
@@ -1064,12 +1063,6 @@ export interface DesktopApi {
     listSessions(): Promise<ChatSessionSummary[]>;
     /** Start a Chat session: no project, the mode everything before this was. */
     createSession(request?: CreateSessionRequest): Promise<CreatedSession>;
-    defaultsForNewSession(): Promise<NewSessionDefaults>;
-    /**
-     * Start a Code session, creating or adopting its worktree first when one is asked for.
-     * A request with no `directory` creates an UNBOUND session, which the chip row then binds.
-     */
-    createCodeSession(request: CreateCodeSessionIpcRequest): Promise<CreateCodeSessionIpcResult>;
     /**
      * Ground a Code session that already exists: its first directory, or a different directory,
      * branch or workspace choice. Refused while the session is busy - see UpdateProjectResult.
@@ -1077,12 +1070,8 @@ export interface DesktopApi {
     updateProject(request: UpdateProjectRequest): Promise<UpdateProjectResult>;
     /** Open the OS folder picker for a project root. Null when the user cancels. */
     pickProjectDirectory(): Promise<string | null>;
-    /** Recently used project folders that still exist, most recent first. */
-    listRecentFolders(): Promise<RecentFolder[]>;
-    /** Forget one; the folder itself is untouched. Resolves to the list that is left. */
-    removeRecentFolder(directory: string): Promise<RecentFolder[]>;
-    /** Read a directory's branches, for the branch chip. */
-    inspectProject(directory: string): Promise<ProjectInspection>;
+    /** Local hints for which place a first launch opens on; see shared/launchSignals.ts. */
+    launchSignals(): Promise<LaunchSignals>;
     /**
      * What this Code session's working directory has changed against its base branch, for the
      * changes bar above the composer. Null when there is nothing to show or git cannot answer.
@@ -1094,24 +1083,17 @@ export interface DesktopApi {
      */
     addContextDirectory(sessionId: string, path?: string): Promise<ShareDirectoryResult>;
     removeContextDirectory(sessionId: string, directory: string): Promise<ChatSessionSummary | null>;
-    /** Null when the session is gone (deleted in another window, or a stale id). */
-    getSession(sessionId: string, viewed?: boolean): Promise<ChatSession | null>;
-    renameSession(sessionId: string, title: string): Promise<ChatSessionSummary | null>;
-    deleteSession(sessionId: string, removeWorktree?: boolean): Promise<void>;
-    inspectWorktreeRemoval(sessionId: string): Promise<WorktreeRemoval | null>;
+    /** `alsoDeleting` are nested sessions deleted with it, which then do not hold its worktree. */
+    inspectWorktreeRemoval(sessionId: string, alsoDeleting?: string[]): Promise<SessionWorktreeRemoval | null>;
     /** Checkouts under the repository's app worktree root, with the conversation that owns each. */
     listWorktrees(directory: string): Promise<AppWorktree[]>;
     /** Removes the named orphan checkouts, or every safe one when `paths` is omitted. */
     removeWorktrees(directory: string, paths?: string[]): Promise<WorktreeSweepItem[]>;
     /** Reveals a currently listed worktree in the file manager; false when it is not listed. */
     revealWorktree(directory: string, path: string): Promise<boolean>;
-    /** Resolves when the turn is accepted; the reply arrives via onStreamEvent. */
-    sendMessage(request: SendMessageRequest): Promise<SendMessageResult>;
     loopCommand(sessionId: string, args: string): Promise<LoopResult>;
     getLoop(sessionId: string): Promise<LoopState | null>;
     onLoopChanged(listener: (event: { sessionId: string; state: LoopState | null }) => void): () => void;
-    /** Stop an in-flight reply, keeping what has streamed so far. No-op if none is running. */
-    stopReply(sessionId: string): Promise<void>;
     /**
      * Carry on the last reply if the agent loop's budget cut it short. Streams into the SAME
      * message, so the events are indistinguishable from the turn never having stopped.
@@ -1148,23 +1130,6 @@ export interface DesktopApi {
     suggestNextPrompt(sessionId: string, model?: string | null): Promise<string | null>;
     /** The settled spend of the orchestration rooted at this session, for its job summary. */
     getRunSpend(rootSessionId: string): Promise<RunSpend>;
-    /**
-     * Messages typed ahead for this conversation, waiting for the live turn to finish. Read on
-     * open for the same reason as getSessionStatuses: the pushes below carry only CHANGES, and
-     * a window opening onto a session that was queued into elsewhere would see nothing.
-     */
-    getQueuedMessages(sessionId: string): Promise<ChatQueuedMessage[]>;
-    /** Take a queued message back; its text returns to the composer. Unknown ids are ignored. */
-    cancelQueuedMessage(sessionId: string, queuedId: string): Promise<void>;
-    /**
-     * Interrupt the live reply and run this queued message next, instead of waiting for the
-     * reply to finish. The result arrives on `onQueueChanged` like every other queue change, so
-     * every window showing the conversation sees it.
-     *
-     * A no-op when the turn has already ended, when the id is unknown, and on a relayed
-     * message. Unlike `stopReply`, the queue is NOT handed back.
-     */
-    sendQueuedMessageNow(sessionId: string, queuedId: string): Promise<void>;
     /**
      * Messages from other conversations waiting for this one's user to let them in. Read on
      * open; changes arrive as the 'held-relays' stream event carrying the whole list.
@@ -1216,11 +1181,6 @@ export interface DesktopApi {
     filePathAction(sessionId: string, path: string, action: ChatFilePathAction): Promise<ChatFilePathActionResult>;
     /** Add a path a reply names to this session's draft, under the same checks as opening it. */
     attachFilePath(sessionId: string, path: string): Promise<AddAttachmentsResult>;
-    /**
-     * Answer a tool call sitting at 'awaiting-approval'. Unknown or already-answered ids are
-     * ignored, so a double click cannot approve a second, different command.
-     */
-    respondToApproval(approvalId: string, answer: ChatApprovalAnswer): Promise<void>;
     /**
      * Every artifact this account has made from a desktop client, newest first.
      *

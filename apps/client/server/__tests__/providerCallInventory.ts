@@ -29,8 +29,14 @@ const USAGE_BOUNDARIES = new Set([
   'recordToolUsageEvent',
   'settleCompletion',
 ]);
-const isUsageBoundary = (call: string) =>
-  USAGE_BOUNDARIES.has(call.split('.').at(-1) ?? '') || /\.usageEvents\.record$/.test(call);
+const SRE_BOUNDARIES: Record<string, string> = {
+  'b4m-core/services/src/sreAgentService/index.ts#SreAgentService/diagnose': 'new SreCompletionMeter',
+  'b4m-core/services/src/sreAgentService/accounting.ts#SreCompletionMeter/complete': 'this.context.accounting.settle',
+};
+const isUsageBoundary = (call: string, owner: string) =>
+  USAGE_BOUNDARIES.has(call.split('.').at(-1) ?? '') ||
+  /\.usageEvents\.record$/.test(call) ||
+  SRE_BOUNDARIES[owner] === call;
 
 function ownerOf(node: ts.Node): string {
   const names: string[] = [];
@@ -94,7 +100,12 @@ export function scanProviderSources(sources: Record<string, string>): ProviderSc
         for (const binding of bindings.elements) {
           if (binding.isTypeOnly) continue;
           const name = (binding.propertyName ?? binding.name).text;
-          if (FACTORIES.has(name) || USAGE_BOUNDARIES.has(name) || PROVIDERS[moduleName]?.includes(name))
+          if (
+            FACTORIES.has(name) ||
+            USAGE_BOUNDARIES.has(name) ||
+            name === 'SreCompletionMeter' ||
+            PROVIDERS[moduleName]?.includes(name)
+          )
             imported.set(binding.name.text, name);
         }
       }
@@ -193,7 +204,7 @@ export function scanProviderSources(sources: Record<string, string>): ProviderSc
       const tail = callee.split('.').at(-1) ?? '';
       const ownerKey = `${file}#${owner}`;
       const ownerCalls = calls.get(ownerKey) ?? [];
-      ownerCalls.push(callee);
+      ownerCalls.push(ts.isNewExpression(node) && callee === 'SreCompletionMeter' ? `new ${callee}` : callee);
       calls.set(ownerKey, ownerCalls);
       let kind: string | undefined;
       if (ts.isNewExpression(node) && Object.values(PROVIDERS).flat().includes(callee)) kind = 'sdk-constructor';
@@ -260,7 +271,8 @@ export function validateProviderCatalog(scan: ProviderScan, entries: ProviderEnt
     const localCalls = scan.calls.get(`${site.file}#${site.owner}`) ?? [];
     if (entry.classification === 'debt') {
       if (!baseDebt.has(entry.id)) errors.push(`Debt inventory grew: ${entry.id}`);
-      if (localCalls.some(isUsageBoundary)) errors.push(`Review newly wrapped debt: ${entry.id}`);
+      if (localCalls.some(call => isUsageBoundary(call, `${site.file}#${site.owner}`)))
+        errors.push(`Review newly wrapped debt: ${entry.id}`);
     } else {
       if (
         entry.classification === 'forwarded' &&
@@ -278,7 +290,7 @@ export function validateProviderCatalog(scan: ProviderScan, entries: ProviderEnt
       if (separator < 0 || !scan.calls.get(scope)?.includes(call)) errors.push(`Missing boundary call: ${entry.id}`);
       if (entry.classification === 'metered' && scope !== `${site.file}#${site.owner}`)
         errors.push(`Meter is outside call owner: ${entry.id}`);
-      if (entry.classification === 'metered' && !isUsageBoundary(call))
+      if (entry.classification === 'metered' && !isUsageBoundary(call, scope))
         errors.push(`Unknown metering boundary: ${entry.id}`);
     }
   }

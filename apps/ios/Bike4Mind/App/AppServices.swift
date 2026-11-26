@@ -44,12 +44,20 @@ final class AppServices {
   let pendingActions: any PendingActionAPI
   /// The server-composed assistant brief, on whichever server the app currently points at.
   let briefs: any BriefAPI
+  /// Follow-up memos and their proposed action items, emails and reminders, on whichever server the app points at.
+  let briefFollowUps: any BriefFollowUpAPI
   /// The standing instructions the brief composer follows, on whichever server the app points at.
   let instructions: any InstructionAPI
   /// Answers an approval from a notification button.
   let approvalNotifications: ApprovalNotificationHandler
   /// Reads and saves when the server composes the user's brief.
   let briefSchedule: any BriefScheduleAPI
+  /// The busy-block brief opt-in and the device calendar it syncs from.
+  let busyBlocks: any BusyBlocksAPI
+  let busyBlockReader: any BusyBlockReader
+  let busyBlockSyncer: BusyBlockSyncer
+  /// Re-syncs busy blocks from a system background refresh while the app is not opened.
+  let busyBlockRefresh: BusyBlockBackgroundRefresh
   /// Answers a brief's single decision from a notification button.
   let briefNotifications: BriefNotificationHandler
   /// How many decisions wait on the user, for the lock-screen widget.
@@ -136,6 +144,7 @@ final class AppServices {
       return BriefClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
     briefs = briefAPI
+    briefFollowUps = ForwardingBriefFollowUpAPI { BriefClient(baseURL: auth.environment.baseURL, tokens: auth) }
     instructions = ForwardingInstructionAPI {
       #if DEBUG
         if FixtureServices.isEnabled { return FixtureServices.instructionAPI }
@@ -149,6 +158,19 @@ final class AppServices {
       #endif
       return BriefScheduleClient(baseURL: auth.environment.baseURL, tokens: auth)
     }
+    let busyBlocksAPI = ForwardingBusyBlocksAPI {
+      #if DEBUG
+        if FixtureServices.isEnabled { return FixtureServices.busyBlocks }
+      #endif
+      return BusyBlocksClient(baseURL: auth.environment.baseURL, tokens: auth)
+    }
+    busyBlocks = busyBlocksAPI
+    busyBlockReader = EventKitBusyBlockReader()
+    let syncer = BusyBlockSyncer(api: busyBlocksAPI, reader: busyBlockReader)
+    busyBlockSyncer = syncer
+    busyBlockRefresh = BusyBlockBackgroundRefresh(
+      identifier: SystemBackgroundRefreshScheduler.busyBlockIdentifier, scheduler: SystemBackgroundRefreshScheduler()
+    ) { await syncer.syncJoiningInFlight() }
     accountProfiles = AccountProfileStore(
       resolveScope: {
         #if DEBUG
@@ -498,6 +520,18 @@ struct ForwardingBriefScheduleAPI: BriefScheduleAPI {
   }
 }
 
+struct ForwardingBusyBlocksAPI: BusyBlocksAPI {
+  let provider: @MainActor @Sendable () -> any BusyBlocksAPI
+
+  func state() async throws -> BusyBlocksState {
+    try await provider().state()
+  }
+
+  func save(enabled: Bool, blocks: [BusyBlock]) async throws -> BusyBlocksState {
+    try await provider().save(enabled: enabled, blocks: blocks)
+  }
+}
+
 /// Routes the decisions-waiting count to whichever server the app currently points at.
 struct ForwardingPendingDecisionAPI: PendingDecisionAPI {
   let provider: @MainActor @Sendable () -> any PendingDecisionAPI
@@ -525,6 +559,25 @@ struct ForwardingBriefAPI: BriefAPI {
 
   func reply(briefID: String, decisionID: String, text: String, choiceIndex: Int?) async throws -> BriefReplyResult {
     try await provider().reply(briefID: briefID, decisionID: decisionID, text: text, choiceIndex: choiceIndex)
+  }
+}
+
+/// Routes follow-up calls to whichever server the app currently points at (it can change in debug builds).
+struct ForwardingBriefFollowUpAPI: BriefFollowUpAPI {
+  let provider: @MainActor @Sendable () -> any BriefFollowUpAPI
+
+  func followUp(transcript: String, timeZone: String?) async throws -> Brief {
+    try await provider().followUp(transcript: transcript, timeZone: timeZone)
+  }
+
+  func editDecision(briefID: String, decisionID: String, edit: BriefDecisionEdit) async throws -> BriefDecision {
+    try await provider().editDecision(briefID: briefID, decisionID: decisionID, edit: edit)
+  }
+
+  func resolveDecision(
+    briefID: String, decisionID: String, outcome: BriefDecisionOutcome
+  ) async throws -> BriefDecision {
+    try await provider().resolveDecision(briefID: briefID, decisionID: decisionID, outcome: outcome)
   }
 }
 

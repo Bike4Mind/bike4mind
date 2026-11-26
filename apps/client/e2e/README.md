@@ -182,6 +182,11 @@ An access token lasts 30 minutes and the `admin` project starts last, so `admin.
 (project `setup-admin`) signs the setup admin in again through OTC right before it and saves the
 new tokens over the old ones.
 
+Every other authenticated project renews on demand: `fixtures.ts` calls
+`helpers/token-renewal.ts` when a worker starts and before each test, and it signs in again (OTC)
+any of the project's users, plus the setup admin and manager, whose saved token has under 12
+minutes left. Specs must import `test` from `./fixtures` to get this.
+
 For mid-test user switching, `seedAuthOnPage` swaps the same cookie on a live
 page's context and navigates to `/` to bootstrap the authenticated app. An agent
 (Claude Code + Playwright MCP) authenticates the same way — by cookie-seeding, not
@@ -249,7 +254,7 @@ Cloudflare's widget script and adds the secret header to the browser's `/api/otc
 `bypassTurnstile(page)` before it requests a code.
 
 **MFA** needs no extra infra: the MFA setup endpoint returns the `totpSecret`, so a test
-can enroll, then generate valid codes in-test with `otplib`/`speakeasy`.
+can enroll, then generate valid codes in-test with `generateTotp` in `helpers/mfa.ts`.
 
 The OTC verification logic is also covered by unit tests in `b4m-core/services`
 (`sendOTC.test.ts` / `verifyOTC.test.ts`), the endpoint gating by `apps/client/__tests__/otc-code.test.ts`,

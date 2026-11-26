@@ -66,7 +66,7 @@ describe('self signup grant eligibility', () => {
     mocks.eligibility.mockResolvedValue({ creditsGranted: 28, currentCredits: 40 });
     mocks.bonus.mockRejectedValue(new Error('pool read failed'));
     const json = vi.fn();
-    await mocks.handler!({ user: { id: 'user-1' } }, { json });
+    await mocks.handler!({ user: { id: 'user-1' }, logger: { warn: vi.fn() } }, { json });
     expect(json).toHaveBeenCalledWith({ creditsGranted: 28, currentCredits: 40 });
   });
 

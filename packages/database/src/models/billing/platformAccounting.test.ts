@@ -252,10 +252,35 @@ describe('platform accounting prerequisites', () => {
     expect(claimed.filter(Boolean)).toHaveLength(1);
   });
 
+  it('does not reclaim a live registered intent while its original execution claims dispatch', async () => {
+    await platformAttemptRepository.register(registration());
+    const [recovered, claimed] = await Promise.all([
+      accounting().recover({ now: at, limit: 10, executionId: attribution.executionId }),
+      platformAttemptRepository.claimDispatch('call-1', at),
+    ]);
+    expect(recovered).toEqual({ recorded: 0, unresolved: 0, failed: [] });
+    expect(claimed).toBe(true);
+    expect((await platformAttemptRepository.get('call-1'))?.state).toBe('dispatched');
+    expect(await UsageEvent.countDocuments()).toBe(0);
+  });
+
+  it('prevents dispatch at the original lease deadline while recovery exposes the expired intent', async () => {
+    const input = registration();
+    await platformAttemptRepository.register(input);
+    const [recovered, claimed] = await Promise.all([
+      accounting().recover({ now: input.leaseExpiresAt, limit: 10, executionId: attribution.executionId }),
+      platformAttemptRepository.claimDispatch('call-1', input.leaseExpiresAt),
+    ]);
+    expect(claimed).toBe(false);
+    expect(recovered).toEqual({ recorded: 0, unresolved: 1, failed: [] });
+    expect((await platformAttemptRepository.get('call-1'))?.state).toBe('unresolved');
+    expect(await UsageEvent.countDocuments()).toBe(0);
+  });
+
   it('does not dispatch an expired intent and does not recover live attempts', async () => {
     await platformAttemptRepository.register(registration());
     expect(await platformAttemptRepository.claimDispatch('call-1', new Date('2026-11-01T00:02:00Z'))).toBe(false);
-    expect(await accounting().recover({ now: at, limit: 10 })).toEqual({ recorded: 0, unresolved: 0 });
+    expect(await accounting().recover({ now: at, limit: 10 })).toEqual({ recorded: 0, unresolved: 0, failed: [] });
     expect((await platformAttemptRepository.get('call-1'))?.state).toBe('registered');
   });
 
@@ -307,8 +332,13 @@ describe('platform accounting prerequisites', () => {
     expect(await accounting().recover({ now: at, limit: 10, executionId: 'execution-1' })).toEqual({
       recorded: 1,
       unresolved: 0,
+      failed: [],
     });
-    expect(await accounting().recover({ now: new Date(), limit: 10 })).toEqual({ recorded: 0, unresolved: 0 });
+    expect(await accounting().recover({ now: new Date(), limit: 10 })).toEqual({
+      recorded: 0,
+      unresolved: 0,
+      failed: [],
+    });
     expect(await UsageEvent.countDocuments()).toBe(1);
   });
 
@@ -332,6 +362,113 @@ describe('platform accounting prerequisites', () => {
     await accounting().recover({ now: at, limit: 10 });
     expect(await UsageEvent.countDocuments()).toBe(1);
     expect(await platformAttemptRepository.claimDispatch('call-1', at)).toBe(false);
+  });
+
+  it('recovers healthy attempts on both sides of a conflicting fact without overwriting it or dispatching', async () => {
+    for (const id of ['call-a', 'call-b', 'call-c']) {
+      await dispatched(id);
+      await platformAttemptRepository.stageUsage(id, fact(id));
+    }
+    await usageEventRepository.recordPlatform({ ...fact('call-b'), status: 'error' });
+    const before = await usageEventRepository.findPlatformCall('call-b');
+    const dispatch = vi.spyOn(platformAttemptRepository, 'claimDispatch');
+    const register = vi.spyOn(platformAttemptRepository, 'register');
+    const result = await accounting().recover({ now: at, limit: 10 });
+    expect(result).toEqual({ recorded: 2, unresolved: 0, failed: [{ providerCallId: 'call-b', code: 'conflict' }] });
+    expect(await UsageEvent.countDocuments()).toBe(3);
+    expect(await usageEventRepository.findPlatformCall('call-b')).toEqual(before);
+    expect((await platformAttemptRepository.get('call-b'))?.state).toBe('usage_known');
+    expect((await accounting().diagnostics({ limit: 10 })).attempts.map(row => row.providerCallId)).toEqual(['call-b']);
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it('continues after a failed page-boundary attempt and exposes it on a later sweep', async () => {
+    for (const id of ['call-a', 'call-b', 'call-c', 'call-d']) {
+      await dispatched(id);
+      await platformAttemptRepository.stageUsage(id, fact(id));
+    }
+    await usageEventRepository.recordPlatform({ ...fact('call-b'), status: 'error' });
+    const first = await accounting().recover({ now: at, limit: 2 });
+    expect(first).toEqual({
+      recorded: 1,
+      unresolved: 0,
+      nextCursor: 'call-b',
+      failed: [{ providerCallId: 'call-b', code: 'conflict' }],
+    });
+    expect(await accounting().recover({ now: at, limit: 2, afterProviderCallId: first.nextCursor })).toEqual({
+      recorded: 2,
+      unresolved: 0,
+      failed: [],
+    });
+    expect(await accounting().recover({ now: at, limit: 2 })).toEqual({
+      recorded: 0,
+      unresolved: 0,
+      failed: [{ providerCallId: 'call-b', code: 'conflict' }],
+    });
+    expect(await UsageEvent.countDocuments()).toBe(4);
+    expect((await platformAttemptRepository.get('call-b'))?.state).toBe('usage_known');
+  });
+
+  it('isolates lookup and unresolved-write failures, sanitizes results and retries without new inference', async () => {
+    for (const id of ['call-a', 'call-b', 'call-c', 'call-d']) await dispatched(id);
+    for (const id of ['call-a', 'call-d']) await platformAttemptRepository.stageUsage(id, fact(id));
+    const find = usageEventRepository.findPlatformCall.bind(usageEventRepository);
+    const mark = platformAttemptRepository.markUnresolved.bind(platformAttemptRepository);
+    const findFailure = vi
+      .spyOn(usageEventRepository, 'findPlatformCall')
+      .mockImplementation(id =>
+        id === 'call-b' ? Promise.reject(new Error('private provider payload and secret')) : find(id)
+      );
+    const markFailure = vi
+      .spyOn(platformAttemptRepository, 'markUnresolved')
+      .mockImplementation((id, reason, expiredBefore) =>
+        id === 'call-c' ? Promise.reject({ message: 'private database detail' }) : mark(id, reason, expiredBefore)
+      );
+    const dispatch = vi.spyOn(platformAttemptRepository, 'claimDispatch');
+    const result = await accounting().recover({ now: new Date('2026-11-01T00:03:00Z'), limit: 4 });
+    expect(result).toEqual({
+      recorded: 2,
+      unresolved: 0,
+      failed: [
+        { providerCallId: 'call-b', code: 'lookup_failed' },
+        { providerCallId: 'call-c', code: 'persistence_pending' },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toMatch(/private|secret|payload|message|stack/);
+    findFailure.mockRestore();
+    markFailure.mockRestore();
+    expect(await accounting().recover({ now: new Date('2026-11-01T00:03:00Z'), limit: 4 })).toEqual({
+      recorded: 0,
+      unresolved: 2,
+      failed: [],
+    });
+    expect(await UsageEvent.countDocuments()).toBe(2);
+    expect((await accounting().diagnostics({ limit: 10 })).byState.unresolved).toBe(2);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('retries a temporary settlement failure under the original identity after reporting its page', async () => {
+    for (const id of ['call-a', 'call-b', 'call-c']) {
+      await dispatched(id);
+      await platformAttemptRepository.stageUsage(id, fact(id));
+    }
+    const record = usageEventRepository.recordPlatform.bind(usageEventRepository);
+    const failure = vi
+      .spyOn(usageEventRepository, 'recordPlatform')
+      .mockImplementation(event =>
+        event.providerCallId === 'call-b' ? Promise.reject(new Error('ledger unavailable')) : record(event)
+      );
+    expect(await accounting().recover({ now: at, limit: 10 })).toEqual({
+      recorded: 2,
+      unresolved: 0,
+      failed: [{ providerCallId: 'call-b', code: 'persistence_pending' }],
+    });
+    expect((await platformAttemptRepository.get('call-b'))?.usage).toMatchObject({ costUsd: fact().costUsd });
+    failure.mockRestore();
+    expect(await accounting().recover({ now: at, limit: 10 })).toEqual({ recorded: 1, unresolved: 0, failed: [] });
+    expect(await accounting().recover({ now: at, limit: 10 })).toEqual({ recorded: 0, unresolved: 0, failed: [] });
+    expect(await UsageEvent.countDocuments()).toBe(3);
   });
 
   it('keeps missing usage and abandoned intents visible without inventing a zero-cost event', async () => {
@@ -360,7 +497,7 @@ describe('platform accounting prerequisites', () => {
   it('pages all recoverable and unresolved receipts deterministically without hiding totals', async () => {
     for (const id of ['call-c', 'call-a', 'call-b']) await platformAttemptRepository.register(registration(id));
     const first = await accounting().recover({ now: new Date('2026-11-01T00:03:00Z'), limit: 1 });
-    expect(first).toEqual({ recorded: 0, unresolved: 1, nextCursor: 'call-a' });
+    expect(first).toEqual({ recorded: 0, unresolved: 1, failed: [], nextCursor: 'call-a' });
     const second = await accounting().recover({
       now: new Date('2026-11-01T00:03:00Z'),
       limit: 1,

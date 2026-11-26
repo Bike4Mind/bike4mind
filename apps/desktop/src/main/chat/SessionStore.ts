@@ -44,7 +44,7 @@ import {
   type SessionScope,
 } from './sessionScope';
 import { isLocalUsageBucket, sessionUsageBuckets, type LocalUsageBucket } from '../usage/localUsage';
-import { StudioFamilyStore } from './studio/StudioFamilyStore';
+import { STUDIO_BINDINGS_DIRECTORY, StudioFamilyStore } from './studio/StudioFamilyStore';
 import { studioIdSchema, type StudioWorkspaceIdentity } from '@shared/studio';
 
 /** Session ids are generated here, but arrive back from the renderer over IPC - see `filePath`. */
@@ -145,7 +145,7 @@ export interface CreateOptions {
  */
 const SUMMARY_INDEX = '.summary-index';
 // Bump whenever summarizeSession derives a field differently, or cached summaries keep the old value.
-const SUMMARY_INDEX_VERSION = 7;
+const SUMMARY_INDEX_VERSION = 8;
 /** Per-session write records (see tools/sessionScripts), in a folder `list` skips as it is not a `.json` name. */
 const SESSION_WRITES = '.session-writes';
 const LIST_READ_CONCURRENCY = 16;
@@ -825,12 +825,13 @@ export class SessionStore implements SessionWritesStore {
   }
 
   /** Only workspace bindings cross account scopes; conversation contents stay private. */
-  async workspaceProjectsExcept(sessionId: string): Promise<ChatProject[]> {
-    return (await this.workspaceOwnersExcept(sessionId)).flatMap(owner => (owner.project ? [owner.project] : []));
+  async workspaceProjectsExcept(sessionIds: string | readonly string[]): Promise<ChatProject[]> {
+    return (await this.workspaceOwnersExcept(sessionIds)).flatMap(owner => (owner.project ? [owner.project] : []));
   }
 
   /** Folder references cross scopes for preservation; titles stay within the current scope. */
-  async workspaceOwnersExcept(sessionId: string): Promise<WorkspaceOwner[]> {
+  async workspaceOwnersExcept(sessionIds: string | readonly string[]): Promise<WorkspaceOwner[]> {
+    const skipped = new Set((typeof sessionIds === 'string' ? [sessionIds] : sessionIds).map(id => `${id}.json`));
     const currentDirectory = await this.directoryFor(false);
     if (!currentDirectory) throw new Error('No conversation scope is available');
     const entries = await readdir(this.baseDirectory, { withFileTypes: true });
@@ -838,7 +839,7 @@ export class SessionStore implements SessionWritesStore {
     const directories = [
       this.baseDirectory,
       ...entries
-        .filter(entry => entry.isDirectory())
+        .filter(entry => entry.isDirectory() && entry.name !== STUDIO_BINDINGS_DIRECTORY)
         .map(entry => join(this.baseDirectory, assertScopeKey(entry.name))),
     ];
     const owners: WorkspaceOwner[] = [];
@@ -854,7 +855,7 @@ export class SessionStore implements SessionWritesStore {
     for (const directory of directories) {
       for (const name of await readdir(directory)) {
         if (!name.endsWith('.json')) continue;
-        if (directory === currentDirectory && name === `${sessionId}.json`) continue;
+        if (directory === currentDirectory && skipped.has(name)) continue;
         const record = schema.parse(JSON.parse(await readFile(join(directory, name), 'utf8')));
         const project = record.project == null ? undefined : normalizeProject(record.project);
         if (project === null) throw new Error('Cannot verify all conversation workspaces');
@@ -1228,8 +1229,13 @@ export class SessionStore implements SessionWritesStore {
   /** Turn Orchestrate on or off. Leaves `updatedAt` alone, as pinning does. */
   async setOrchestrate(id: string, orchestrate: boolean): Promise<ChatSessionSummary | null> {
     return this.mutate(id, session => {
-      if (orchestrate) session.orchestrate = true;
-      else delete session.orchestrate;
+      if (orchestrate) {
+        session.orchestrate = true;
+        session.orchestrator = true;
+      } else {
+        delete session.orchestrate;
+        delete session.orchestrator;
+      }
       return true;
     });
   }
@@ -1762,6 +1768,8 @@ export class SessionStore implements SessionWritesStore {
       ...(parsed.orchestrate === true && (parsed as StoredSession).orchestrateLaunch === this.launchId
         ? { orchestrate: true }
         : {}),
+      // A file from before `orchestrator` existed still says it was orchestrating when it was last written.
+      ...(parsed.orchestrator === true || parsed.orchestrate === true ? { orchestrator: true } : {}),
       ...(parsed.archived ? { archived: true } : {}),
       ...(parsed.historyEnabled ? { historyEnabled: true } : {}),
       ...(orchestrationPolicy.success && !(orchestrateExpired && !origin)

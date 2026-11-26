@@ -97,7 +97,6 @@ const makeArgs = (overrides: Record<string, unknown> = {}) => ({
   quest: makeQuest(),
   session: makeSession({ messageCount: 100 }),
   messages: [],
-  questMaster: undefined,
   model: 'claude-sonnet-4-6',
   historyCount: 20,
   oldestIncludedQuestId: '000000000000000000000005',

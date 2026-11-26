@@ -2,8 +2,11 @@ import { z } from 'zod';
 import { registerOrchestrationIpc } from './orchestrationIpc';
 import { createStudioDiagnostics } from './studio/StudioDiagnostics';
 import { registerStudio } from './studio/registerStudio';
+import { homedir } from 'node:os';
+import { registerLibrary } from './library/registerLibrary';
+import { registerProductions } from './productions/registerProductions';
 import { copyFile, readFile, stat, writeFile } from 'node:fs/promises';
-import { basename, isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { PERMISSION_LISTS, type PermissionRuleLists, type PermissionScope } from '@shared/permissions';
 import {
   app,
@@ -25,8 +28,6 @@ import type {
   ChatAttachmentInput,
   ChatSessionStatusEvent,
   ChatStreamEvent,
-  ProjectInspection,
-  SendMessageRequest,
   StartSpawnSuggestionRequest,
   StartSideChatRequest,
   UpdateProjectRequest,
@@ -46,6 +47,7 @@ import type {
 import type { ShareDirectoryResult } from '@shared/directoryRequest';
 import {
   IPC_CHANNELS,
+  type ArchiveAnswer,
   type BrowserFreezeFrameRequest,
   type BrowserGoAction,
   type BrowserGoRequest,
@@ -79,6 +81,7 @@ import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerFilePathLinkIpc } from './filePathLinks';
 import { registerSessionExportIpc } from './sessionExportIpc';
 import { registerLocalDataExportIpc } from './localDataExportIpc';
+import { confirmArchiveFromIpc } from './sessionArchive';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { registerSessionOrchestrateIpc } from './sessionOrchestrateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
@@ -94,7 +97,7 @@ import { registerModelProtocol } from './model3d/engineProtocol';
 import { ModelLiveViews } from './model3d/ModelLiveViews';
 import { ModelVersionStore } from './model3d/ModelVersionStore';
 import { modelIpcHandlers } from './model3d/modelIpc';
-import { sessionForRenderer, type ChatService, type ChatServiceDeps } from './ChatService';
+import type { ChatService, ChatServiceDeps } from './ChatService';
 import { logDownstream } from './devLogDownstream';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore } from './mcp/McpServerStore';
@@ -122,35 +125,21 @@ import { machineView } from '../models/fit';
 import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import { MODEL_SETTINGS_FILE_NAME } from '@shared/modelSettings';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
-import {
-  branchCheckouts,
-  currentBranch,
-  isGitRepository,
-  listBranches,
-  projectDisplayName,
-  unusableProjectReason,
-} from './project/git';
 import { readWorkspaceChanges } from './project/workspaceChanges';
-import { accountSkillsProvider } from './skills/accountSkills';
-import { ProjectTrustStore } from './skills/ProjectTrustStore';
 import { formatApprovalSummary, readApprovalLog, summarizeApprovals } from './permissions/approvalSummary';
-import { ClaudeCodeSettings } from './permissions/ClaudeCodeSettings';
 import { PermissionRuleStore } from './permissions/PermissionRuleStore';
-import { PermissionService } from './permissions/PermissionService';
 import { CapabilityLedger } from './capabilities/CapabilityLedger';
 import {
   capabilityHandlers,
   completeCapabilityMutation,
   retireSessionApprovals,
 } from './capabilities/capabilityHandlers';
-import { SkillCatalog } from './skills/SkillCatalog';
 import { parseSkillsScope, skillsTrustTargetSchema } from './skills/scope';
-import { RecentFolderStore } from './project/RecentFolderStore';
-import { appWorktreeMainCheckout, SpareWorktrees } from './project/workspace';
+import { detectLaunchSignals } from './launchSignals';
+import { SpareWorktrees } from './project/workspace';
 import { folderToRemember } from './project/recentFolderToRecord';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { storedReasoningEffortSetting } from './reasoningEffort';
-import { mainCheckoutOf } from './tools/shellTools';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
 import { parsePaneInput, SimulatorLiveView } from './simulator/SimulatorLiveView';
@@ -161,6 +150,9 @@ import { appWindows, focusedAppWindow } from '../windows';
 import { registerClaudeImport } from '../claudeImport';
 import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
 import { HostRuntime, hostProtectedLocations, type HostEnvironment, type HostEventSink } from '../../host';
+import { HostEventRelay } from '../../host/server';
+import { createHostPermissionStack, permissionRulesPath } from '../../host/permissionStack';
+import type { LocalHost } from '../host/registerHostConnections';
 
 const editMessageRequestSchema = z.object({
   sessionId: z.string(),
@@ -272,6 +264,8 @@ function permissionLists(value: unknown): PermissionRuleLists | null {
 
 export interface RegisteredChat {
   service: ChatService;
+  /** The runtime and a tee of its pushes, for main/host to serve through the host protocol. */
+  host: LocalHost;
   /** Background processes, exposed so main/index.ts can tear them down on every quit path. */
   background: BackgroundProcessRegistry;
   /** MCP connections, torn down on the same two quit passes for the same reason. */
@@ -375,29 +369,9 @@ export function registerChat(
   const capabilityLedger = new CapabilityLedger(join(userData, 'capability-ledger.json'));
   // App-wide like approval-mode.json; see SidebarSectionStore.
   const sidebarSections = new SidebarSectionStore(join(userData, 'sidebar-sections.json'));
-  const recentFolders = new RecentFolderStore(join(userData, 'recent-folders.json'));
   const spareWorktrees = new SpareWorktrees();
-  // The trust file is its own file beside tool-access.json, and for the same reason: both record
-  // a consent the user gave once and should not be asked for again on every launch.
-  const projectTrust = new ProjectTrustStore(join(userData, 'project-skill-trust.json'), directory =>
-    appWorktreeMainCheckout(directory, mainCheckoutOf)
-  );
-  const skills = new SkillCatalog(projectTrust, accountSkillsProvider(auth, userData), logger);
-  // App-wide like approval-mode.json. Claude Code's files are only ever read; the protected roots
-  // are folders no allow rule may cover, since a call writing there would grant itself more.
+  const { projectTrust, skills, permissions } = createHostPermissionStack({ environment, protection, auth, logger });
   const home = environment.homeDirectory;
-  const claudeCode = new ClaudeCodeSettings({ home, logger, onChange: () => permissions.invalidate() });
-  const permissions: PermissionService = new PermissionService({
-    store: new PermissionRuleStore(join(userData, 'permission-rules.json')),
-    claudeCode,
-    isTrusted: directory => projectTrust.isTrusted(directory),
-    home,
-    protectedRoots: () => protection.permission.paths(),
-    unresolvedProtected: () => protection.permission.unresolved(),
-    mainCheckoutOf,
-    logger,
-  });
-  void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
   const attachmentsDir = join(userData, 'attachments');
   const attachments = new AttachmentStore(attachmentsDir, logger, shrinkImage);
   // App-wide like sidebar-sections.json: session ids are unique across scopes.
@@ -641,9 +615,10 @@ export function registerChat(
   };
 
   // Annotated: the machine tools' callbacks read the runtime's store, so inference would cycle.
+  const hostEvents = new HostEventRelay(error => logger.warn(`HOST: a protocol listener failed: ${String(error)}`));
   const runtime: HostRuntime = new HostRuntime({
     environment,
-    events,
+    events: hostEvents.tee(events),
     auth,
     logger,
     protection,
@@ -695,7 +670,7 @@ export function registerChat(
   const capabilitiesReady = Promise.all([
     access.list(),
     projectTrust.list(),
-    new PermissionRuleStore(join(userData, 'permission-rules.json')).read(),
+    new PermissionRuleStore(permissionRulesPath(userData)).read(),
   ])
     .then(async ([roots, trustedProjects, stored]) => {
       await retireSessionApprovals(capabilityLedger);
@@ -726,13 +701,11 @@ export function registerChat(
     videoJobs: sessionId => videoJobs.list(sessionId),
     changed: event => send(IPC_CHANNELS.studioChanged, event),
   });
+  registerLibrary({ ipc: ipcMain, directory: userData, sessions: store, media, auth });
+  registerProductions({ ipc: ipcMain, sessions: store, media, auth });
   service.studioDisposed = studioIntegration.dispose;
   service.studioWithSessionDeletion = studioIntegration.withSessionDeletion;
 
-  ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: unknown) =>
-    runtime.listModels(force === 'local' ? 'local' : force === true)
-  );
-  ipcMain.handle(IPC_CHANNELS.chatDraftDefaults, () => runtime.draftDefaults());
   registerModelServersIpc(ipcMain, modelServers, async () => {
     const probed = await localHardware.probed();
     return probed && machineView(probed);
@@ -752,12 +725,13 @@ export function registerChat(
     broadcast: location => send(IPC_CHANNELS.chatSpawnLocation, location),
   });
   ipcMain.handle(IPC_CHANNELS.chatListCreationTools, (_event, model: string) => service.listCreationTools(model));
-  ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (event, sessionId: unknown, archived: unknown) => {
-    if (typeof sessionId !== 'string' || typeof archived !== 'boolean') return null;
-    return runtime.setSessionArchived(sessionId, archived, options => {
-      const window = BrowserWindow.fromWebContents(event.sender);
-      return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
-    });
+  // Archiving itself goes through session/setArchived; only the question is asked here, where
+  // Electron's dialog lives.
+  ipcMain.handle(IPC_CHANNELS.chatConfirmArchive, async (event, raw: unknown): Promise<ArchiveAnswer | null> => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    return confirmArchiveFromIpc(raw, options =>
+      window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options)
+    );
   });
   ipcMain.handle(IPC_CHANNELS.chatListSkills, (_event, raw: unknown) => {
     const scope = parseSkillsScope(raw);
@@ -947,74 +921,24 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.capabilitiesGetState, () => capabilityIpc.getState());
   ipcMain.handle(IPC_CHANNELS.capabilitiesRevoke, (_event, grantId: unknown) => capabilityIpc.revoke(grantId));
   ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => runtime.sessionStatuses());
-  const rememberFolder = (directory: string | null): void => {
-    if (!directory) return;
-    recentFolders
-      .record(directory)
-      .catch(error => logger.warn(`CHAT: could not remember recent folder: ${String(error)}`));
-  };
   registerSessionCreateIpc(ipcMain, {
     createSession: mode => runtime.createSession(mode),
-    createCodeSession: request => service.createCodeSession(request),
     place: (sessionId, sectionId) =>
       placeNewSession(sidebarSections, sessionId, sectionId, error =>
         logger.warn(`CHAT: could not place new session in its sidebar section: ${String(error)}`)
       ),
-    rememberFolder,
   });
 
   ipcMain.handle(IPC_CHANNELS.chatUpdateProject, async (_event, request: UpdateProjectRequest) => {
     const result = await service.updateProject(request);
-    rememberFolder(folderToRemember(request, result));
+    void runtime.rememberRecentFolder(folderToRemember(request, result));
     return result;
   });
 
   ipcMain.handle(IPC_CHANNELS.chatPickProjectDirectory, (event): Promise<string | null> => pickDirectory(event.sender));
-  ipcMain.handle(IPC_CHANNELS.chatListRecentFolders, () => recentFolders.list());
-  ipcMain.handle(IPC_CHANNELS.chatRemoveRecentFolder, async (_event, directory: unknown) => {
-    if (typeof directory === 'string') {
-      await recentFolders.remove(directory);
-      void spareWorktrees.forget(directory);
-    }
-    return recentFolders.list();
-  });
-
-  // Reading branches is a git call on a path the user just chose in a native dialog, so it is
-  // not gated: nothing here writes, and the alternative is a branch field the user must type
-  // from memory.
-  ipcMain.handle(IPC_CHANNELS.chatInspectProject, async (_event, directory: string): Promise<ProjectInspection> => {
-    const resolved = resolve(directory);
-    if (!(await isGitRepository(resolved))) {
-      const base = {
-        directory: resolved,
-        name: basename(resolved),
-        isRepository: false,
-        branches: [],
-        currentBranch: null,
-      };
-      const refusal = await unusableProjectReason(resolved);
-      return refusal ? { ...base, refusal } : base;
-    }
-    const base = { directory: resolved, name: await projectDisplayName(resolved) };
-    try {
-      // The marks are an aid, not the list: a worktree listing git cannot answer leaves the
-      // branches standing, and a toggle-off pick is still checked against git in main.
-      const [branches, head, checkedOutElsewhere] = await Promise.all([
-        listBranches(resolved),
-        currentBranch(resolved),
-        branchCheckouts(resolved).catch(() => ({})),
-      ]);
-      return { ...base, isRepository: true, branches, currentBranch: head, checkedOutElsewhere };
-    } catch (err) {
-      return {
-        ...base,
-        isRepository: true,
-        branches: [],
-        currentBranch: null,
-        error: err instanceof Error ? err.message : 'Could not read this repository.',
-      };
-    }
-  });
+  ipcMain.handle(IPC_CHANNELS.chatLaunchSignals, () =>
+    detectLaunchSignals({ home: homedir(), recentFolders: () => runtime.listRecentFolders() })
+  );
 
   ipcMain.handle(
     IPC_CHANNELS.chatAddContextDirectory,
@@ -1029,9 +953,6 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatRemoveContextDirectory, (_event, sessionId: string, directory: string) =>
     service.removeContextDirectory(sessionId, directory)
   );
-  ipcMain.handle(IPC_CHANNELS.chatGetSession, async (_event, sessionId: string, viewed?: boolean) =>
-    sessionForRenderer(await runtime.getSession(sessionId, viewed === true))
-  );
   // Keyed by session rather than by a path from the renderer, so this only ever reads the folder
   // the session's own tools run in. A failure is logged, not shown: the bar is a passive readout,
   // and a repository git cannot read already says so on the branch chip beside it.
@@ -1045,24 +966,16 @@ export function registerChat(
       return null;
     }
   });
-  ipcMain.handle(IPC_CHANNELS.chatRenameSession, (_event, sessionId: string, title: string) =>
-    runtime.renameSession(sessionId, title)
-  );
-  ipcMain.handle(IPC_CHANNELS.chatInspectWorktreeRemoval, (_event, sessionId: unknown) => {
+  const isIdList = (value: unknown): value is string[] =>
+    Array.isArray(value) && value.every(id => typeof id === 'string');
+  ipcMain.handle(IPC_CHANNELS.chatInspectWorktreeRemoval, (_event, sessionId: unknown, alsoDeleting: unknown) => {
     if (typeof sessionId !== 'string') throw new Error('Invalid conversation id');
-    return service.inspectSessionWorktreeRemoval(sessionId);
+    if (alsoDeleting !== undefined && !isIdList(alsoDeleting)) throw new Error('Invalid conversation list');
+    return service.inspectSessionWorktreeRemoval(sessionId, alsoDeleting);
   });
   // Only a repository the user already has a conversation or recent folder for is ever touched.
   const knownRepository = async (directory: string) => {
-    const recent = await recentFolders.list();
-    if (
-      !(await service.isKnownRepository(
-        directory,
-        recent.map(folder => folder.path)
-      ))
-    ) {
-      throw new Error('Unknown project directory');
-    }
+    if (!(await runtime.isKnownRepository(directory))) throw new Error('Unknown project directory');
   };
   ipcMain.handle(IPC_CHANNELS.chatListWorktrees, async (_event, directory: unknown) => {
     if (typeof directory !== 'string') throw new Error('Invalid project directory');
@@ -1082,12 +995,6 @@ export function registerChat(
     await knownRepository(directory);
     return service.revealWorktree(directory, path, listed => shell.showItemInFolder(listed));
   });
-  ipcMain.handle(IPC_CHANNELS.chatDeleteSession, async (_event, sessionId: unknown, removeWorktree: unknown) => {
-    if (typeof sessionId !== 'string' || (removeWorktree !== undefined && typeof removeWorktree !== 'boolean')) {
-      throw new Error('Invalid delete request');
-    }
-    await runtime.deleteSession(sessionId, removeWorktree === true);
-  });
   const isKnownSession = (sessionId: string) =>
     store.get(sessionId).then(
       session => session !== null,
@@ -1095,8 +1002,6 @@ export function registerChat(
     );
   registerSidebarIpc(ipcMain, sidebarSections, isKnownSession);
   registerComposerDraftsIpc(ipcMain, composerDrafts, composerDraftsLoaded, isKnownSession);
-  ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) => runtime.sendMessage(request));
-  ipcMain.handle(IPC_CHANNELS.chatStopReply, (_event, sessionId: string) => runtime.stopReply(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatLoopCommand, (_event, sessionId: string, args: string) =>
     service.loopCommand(sessionId, args)
   );
@@ -1122,16 +1027,9 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatGetRunSpend, (_event, rootSessionId: unknown) =>
     typeof rootSessionId === 'string' ? service.getRunSpend(rootSessionId) : { status: 'unattributed' }
   );
-  ipcMain.handle(IPC_CHANNELS.chatGetQueued, (_event, sessionId: string) => runtime.queuedMessages(sessionId));
-  ipcMain.handle(IPC_CHANNELS.chatCancelQueued, (_event, sessionId: string, queuedId: string) =>
-    runtime.cancelQueued(sessionId, queuedId)
-  );
   ipcMain.handle(IPC_CHANNELS.chatGetHeldRelays, (_event, sessionId: string) => service.heldRelaysFor(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatResolveHeldRelay, (_event, sessionId: string, heldId: string, deliver: boolean) =>
     service.resolveHeldRelay(sessionId, heldId, deliver === true)
-  );
-  ipcMain.handle(IPC_CHANNELS.chatSendQueuedNow, (_event, sessionId: string, queuedId: string) =>
-    runtime.sendQueuedNow(sessionId, queuedId)
   );
   ipcMain.handle(IPC_CHANNELS.chatStartSpawnSuggestion, (_event, request: StartSpawnSuggestionRequest) =>
     service.startSpawnSuggestion(request)
@@ -1142,13 +1040,10 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatDismissSpawnSuggestion, (_event, sessionId: string, suggestionId: string) =>
     service.dismissSpawnSuggestion(sessionId, suggestionId)
   );
-  // The one way an approval is answered: the app's cards (this handler) and the menu-bar item and
-  // mini Tavern (main/watch, via the returned `respondToApproval`) both land here.
+  // The menu-bar item and mini Tavern (main/watch) answer approvals through the returned
+  // `respondToApproval`; the app's own cards go through the host server's request/respond.
   const respondToApproval = (approvalId: string, answer: ChatApprovalAnswer) =>
     runtime.respondToApproval(approvalId, answer);
-  ipcMain.handle(IPC_CHANNELS.chatRespondToApproval, (_event, approvalId: string, answer: ChatApprovalAnswer) =>
-    respondToApproval(approvalId, answer)
-  );
 
   // The picker runs in main because that is where Electron's dialog lives, and it is the one
   // entry path that can name a file the renderer never saw.
@@ -1262,7 +1157,7 @@ export function registerChat(
     background.tail(processId, sessionId, PANEL_TAIL_CHARS)
   );
   ipcMain.handle(IPC_CHANNELS.chatStopBackground, (_event, sessionId: string, processId: string) =>
-    background.kill(processId, sessionId).then(() => undefined)
+    runtime.stopBackgroundProcess(sessionId, processId).then(() => undefined)
   );
   ipcMain.handle(IPC_CHANNELS.chatMoveToBackground, (_event, sessionId: string, callId: string) =>
     foreground.moveToBackground(sessionId, callId)
@@ -1499,6 +1394,7 @@ export function registerChat(
 
   return {
     service,
+    host: { runtime, events: hostEvents, logger },
     background,
     mcp,
     browser,

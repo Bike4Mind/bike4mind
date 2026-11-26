@@ -28,7 +28,11 @@ vi.mock('@server/middlewares/adminApi', () => ({
 }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
   getDlqByLabel: (label: string) =>
-    label === 'q1' ? { label, sourceQueue: h.sourceQueue, replay: h.replaySafety, staleWhen: h.staleWhen } : undefined,
+    label === 'q1'
+      ? { label, sourceQueue: h.sourceQueue, replay: h.replaySafety, staleWhen: h.staleWhen }
+      : label === 'restricted'
+        ? { label, sourceQueue: null, replay: 'unsafe', restrictedBody: true }
+        : undefined,
   getDlqUrl: () => 'https://sqs.example/dlq',
   getSourceQueueUrl: () => 'https://sqs.example/physical-source',
   describeDlqMessage: () => null,
@@ -323,6 +327,21 @@ describe('GET /api/admin/dlq/messages', () => {
 
     expect(h.receiveFromQueue).toHaveBeenCalledWith('https://sqs.example/dlq', 10, 0, 2, ['All']);
     expect(body.messages[0].receiptHandle).toBeUndefined();
+  });
+
+  it('withholds a restricted queue body from a delegated admin and shows it to a full admin', async () => {
+    h.receiveFromQueue.mockResolvedValue([{ ...message, Body: '{"to":"a@example.com","body":"code 123456"}' }]);
+    for (const adminPermissions of [['support:read'], ['support:read', 'settings:manage']]) {
+      const row = (await peek(adminPermissions, 'restricted')).messages[0];
+      expect(row).toMatchObject({ body: '', bodyWithheld: true });
+      expect(JSON.stringify(row)).not.toContain('123456');
+    }
+
+    const res = { json: vi.fn() };
+    await h.handler!({ query: { queue: 'restricted' }, user: { id: 'u1', isAdmin: true } }, res);
+    const row = res.json.mock.calls[0][0].messages[0];
+    expect(row.body).toContain('123456');
+    expect(row).not.toHaveProperty('bodyWithheld');
   });
 
   it('returns one row per message id, keeping the copy with the highest receive count', async () => {

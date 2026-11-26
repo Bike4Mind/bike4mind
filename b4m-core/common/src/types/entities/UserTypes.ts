@@ -272,6 +272,8 @@ export interface IUserPreferences {
    * the GET route treat a missing or disabled schedule as off.
    */
   briefSchedule?: BriefSchedule;
+  /** Opt-in for a brief after each synced busy block; set through `PUT /api/v1/briefs/busy-blocks`. */
+  busyBlockBrief?: { enabled: boolean };
 }
 
 /**
@@ -475,7 +477,7 @@ export interface IClientUsageEntry {
 
 export interface IUser extends ICreditHolder {
   id: string;
-  /** Durable admission id; deleting a QuestMaster plan never restores the allowance. */
+  /** Stored data only: written by the retired in-chat QuestMaster free start, read by nothing. */
   freeQuestStartId?: string;
   username: string;
   name: string;
@@ -568,6 +570,13 @@ export interface IUser extends ICreditHolder {
   nextBriefAt?: Date;
   /** When the last scheduled or event-triggered brief started; the debounce both paths claim. */
   lastBriefStartedAt?: Date;
+  /** Busy intervals synced from the device calendar, merged and sorted; see `preferences.busyBlockBrief`. */
+  busyBlocks?: { start: Date; end: Date }[];
+  busyBlocksSyncedAt?: Date;
+  /** End of the earliest stored block not yet briefed; unset when none is pending or the opt-in is off. */
+  nextBlockBriefAt?: Date;
+  /** End of the last block a brief was claimed for, so a re-sync cannot re-arm it. */
+  lastBlockBriefEnd?: Date;
   /** Private erasure retry state, including restored accounts with no deletion schedule. */
   accountFilePurge?: {
     startedAt?: Date;
@@ -751,6 +760,11 @@ export interface IUser extends ICreditHolder {
   referralCode?: string | null;
   /** The invite this account signed up through; absent for uninvited and pre-existing accounts. */
   signupInvite?: SignupInvite;
+  /**
+   * The active OAuth client whose /oauth/authorize flow this account was created in. Written once at
+   * creation (immutable in UserModel); null for every other signup and for pre-existing accounts.
+   */
+  signupClientId?: string | null;
 
   /**
    * This field is used to store the current selected organization ID.
@@ -903,6 +917,9 @@ export interface IUser extends ICreditHolder {
    * @default []
    */
   authorizedEmailAddresses?: string[];
+
+  /** Platform addresses this user held before; they are never reassigned to another user. */
+  releasedPlatformEmailAddresses?: { address: string; releasedAt: Date }[];
 
   /**
    * User's preferred voice for voice sessions
@@ -1336,6 +1353,11 @@ export interface IUserRepository
    * in id order; pass the last id back as `afterId` for the next page.
    */
   findRiskScoringCandidateIds: (since: Date, options: { afterId?: string; limit: number }) => Promise<string[]>;
+  /**
+   * Non-system users created within [from, to] whose email host is exactly `host` (case-insensitive,
+   * soft-deleted rows included), and how many of them are banned. Feeds the signup risk score.
+   */
+  countSignupsOnEmailHost: (host: string, from: Date, to: Date) => Promise<{ total: number; banned: number }>;
   /** Unbanned users whose risk review is pending, highest score first, at most `limit`. */
   findPendingRiskReviews: (limit: number) => Promise<IUserDocument[]>;
   /** Count of the users findPendingRiskReviews would return; `options.limit` stops counting there. */

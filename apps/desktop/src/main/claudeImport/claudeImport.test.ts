@@ -21,7 +21,16 @@ import {
 } from './ClaudeCodeSync';
 import { ClaudeImportService } from './ClaudeImportService';
 import { sessionScopeKey, type SessionScope } from '../chat/sessionScope';
-import { fetchQuests, listWebNotebooks, webSessionId, type WebApi } from './WebSessionSync';
+import {
+  CHANGE_OVERLAP_MS,
+  describeWebError,
+  fetchQuests,
+  listWebNotebookChanges,
+  listWebNotebooks,
+  needsWebImport,
+  webSessionId,
+  type WebApi,
+} from './WebSessionSync';
 import { AttachmentStore } from '../chat/AttachmentStore';
 import { mapToolCall, applyCodeEvent, tidyMessages, type CodeMapState } from './claudeCodeMapper';
 import { activeTodos } from '@shared/todos';
@@ -37,6 +46,7 @@ import { isImportedMessageId, normalizeImportOrigin } from '@shared/claudeImport
 import { mapQuests, readNotebook } from './webSessionMapper';
 import { DEFAULT_SETTINGS, ImportStateStore, type FileCursor } from './ImportStateStore';
 import { Readable } from 'node:stream';
+import { AxiosError } from 'axios';
 import { streamJsonArray } from './jsonArrayStream';
 import { readHeadAndTail, readJsonlLines } from './jsonlLines';
 import { isUnsafeMemberName, listZipMembers, readZipMember, ZipError } from './zipReader';
@@ -630,11 +640,20 @@ describe('web session sync', () => {
   interface FakeNotebook {
     name: string;
     updatedAt: string;
+    /** A soft delete: gone from the plain list and the detail route, a tombstone in the change feed. */
+    deletedAt?: string;
     quests: { id: string; prompt: string; reply?: string; status?: string }[];
   }
 
-  /** The two list routes the sync reads, paged the way the server pages them. */
-  function fakeWeb(notebooks: Record<string, FakeNotebook>) {
+  const idOrder = new Intl.Collator('en', { numeric: true });
+
+  /**
+   * The list routes the sync reads: the v1 list is keyset-paged newest first (largest id), quests are
+   * offset-paged. By default it is a server from before the change feed: rows carry `lastUpdated` but
+   * no `updatedAt`, and `updated_since` is ignored. `changeFeed` serves the feed: `updatedAt` on every
+   * row, and with `updated_since` the changed rows oldest first, tombstones included.
+   */
+  function fakeWeb(notebooks: Record<string, FakeNotebook>, server: { changeFeed: boolean } = { changeFeed: false }) {
     const get = vi.fn(async (url: string): Promise<unknown> => {
       const parsed = new URL(url, 'https://web.test');
       const page = Number(parsed.searchParams.get('pagination[page]'));
@@ -649,13 +668,30 @@ describe('web session sync', () => {
         if (!notebook) throw new Error('Session not found');
         return slice(notebook.quests.map(quest => ({ type: 'message', timestamp: notebook.updatedAt, ...quest })));
       }
-      if (parsed.pathname === '/api/sessions') {
-        return slice(Object.entries(notebooks).map(([id, notebook]) => ({ id, ...notebook })));
+      if (parsed.pathname === '/api/v1/sessions') {
+        const { changeFeed } = server;
+        const since = changeFeed ? parsed.searchParams.get('updated_since') : null;
+        const listed = Object.entries(notebooks)
+          .filter(([, notebook]) => (since ? notebook.updatedAt >= since : !notebook.deletedAt))
+          .sort(([aId, a], [bId, b]) =>
+            since ? `${a.updatedAt}|${aId}`.localeCompare(`${b.updatedAt}|${bId}`) : idOrder.compare(bId, aId)
+          )
+          .map(([id, { updatedAt, deletedAt, ...rest }]) => ({
+            id,
+            ...rest,
+            ...(changeFeed ? { updatedAt, lastUpdated: updatedAt } : { lastUpdated: updatedAt }),
+            ...(deletedAt ? { deletedAt } : {}),
+          }));
+        const cursor = parsed.searchParams.get('cursor');
+        const start = cursor ? listed.findIndex(row => row.id === cursor) + 1 : 0;
+        const rows = listed.slice(start, start + Number(parsed.searchParams.get('limit')));
+        const hasMore = start + rows.length < listed.length;
+        return { data: rows, next_cursor: hasMore ? rows[rows.length - 1].id : null };
       }
       const detail = /^\/api\/sessions\/([^/]+)$/.exec(parsed.pathname);
       if (detail) {
         const id = decodeURIComponent(detail[1]);
-        if (notebooks[id]) return { id, ...notebooks[id] };
+        if (notebooks[id] && !notebooks[id].deletedAt) return { id, ...notebooks[id] };
         throw Object.assign(new Error('Session not found'), { isAxiosError: true, response: { status: 404 } });
       }
       throw new Error(`unexpected ${url}`);
@@ -733,19 +769,200 @@ describe('web session sync', () => {
       expect(state.web.lastSyncAt).not.toBeNull();
     });
 
+    it.each([
+      null,
+      {},
+      { message: 'unexpected' },
+      { data: [] },
+      [],
+      { data: [], hasMore: false },
+      { data: 'bad', next_cursor: null },
+      { data: [], next_cursor: '' },
+    ])('rejects a malformed notebook list page rather than treating it as empty: %j', async payload => {
+      const api = { get: async () => payload } as unknown as WebApi;
+      await expect(listWebNotebooks(api)).rejects.toThrow();
+    });
+
     it.each([null, {}, { message: 'unexpected' }, { data: [] }, { data: 'bad', hasMore: false }])(
-      'rejects a malformed page rather than treating it as empty: %j',
+      'rejects a malformed quest page rather than treating it as empty: %j',
       async payload => {
         const api = { get: async () => payload } as unknown as WebApi;
-        await expect(listWebNotebooks(api)).rejects.toThrow();
         await expect(fetchQuests(api, 'nb1')).rejects.toThrow();
       }
     );
 
-    it.each([[], { data: [], hasMore: false }])('accepts a valid empty page: %j', async payload => {
+    it('accepts a valid empty notebook list page', async () => {
+      const api = { get: async () => ({ data: [], next_cursor: null }) } as unknown as WebApi;
+      await expect(listWebNotebooks(api)).resolves.toEqual({ notebooks: [], complete: true, latestChange: null });
+    });
+
+    it.each([[], { data: [], hasMore: false }])('accepts a valid empty quest page: %j', async payload => {
       const api = { get: async () => payload } as unknown as WebApi;
-      await expect(listWebNotebooks(api)).resolves.toEqual({ notebooks: [], complete: true });
       await expect(fetchQuests(api, 'nb1')).resolves.toEqual({ quests: [], truncated: false });
+    });
+
+    describe('listing notebooks', () => {
+      const row = (id: string) => ({ id, name: id, updatedAt: '2026-01-01T00:00:00.000Z' });
+      const httpError = (status: number) =>
+        new AxiosError(`HTTP ${status}`, 'ERR_BAD_RESPONSE', undefined, undefined, {
+          status,
+        } as unknown as ConstructorParameters<typeof AxiosError>[4]);
+
+      it('lists more than 5,000 notebooks, newest first', async () => {
+        const notebooks: Record<string, FakeNotebook> = {};
+        for (let index = 0; index < 5_050; index++) {
+          notebooks[`nb${index}`] = { name: `N${index}`, updatedAt: '2026-01-01T00:00:00.000Z', quests: [] };
+        }
+        const listed = await listWebNotebooks(fakeWeb(notebooks).api);
+        expect(listed.complete).toBe(true);
+        expect(listed.notebooks).toHaveLength(5_050);
+        expect(listed.notebooks[0].id).toBe('nb5049');
+        expect(listed.notebooks.at(-1)?.id).toBe('nb0');
+      });
+
+      it.each([
+        ['a 503', httpError(503)],
+        ['a 429', httpError(429)],
+        ['a timeout with no response', new AxiosError('timeout', 'ECONNABORTED')],
+      ])('retries a page that failed with %s', async (_label, failure) => {
+        const get = vi
+          .fn()
+          .mockRejectedValueOnce(failure)
+          .mockResolvedValueOnce({ data: [row('nb1')], next_cursor: null });
+        const sleep = vi.fn(async () => {});
+        const listed = await listWebNotebooks({ get } as unknown as WebApi, { sleep });
+        expect(listed).toMatchObject({ complete: true, notebooks: [{ id: 'nb1' }] });
+        expect(get).toHaveBeenCalledTimes(2);
+        expect(sleep).toHaveBeenCalledExactlyOnceWith(1_000);
+      });
+
+      it('backs off 1s then 4s, then gives up', async () => {
+        const get = vi.fn().mockRejectedValue(httpError(503));
+        const sleep = vi.fn(async () => {});
+        await expect(listWebNotebooks({ get } as unknown as WebApi, { sleep })).rejects.toThrow('HTTP 503');
+        expect(get).toHaveBeenCalledTimes(3);
+        expect(sleep.mock.calls).toEqual([[1_000], [4_000]]);
+      });
+
+      it.each([
+        ['a 404', httpError(404)],
+        ['a 400', httpError(400)],
+        ['a plain error', new Error('502')],
+      ])('does not retry %s', async (_label, failure) => {
+        const get = vi.fn().mockRejectedValue(failure);
+        const sleep = vi.fn(async () => {});
+        await expect(listWebNotebooks({ get } as unknown as WebApi, { sleep })).rejects.toBe(failure);
+        expect(get).toHaveBeenCalledTimes(1);
+        expect(sleep).not.toHaveBeenCalled();
+      });
+
+      it('returns what it read when a later page keeps failing', async () => {
+        const get = vi.fn(async (url: string) => {
+          if (url.includes('cursor=c1')) throw httpError(503);
+          return { data: [row('nb2'), row('nb1')], next_cursor: 'c1' };
+        });
+        const listed = await listWebNotebooks({ get } as unknown as WebApi, { sleep: async () => {} });
+        expect(listed.complete).toBe(false);
+        expect(listed.notebooks.map(notebook => notebook.id)).toEqual(['nb2', 'nb1']);
+        expect(listed.stopReason).toBe('stopped after 2 notebooks: HTTP 503');
+      });
+
+      it('is partial when a row is unreadable', async () => {
+        const api = {
+          get: async () => ({ data: [row('nb1'), { id: '../bad' }], next_cursor: null }),
+        } as unknown as WebApi;
+        const listed = await listWebNotebooks(api);
+        expect(listed.notebooks.map(notebook => notebook.id)).toEqual(['nb1']);
+        expect(listed.complete).toBe(false);
+        expect(listed.stopReason).toBe('1 unreadable notebook in the list');
+      });
+    });
+
+    describe('needsWebImport', () => {
+      const UPDATED = '2026-01-03T00:00:00.000Z';
+      const LAST_UPDATED = '2026-01-02T00:00:00.000Z';
+      const notebook = readNotebook({ id: 'nb1', name: 'Trip', updatedAt: UPDATED, lastUpdated: LAST_UPDATED })!;
+      const cursorAt = (version: string) => ({ sessionId: 's', version, status: 'imported' as const });
+
+      it('re-imports a notebook renamed without moving lastUpdated (auto-naming)', () => {
+        const renamed = readNotebook({ id: 'nb1', name: 'Trip to Kyoto', lastUpdated: LAST_UPDATED })!;
+        expect(needsWebImport(notebook, cursorAt(notebook.version))).toBe(false);
+        expect(needsWebImport(renamed, cursorAt(notebook.version))).toBe(true);
+      });
+
+      it('re-imports after an unsettled or truncated read', () => {
+        expect(needsWebImport(notebook, cursorAt(''))).toBe(true);
+      });
+
+      it('does not re-import a legacy cursor whose lastUpdated half matches', () => {
+        expect(needsWebImport(notebook, cursorAt(`${UPDATED}|${LAST_UPDATED}`))).toBe(false);
+      });
+
+      it('re-imports a legacy cursor whose lastUpdated half differs', () => {
+        expect(needsWebImport(notebook, cursorAt(`${UPDATED}|2026-01-01T00:00:00.000Z`))).toBe(true);
+      });
+
+      it('falls back to the legacy updatedAt half when lastUpdated was empty', () => {
+        const bare = readNotebook({ id: 'nb1', updatedAt: UPDATED })!;
+        expect(needsWebImport(bare, cursorAt(`${UPDATED}|`))).toBe(false);
+      });
+    });
+
+    it('imports a partial list, says why it is partial, and prunes nothing', async () => {
+      const notebooks: Record<string, FakeNotebook> = {};
+      for (let index = 0; index < 150; index++) {
+        notebooks[`nb${index}`] = { name: `N${index}`, updatedAt: '2026-01-01T00:00:00.000Z', quests: [] };
+      }
+      notebooks.nb0.quests = [{ id: 'q0', prompt: 'old', reply: 'old' }];
+      notebooks.nb149.quests = [{ id: 'q1', prompt: 'new', reply: 'new' }];
+      const web = fakeWeb(notebooks);
+      const { service, store } = await setup(new Map([['account-a', web.api]]));
+      await service.setWebSettings({ enabled: true });
+      await service.syncWeb();
+      expect(await store.get(idFor(ACCOUNT_A, 'nb0'))).not.toBeNull();
+
+      const inner = web.get.getMockImplementation()!;
+      web.get.mockImplementation(async url => {
+        if (url.includes('/api/v1/sessions') && url.includes('cursor=')) throw new Error('boom');
+        return inner(url);
+      });
+      web.notebooks.nb149.quests.push({ id: 'q2', prompt: 'newer', reply: 'newer' });
+      web.notebooks.nb149.updatedAt = '2026-01-02T00:00:00.000Z';
+      delete web.notebooks.nb0;
+      await service.syncWeb();
+
+      expect((await store.get(idFor(ACCOUNT_A, 'nb149')))?.messages).toHaveLength(4);
+      expect(await store.get(idFor(ACCOUNT_A, 'nb0'))).not.toBeNull();
+      expect((await service.state()).web.error).toBe(
+        'Synced 100 of your Bike4Mind web notebooks; the list stopped after 100 notebooks: boom.'
+      );
+    });
+
+    it('names the reason when the list cannot be read at all', async () => {
+      const get = vi.fn().mockRejectedValue(
+        new AxiosError('x', 'ERR_BAD_REQUEST', undefined, undefined, {
+          status: 403,
+        } as unknown as ConstructorParameters<typeof AxiosError>[4])
+      );
+      const { service } = await setup(new Map([['account-a', { get } as unknown as WebApi]]));
+      await service.setWebSettings({ enabled: true });
+      await service.syncWeb();
+      expect((await service.state()).web.error).toBe('Could not read your notebooks from Bike4Mind web (HTTP 403).');
+    });
+
+    it('keeps a malformed first page out of the Settings error as a short reason', async () => {
+      const get = vi.fn().mockResolvedValue({ unexpected: true });
+      const { service } = await setup(new Map([['account-a', { get } as unknown as WebApi]]));
+      await service.setWebSettings({ enabled: true });
+      await service.syncWeb();
+      expect((await service.state()).web.error).toBe(
+        'Could not read your notebooks from Bike4Mind web (unexpected response).'
+      );
+    });
+
+    it('reduces a non-HTTP error to its first line', () => {
+      expect(describeWebError(new Error('Not signed in\nstack details'))).toBe('Not signed in');
+      expect(describeWebError(new Error('x'.repeat(200)))).toHaveLength(120);
     });
 
     it.each([null, {}, { id: '../invalid', prompt: 'bad' }])('rejects a malformed quest row: %j', async row => {
@@ -770,7 +987,7 @@ describe('web session sync', () => {
       const { service, store } = await setup(new Map([['account-a', web.api]]));
       await service.setWebSettings({ enabled: true });
       await service.syncWeb();
-      web.get.mockResolvedValueOnce({ data: [], hasMore: false });
+      web.get.mockResolvedValueOnce({ data: [], next_cursor: null });
       await service.syncWeb();
       expect(await store.get(idFor(ACCOUNT_A, 'nb1'))).not.toBeNull();
       expect((await service.state()).web.counts.imported).toBe(1);
@@ -781,7 +998,7 @@ describe('web session sync', () => {
       const { service, store } = await setup(new Map([['account-a', web.api]]));
       await service.setWebSettings({ enabled: true });
       await service.syncWeb();
-      web.get.mockResolvedValueOnce({ data: [], hasMore: false }).mockRejectedValueOnce(new Error('network down'));
+      web.get.mockResolvedValueOnce({ data: [], next_cursor: null }).mockRejectedValueOnce(new Error('network down'));
       await service.syncWeb();
       expect(await store.get(idFor(ACCOUNT_A, 'nb1'))).not.toBeNull();
       expect((await service.state()).web.error).toContain('network down');
@@ -794,7 +1011,7 @@ describe('web session sync', () => {
       await service.syncWeb();
       web.notebooks.nb1.updatedAt = '2026-01-02T00:00:00.000Z';
       web.get
-        .mockResolvedValueOnce({ data: [{ id: 'nb1', ...web.notebooks.nb1 }], hasMore: false })
+        .mockResolvedValueOnce({ data: [{ id: 'nb1', ...web.notebooks.nb1 }], next_cursor: null })
         .mockRejectedValueOnce(new Error('chat unavailable'));
       await service.syncWeb();
       expect((await service.state()).web.counts.failed).toBe(1);
@@ -820,7 +1037,7 @@ describe('web session sync', () => {
 
       web.notebooks.nb1.updatedAt = '2026-01-02T00:00:00.000Z';
       web.get
-        .mockResolvedValueOnce({ data: [{ id: 'nb1', ...web.notebooks.nb1 }], hasMore: false })
+        .mockResolvedValueOnce({ data: [{ id: 'nb1', ...web.notebooks.nb1 }], next_cursor: null })
         .mockRejectedValueOnce(new Error('chat unavailable'));
       await service.syncWeb();
       expect((await service.state()).web.counts.failed).toBe(1);
@@ -840,7 +1057,7 @@ describe('web session sync', () => {
       await service.syncWeb();
       web.notebooks.nb1.updatedAt = '2026-01-02T00:00:00.000Z';
       web.get
-        .mockResolvedValueOnce({ data: [{ id: 'nb1', ...web.notebooks.nb1 }], hasMore: false })
+        .mockResolvedValueOnce({ data: [{ id: 'nb1', ...web.notebooks.nb1 }], next_cursor: null })
         .mockRejectedValueOnce(new Error('chat unavailable'));
       await service.syncWeb();
       await store.delete(idFor(ACCOUNT_A, 'nb1'));
@@ -860,7 +1077,7 @@ describe('web session sync', () => {
       });
       web.get.mockImplementationOnce(async () => {
         await gate;
-        return { data: [], hasMore: false };
+        return { data: [], next_cursor: null };
       });
       web.get.mockClear();
       const run = service.syncWeb();
@@ -882,14 +1099,16 @@ describe('web session sync', () => {
       web.get.mockClear();
 
       await service.syncWeb();
-      expect(web.get.mock.calls.map(([url]) => new URL(url, 'https://web.test').pathname)).toEqual(['/api/sessions']);
+      expect(web.get.mock.calls.map(([url]) => new URL(url, 'https://web.test').pathname)).toEqual([
+        '/api/v1/sessions',
+      ]);
 
       web.notebooks.nb1.quests.push({ id: 'q2', prompt: 'When?', reply: 'May' });
       web.notebooks.nb1.updatedAt = '2026-01-02T00:00:00.000Z';
       web.get.mockClear();
       await service.syncWeb();
       const chatReads = web.get.mock.calls.map(([url]) => new URL(url, 'https://web.test').pathname);
-      expect(chatReads).toEqual(['/api/sessions', '/api/sessions/nb1/chat']);
+      expect(chatReads).toEqual(['/api/v1/sessions', '/api/sessions/nb1/chat']);
       const messages = (await store.get(idFor(ACCOUNT_A, 'nb1')))?.messages ?? [];
       expect(messages.map(message => message.id)).toEqual(['bw-q1-p', 'bw-q1-r', 'bw-q2-p', 'bw-q2-r']);
     });
@@ -1105,7 +1324,7 @@ describe('web session sync', () => {
     describe('on window focus', () => {
       afterEach(() => vi.useRealTimers());
       const listReads = (web: ReturnType<typeof fakeWeb>) =>
-        web.get.mock.calls.filter(([url]) => new URL(url, 'https://web.test').pathname === '/api/sessions').length;
+        web.get.mock.calls.filter(([url]) => new URL(url, 'https://web.test').pathname === '/api/v1/sessions').length;
       const settle = () => new Promise(resolve => setTimeout(resolve, 25));
 
       it('syncs at most once a minute', async () => {
@@ -1153,6 +1372,39 @@ describe('web session sync', () => {
         await settle();
         expect(listReads(web)).toBe(base + 1);
       });
+
+      it('counts the minute from the end of a run that outlasted it', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-03-01T00:00:00Z'));
+        const web = fakeWeb(oneNotebook());
+        const { service } = await setup(new Map([['account-a', web.api]]));
+        await service.setWebSettings({ enabled: true });
+        await service.syncWeb();
+        const base = listReads(web);
+
+        const inner = web.get.getMockImplementation()!;
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => (release = resolve));
+        web.get.mockImplementation(async url => {
+          await gate;
+          return inner(url);
+        });
+        vi.advanceTimersByTime(61_000);
+        const run = service.syncWeb();
+        await vi.waitFor(() => expect(listReads(web)).toBe(base + 1));
+        vi.advanceTimersByTime(90_000);
+        release();
+        await run;
+
+        vi.advanceTimersByTime(5_000);
+        service.onWindowFocus();
+        await settle();
+        expect(listReads(web)).toBe(base + 1);
+
+        vi.advanceTimersByTime(56_000);
+        service.onWindowFocus();
+        await vi.waitFor(() => expect(listReads(web)).toBe(base + 2));
+      });
     });
 
     describe('while a window stays focused', () => {
@@ -1165,7 +1417,7 @@ describe('web session sync', () => {
       };
       const MINUTE = 60_000;
       const listReads = (web: ReturnType<typeof fakeWeb>) =>
-        web.get.mock.calls.filter(([url]) => new URL(url, 'https://web.test').pathname === '/api/sessions').length;
+        web.get.mock.calls.filter(([url]) => new URL(url, 'https://web.test').pathname === '/api/v1/sessions').length;
 
       async function focusedService(web: ReturnType<typeof fakeWeb>) {
         vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
@@ -1213,7 +1465,7 @@ describe('web session sync', () => {
         const inner = web.get.getMockImplementation()!;
         let failing = true;
         web.get.mockImplementation(async url => {
-          if (failing && new URL(url, 'https://web.test').pathname === '/api/sessions') throw new Error('502');
+          if (failing && new URL(url, 'https://web.test').pathname === '/api/v1/sessions') throw new Error('502');
           return inner(url);
         });
         const base = listReads(web);
@@ -1251,6 +1503,235 @@ describe('web session sync', () => {
         expect(listReads(web)).toBe(base + 1);
         release();
       });
+    });
+  });
+
+  describe('change feed', () => {
+    const MARK = '2026-03-01T00:00:00.000Z';
+    const listPage = (data: unknown[], nextCursor: string | null = null) => ({ data, next_cursor: nextCursor });
+    const row = (id: string, updatedAt: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      name: id,
+      updatedAt,
+      lastUpdated: updatedAt,
+      ...extra,
+    });
+
+    describe('listWebNotebooks change mark', () => {
+      it('takes the latest stamp over the rows that have one, skipping sessions older than the field', async () => {
+        const get = vi.fn(async () =>
+          listPage([
+            row('nb1', '2026-03-01T00:01:00.000Z'),
+            { id: 'nb2', name: 'nb2', lastUpdated: '2026-03-01T00:05:00.000Z' },
+          ])
+        );
+        const list = await listWebNotebooks({ get } as unknown as WebApi);
+        expect(list.complete).toBe(true);
+        expect(list.latestChange).toBe('2026-03-01T00:01:00.000Z');
+      });
+
+      it('has no mark when no row carries a stamp', async () => {
+        const get = vi.fn(async () => listPage([{ id: 'nb1', name: 'nb1', lastUpdated: MARK }]));
+        expect((await listWebNotebooks({ get } as unknown as WebApi)).latestChange).toBeNull();
+      });
+    });
+
+    describe('listWebNotebookChanges', () => {
+      it('asks for changes since the mark minus the overlap, and splits live rows from tombstones', async () => {
+        const get = vi.fn(async () =>
+          listPage([
+            row('nb1', '2026-03-01T00:01:00.000Z'),
+            row('nb2', '2026-03-01T00:02:00.000Z', { deletedAt: '2026-03-01T00:02:00.000Z' }),
+          ])
+        );
+        const changes = await listWebNotebookChanges({ get } as unknown as WebApi, MARK);
+        const url = new URL((get.mock.calls[0] as unknown as [string])[0], 'https://web.test');
+        expect(url.searchParams.get('updated_since')).toBe(
+          new Date(Date.parse(MARK) - CHANGE_OVERLAP_MS).toISOString()
+        );
+        expect(changes?.notebooks.map(notebook => notebook.id)).toEqual(['nb1']);
+        expect(changes?.deletedIds).toEqual(['nb2']);
+        expect(changes?.latestChange).toBe('2026-03-01T00:02:00.000Z');
+        expect(changes?.complete).toBe(true);
+      });
+
+      it("keeps a notebook's last appearance: deleted then restored is live, edited then deleted is gone", async () => {
+        const pages = [
+          listPage(
+            [row('nb1', '2026-03-01T00:01:00.000Z', { deletedAt: 'x' }), row('nb2', '2026-03-01T00:01:00.000Z')],
+            'c1'
+          ),
+          listPage([
+            row('nb1', '2026-03-01T00:02:00.000Z'),
+            row('nb2', '2026-03-01T00:03:00.000Z', { deletedAt: 'y' }),
+          ]),
+        ];
+        const get = vi.fn(async () => pages.shift());
+        const changes = await listWebNotebookChanges({ get } as unknown as WebApi, MARK);
+        expect(changes?.notebooks.map(notebook => notebook.id)).toEqual(['nb1']);
+        expect(changes?.deletedIds).toEqual(['nb2']);
+      });
+
+      it.each([
+        ['rows without updatedAt', [{ id: 'nb2', name: 'b', lastUpdated: MARK }]],
+        ['rows not in change order', [row('nb2', '2026-03-02T00:00:00.000Z'), row('nb1', '2026-03-01T00:00:00.000Z')]],
+      ])('returns null for a server without the feed (%s)', async (_label, data) => {
+        const get = vi.fn(async () => listPage(data));
+        await expect(listWebNotebookChanges({ get } as unknown as WebApi, MARK)).resolves.toBeNull();
+      });
+
+      it('keeps what a partial listing read, with the latest change it reached', async () => {
+        const get = vi
+          .fn()
+          .mockResolvedValueOnce(listPage([row('nb1', '2026-03-01T00:01:00.000Z')], 'c1'))
+          .mockRejectedValue(new Error('boom'));
+        const changes = await listWebNotebookChanges({ get } as unknown as WebApi, MARK, { retryDelaysMs: [] });
+        expect(changes).toMatchObject({ complete: false, latestChange: '2026-03-01T00:01:00.000Z' });
+        expect(changes?.stopReason).toContain('boom');
+      });
+    });
+
+    function feedNotebooks(): Record<string, FakeNotebook> {
+      return {
+        nb1: {
+          name: 'Trip plan',
+          updatedAt: '2026-03-01T00:00:00.000Z',
+          quests: [{ id: 'q1', prompt: 'A', reply: 'B' }],
+        },
+        nb2: {
+          name: 'Groceries',
+          updatedAt: '2026-03-02T00:00:00.000Z',
+          quests: [{ id: 'q2', prompt: 'C', reply: 'D' }],
+        },
+      };
+    }
+    const listUrls = (web: ReturnType<typeof fakeWeb>) =>
+      web.get.mock.calls
+        .map(([url]) => new URL(url, 'https://web.test'))
+        .filter(url => url.pathname === '/api/v1/sessions');
+
+    async function synced(server = { changeFeed: true }) {
+      const web = fakeWeb(feedNotebooks(), server);
+      const env = await setup(new Map([['account-a', web.api]]));
+      await env.service.setWebSettings({ enabled: true });
+      await env.service.syncWeb();
+      web.get.mockClear();
+      return { web, server, ...env };
+    }
+
+    it('lists everything once, then a steady-state sync is a single change-feed request', async () => {
+      const { web, service } = await synced();
+      await service.syncWeb();
+      expect(web.get).toHaveBeenCalledTimes(1);
+      const [url] = listUrls(web);
+      expect(url.searchParams.get('updated_since')).toBe(
+        new Date(Date.parse('2026-03-02T00:00:00.000Z') - CHANGE_OVERLAP_MS).toISOString()
+      );
+      expect((await service.state()).web.counts.imported).toBe(2);
+    });
+
+    it('keeps the mark when a run is cut short by an account switch', async () => {
+      const { web, service, signIn } = await synced();
+      web.notebooks.nb1.updatedAt = '2026-03-03T00:00:00.000Z';
+      web.notebooks.nb1.quests.push({ id: 'q3', prompt: 'E', reply: 'F' });
+      web.notebooks.nb2.updatedAt = '2026-03-05T00:00:00.000Z';
+      web.notebooks.nb2.quests.push({ id: 'q4', prompt: 'G', reply: 'H' });
+      const inner = web.get.getMockImplementation()!;
+      web.get.mockImplementation(async url => {
+        if (url.includes('/api/sessions/nb1/chat')) signIn(null);
+        return inner(url);
+      });
+      await service.syncWeb();
+      web.get.mockImplementation(inner);
+      web.get.mockClear();
+      signIn(ACCOUNT_A);
+      await service.syncWeb();
+      const feed = listUrls(web).find(url => url.searchParams.has('updated_since'));
+      expect(feed?.searchParams.get('updated_since')).toBe(
+        new Date(Date.parse('2026-03-02T00:00:00.000Z') - CHANGE_OVERLAP_MS).toISOString()
+      );
+    });
+
+    it('brings a rename and new messages in through the feed, and moves the mark past them', async () => {
+      const { web, service, store } = await synced();
+      web.notebooks.nb1.name = 'Lisbon trip';
+      web.notebooks.nb1.updatedAt = '2026-03-03T00:00:00.000Z';
+      web.notebooks.nb1.quests.push({ id: 'q3', prompt: 'E', reply: 'F' });
+      await service.syncWeb();
+      const session = await store.get(idFor(ACCOUNT_A, 'nb1'));
+      expect(session?.title).toBe('Lisbon trip');
+      expect(session?.messages).toHaveLength(4);
+
+      web.get.mockClear();
+      await service.syncWeb();
+      expect(listUrls(web)[0].searchParams.get('updated_since')).toBe(
+        new Date(Date.parse('2026-03-03T00:00:00.000Z') - CHANGE_OVERLAP_MS).toISOString()
+      );
+    });
+
+    it('drops the copy of a notebook deleted on the web from its tombstone, with no extra request', async () => {
+      const { web, service, store } = await synced();
+      web.notebooks.nb1.deletedAt = '2026-03-03T00:00:00.000Z';
+      web.notebooks.nb1.updatedAt = '2026-03-03T00:00:00.000Z';
+      await service.syncWeb();
+      expect(await store.get(idFor(ACCOUNT_A, 'nb1'))).toBeNull();
+      expect(await store.get(idFor(ACCOUNT_A, 'nb2'))).not.toBeNull();
+      expect(web.get).toHaveBeenCalledTimes(1);
+      expect((await service.state()).web.counts.found).toBe(1);
+    });
+
+    it('falls back to the full list, and its prune, when the server stops serving the feed', async () => {
+      const { web, server, service, store } = await synced();
+      server.changeFeed = false;
+      delete web.notebooks.nb1;
+      await service.syncWeb();
+      const urls = listUrls(web);
+      expect(urls[0].searchParams.has('updated_since')).toBe(true);
+      expect(urls.at(-1)?.searchParams.has('updated_since')).toBe(false);
+      expect(await store.get(idFor(ACCOUNT_A, 'nb1'))).toBeNull();
+    });
+
+    it('never reads the feed from a server without it', async () => {
+      const { web, service } = await synced({ changeFeed: false });
+      await service.syncWeb();
+      expect(listUrls(web).every(url => !url.searchParams.has('updated_since'))).toBe(true);
+    });
+
+    it('reconciles with a full list on Sync now and once a day', async () => {
+      const { web, service } = await synced();
+      await service.syncWeb({ reconcile: true });
+      expect(listUrls(web).every(url => !url.searchParams.has('updated_since'))).toBe(true);
+
+      web.get.mockClear();
+      const realNow = Date.now();
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(realNow + 25 * 60 * 60_000);
+      onTestFinished(() => clock.mockRestore());
+      await service.syncWeb();
+      expect(listUrls(web).every(url => !url.searchParams.has('updated_since'))).toBe(true);
+    });
+
+    it('retries a notebook whose read failed by id, since the feed will not list it again', async () => {
+      const { web, service, store } = await synced();
+      web.notebooks.nb1.updatedAt = '2026-03-03T00:00:00.000Z';
+      web.notebooks.nb1.quests.push({ id: 'q3', prompt: 'E', reply: 'F' });
+      // A later change moves the mark well past nb1, out of the feed's overlap.
+      web.notebooks.nb2.updatedAt = '2026-03-05T00:00:00.000Z';
+      const inner = web.get.getMockImplementation()!;
+      web.get.mockImplementation(async url => {
+        if (url.includes('/api/sessions/nb1/chat')) throw new Error('chat unavailable');
+        return inner(url);
+      });
+      await service.syncWeb();
+      expect((await service.state()).web.counts.failed).toBe(1);
+
+      web.get.mockImplementation(inner);
+      web.get.mockClear();
+      await service.syncWeb();
+      expect(web.get.mock.calls.map(([url]) => new URL(url, 'https://web.test').pathname)).toContain(
+        '/api/sessions/nb1'
+      );
+      expect((await store.get(idFor(ACCOUNT_A, 'nb1')))?.messages).toHaveLength(4);
+      expect((await service.state()).web.counts.failed).toBe(0);
     });
   });
 });
@@ -2063,7 +2544,7 @@ describe('webSessionMapper', () => {
   const AT = '2026-01-01T00:00:00.000Z';
 
   describe('readNotebook', () => {
-    it('reads id, name and timestamps, and versions on both update stamps', () => {
+    it('reads id, name and timestamps, and versions on lastUpdated and the name', () => {
       const notebook = readNotebook({
         id: '65a1b2c3d4e5f60718293a4b',
         name: ' Trip plan ',
@@ -2076,7 +2557,7 @@ describe('webSessionMapper', () => {
         name: 'Trip plan',
         createdAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-03T00:00:00.000Z',
-        version: '2026-01-03T00:00:00.000Z|2026-01-02T00:00:00.000Z',
+        version: expect.stringMatching(/^v2\|2026-01-02T00:00:00\.000Z\|[0-9a-f]{12}$/),
       });
     });
 
@@ -2148,6 +2629,33 @@ describe('ImportStateStore', () => {
 
       expect((await reading).web.enabled).toBe(true);
       expect((await store.readSettings()).web.enabled).toBe(true);
+    });
+  });
+
+  describe('ImportStateStore web change mark', () => {
+    it('keeps the mark across a restart, and reads a missing or unusable one as none', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'import-mark-'));
+      const settingsPath = join(root, 'claude-import.json');
+      const stateDirectory = join(root, 'state');
+      const store = new ImportStateStore(settingsPath, stateDirectory);
+      const scope = await store.scope('account-a');
+      expect(scope.webChangeMark).toBeNull();
+      expect(scope.webFullListAt).toBeNull();
+      scope.webChangeMark = '2026-03-01T00:00:00.000Z';
+      scope.webFullListAt = 1_000;
+      await store.saveScope('account-a');
+      await writeFile(
+        join(stateDirectory, 'account-b.json'),
+        JSON.stringify({ version: 1, webChangeMark: 'not a date', webFullListAt: 'soon' }),
+        'utf8'
+      );
+
+      const restarted = new ImportStateStore(settingsPath, stateDirectory);
+      expect(await restarted.scope('account-a')).toMatchObject({
+        webChangeMark: '2026-03-01T00:00:00.000Z',
+        webFullListAt: 1_000,
+      });
+      expect(await restarted.scope('account-b')).toMatchObject({ webChangeMark: null, webFullListAt: null });
     });
   });
 

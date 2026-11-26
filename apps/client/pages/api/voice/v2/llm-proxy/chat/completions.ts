@@ -45,7 +45,6 @@ import { buildAudioToolJobs } from '@bike4mind/server-utils/generationJobs/audio
 import { getVoiceVideoToolConfigResolver } from '@server/videoGenerations/voiceVideoToolConfig';
 import { verifyVoiceSessionToken, type VoiceSessionContext } from '@server/voice/voiceSessionToken';
 import { voiceSessionTokenExpiresAtMs } from '@bike4mind/server-utils/voice/voiceSessionLimits';
-import { createCompletionMeter } from '@bike4mind/server-utils/billing/meterPlatformCompletion';
 
 // Built-in tools enabled for voice turns. Curated to ones that execute INLINE
 // (no SQS/Lambda dispatch): web search, knowledge-base RAG, datetime,
@@ -159,19 +158,6 @@ async function runFullPipeline(
     gpcSignalDetected: false,
     features: new Map<featureNames, ChatCompletionFeature>(),
     logger,
-    createCompletionMeter: ({
-      organizationId,
-      featureLabel,
-    }: {
-      organizationId: string | null;
-      featureLabel: string;
-    }) =>
-      createCompletionMeter(user, logger, featureLabel, {
-        sessionId: sessionCtx.sessionId,
-        organizationId,
-        apiKeyId: sessionCtx.apiKeyId,
-        apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
-      }),
     // Forward streamed reply updates to the SSE writer in the handler.
     onReplyStream,
     // No-op: we run process() inline in this request handler, so we deliberately
@@ -204,7 +190,7 @@ async function runFullPipeline(
     enableArtifacts: false,
     // Enable the inline built-in tools (web search, RAG, etc.) plus any ElevenLabs
     // client tools for this turn. Without the builtins the agent can't search the
-    // web. QuestMaster, Agents (subagent Lambda handoff), and Mementos (async
+    // web. Agents (subagent Lambda handoff) and Mementos (async
     // creation) stay off so the whole voice turn runs in-process - no separate
     // Lambda or SQS dispatch. The one exception is video_generation, which only enqueues a job.
     tools: [
@@ -214,7 +200,6 @@ async function runFullPipeline(
     ],
     // The save-intent gate would otherwise offer the data-lake tools past the list above.
     deniedTools: [...DATA_LAKE_TOOL_NAMES],
-    enableQuestMaster: false,
     enableMementos: false,
     enableAgents: false,
     // Speech streams from the raw reply, so a choices block would be read aloud; there are no buttons.
@@ -230,6 +215,7 @@ async function runFullPipeline(
     userId: sessionCtx.userId,
     authOrigin: sessionCtx.authOrigin,
     apiKeyId: sessionCtx.apiKeyId,
+    fileInputsAllowed: sessionCtx.fileInputsAllowed,
     apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
   });
   if (!quest) throw new Error('Voice v2: failed to create quest');
@@ -247,11 +233,11 @@ async function runFullPipeline(
       // from this body only.
       authOrigin: sessionCtx.authOrigin,
       apiKeyId: sessionCtx.apiKeyId,
+      fileInputsAllowed: sessionCtx.fileInputsAllowed,
       apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
       embeddingModel,
       queryComplexity: 'simple',
       dashboardParams: undefined,
-      questMaster: undefined,
       researchMode: undefined,
       imageConfig: undefined,
     },

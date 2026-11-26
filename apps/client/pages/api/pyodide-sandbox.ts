@@ -136,7 +136,14 @@ function buildSandboxHtml(): string {
 
     // 'cancel' is advisory - the worker only observes it between steps. A wedged run is
     // stopped by the parent dropping this whole frame, which takes the Worker with it.
-    worker.postMessage(event.data);
+    // A call's data files move on to the worker as transferred buffers, never a second copy.
+    var transfer = [];
+    if (Array.isArray(event.data.files)) {
+      event.data.files.forEach(function (file) {
+        if (file && file.bytes instanceof ArrayBuffer) transfer.push(file.bytes);
+      });
+    }
+    worker.postMessage(event.data, transfer);
   });
 
   toParent({ type: '${SANDBOX_READY}' });

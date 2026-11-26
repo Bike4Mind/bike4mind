@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Request } from 'express';
-import { AdminSupportAccessAction, ISessionDocument } from '@bike4mind/common';
+import { AdminSupportAccessAction, assertCanActOnAdminTarget, ISessionDocument } from '@bike4mind/common';
 import { adminSupportAccessAuditLogRepository, sessionRepository, userRepository } from '@bike4mind/database';
 import { ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
@@ -106,14 +106,19 @@ export function authorizeSupportCase(req: SupportReadRequest, supportCase: unkno
 }
 
 /**
- * An account in its deletion grace period is out of reach of support reads, whichever route serves
- * its content. Call it once the content's owner is known, before the read is recorded or served.
+ * Whose content a support read may serve, whichever route serves it: not an account in its deletion
+ * grace period, and, for a delegated reader, not an account with admin access. Call it once the
+ * content's owner is known, before the read is recorded or served.
  */
-export async function assertOwnerNotPendingDeletion(ownerUserId: string): Promise<void> {
+export async function assertSupportReadableOwner(
+  actor: SupportReadRequest['user'],
+  ownerUserId: string
+): Promise<void> {
   const owner = await userRepository.findById(ownerUserId);
   if (owner?.deletion) {
     throw new ForbiddenError('This account is scheduled for deletion');
   }
+  assertCanActOnAdminTarget(actor, owner, 'read the content of');
 }
 
 /**
@@ -136,7 +141,7 @@ export async function authorizeSupportRead(req: SupportReadRequest): Promise<Sup
     throw new NotFoundError('Session not found');
   }
 
-  await assertOwnerNotPendingDeletion(session.userId);
+  await assertSupportReadableOwner(req.user, session.userId);
 
   return { ...toActorContext(req, supportCase), session };
 }

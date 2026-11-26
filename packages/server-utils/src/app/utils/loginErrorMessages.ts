@@ -21,6 +21,7 @@ const LOGIN_ERROR_MESSAGES = {
   // Provider / IdP resolution
   invalid_idp: 'That single sign-on provider isn’t recognized. Please try another method.',
   missing_idp_context: 'Your single sign-on session expired. Please try signing in again.',
+  saml_session_mismatch: 'Your sign-in session expired. Please try again.',
   email_required: 'Your single sign-on account didn’t share an email address, which is required to sign in.',
   // Account linking (the email-equality gate refuses an auto-link)
   account_link_email_mismatch:

@@ -7,6 +7,7 @@ import { useConversation, type ConversationController } from './useChat';
 import { workspacePhrase, applyWorkspaceEvent, preparingOnSend } from './workspaceProgress';
 import type { WorkspaceChanges } from '@shared/workspaceChanges';
 import { useWorkspaceChanges } from './useWorkspaceChanges';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -50,6 +51,7 @@ describe('workspaceStatus', () => {
       listener = null;
       project = awaiting;
       (window as unknown as { b4m: unknown }).b4m = {
+        host: chatBackedHostBridge(),
         chat: {
           getSession: async () => ({ id: SESSION, mode: 'code', project, messages: [] }),
           getQueuedMessages: async () => [],
@@ -247,7 +249,7 @@ describe('useWorkspaceChanges', () => {
     beforeEach(() => {
       seen = null;
       workspaceChanges.mockReset();
-      (window as unknown as { b4m: unknown }).b4m = { chat: { workspaceChanges } };
+      (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat: { workspaceChanges } };
       container = document.createElement('div');
       document.body.appendChild(container);
       root = createRoot(container);

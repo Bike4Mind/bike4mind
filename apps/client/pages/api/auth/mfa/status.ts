@@ -32,7 +32,7 @@ const handler = baseApi().get(
       }
       res.json(status);
     } catch (error: any) {
-      console.error('Error getting MFA status:', error);
+      req.logger.error('Error getting MFA status', { error });
       res.status(500).json({ error: error.message || 'Failed to get MFA status' });
     }
   })

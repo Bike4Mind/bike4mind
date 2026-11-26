@@ -9,7 +9,7 @@ import { LocalModels, optionCatalogSampling } from './LocalModels';
 import { credentialHeaders } from './ModelServerStore';
 import { createServer, type Server } from 'node:net';
 import { loopbackLaunchPort, loopbackPortFree, loopbackPortListening } from './loopbackPort';
-import type { SecretCipher } from '../chat/mcp/McpServerStore';
+import type { SecretCipher } from '../../host/ports';
 import type { LocalChat } from '../chat/localChat';
 import type { OllamaLocal } from '../chat/OllamaLocal';
 

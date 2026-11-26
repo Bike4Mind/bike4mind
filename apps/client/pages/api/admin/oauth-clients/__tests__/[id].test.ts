@@ -99,6 +99,15 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
     expect(db.updateOAuthClient).not.toHaveBeenCalled();
   });
 
+  it('rejects a delegated settings:manage admin: only a full admin changes an OAuth client', async () => {
+    const { req, res } = makeReqRes('PATCH', {
+      user: { isAdmin: false, id: 'd1', adminPermissions: ['settings:manage'] },
+      body: { redirectUris: ['https://app.example.test/cb2'] },
+    });
+    await expect(handlers.update.patch(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(db.updateOAuthClient).not.toHaveBeenCalled();
+  });
+
   it('updates redirect URIs and audits the before/after diff', async () => {
     const uris = ['https://app.example.test/cb2'];
     db.updateOAuthClient.mockResolvedValue({ before: view(), after: view({ redirectUris: uris }) });
@@ -264,6 +273,14 @@ describe('PATCH /api/admin/oauth-clients/[id]', () => {
 describe('POST /api/admin/oauth-clients/[id]/rotate-secret', () => {
   it('rejects a non-admin with 403', async () => {
     const { req, res } = makeReqRes('POST', { user: { isAdmin: false, id: 'u1' } });
+    await expect(handlers.rotate.post(req, res)).rejects.toMatchObject({ statusCode: 403 });
+    expect(db.rotateOAuthClientSecret).not.toHaveBeenCalled();
+  });
+
+  it('rejects a delegated settings:manage admin before any secret is issued', async () => {
+    const { req, res } = makeReqRes('POST', {
+      user: { isAdmin: false, id: 'd1', adminPermissions: ['settings:manage'] },
+    });
     await expect(handlers.rotate.post(req, res)).rejects.toMatchObject({ statusCode: 403 });
     expect(db.rotateOAuthClientSecret).not.toHaveBeenCalled();
   });

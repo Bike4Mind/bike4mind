@@ -249,9 +249,10 @@ export interface ICompletionOptions {
   /**
    * Use single-attempt SDK requests with abort-aware retries owned by the adapter.
    * Requires abortSignal and stream:false text, without tools, structured output, or evaluation.
+   * 'single-attempt' disables adapter retries too (direct OpenAI and Anthropic only).
    * Omit for the backend's default retry behavior.
    */
-  retryMode?: 'abort-aware';
+  retryMode?: 'abort-aware' | 'single-attempt';
   /**
    * Auto-classified query complexity used to determine reasoning effort
    * when reasoningEffort is not explicitly set

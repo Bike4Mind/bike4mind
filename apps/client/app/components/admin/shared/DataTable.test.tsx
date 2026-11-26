@@ -292,6 +292,25 @@ describe('DataTable', () => {
     expect(cellClick).toHaveBeenCalledOnce();
   });
 
+  it('does not activate a row when the click ends a text selection inside it', () => {
+    const activate = vi.fn();
+    renderTable({ onRowActivate: activate });
+    const row = document.querySelector<HTMLElement>('tr[data-row-id="1"]');
+    if (!row) throw new Error('row 1 not rendered');
+
+    const range = document.createRange();
+    range.selectNodeContents(row);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    fireEvent.click(row);
+    expect(activate).not.toHaveBeenCalled();
+
+    selection?.removeAllRanges();
+    fireEvent.click(row);
+    expect(activate).toHaveBeenCalledOnce();
+  });
+
   it('ignores clicks from portalled cell content such as a row menu', () => {
     const activate = vi.fn();
     renderTable({

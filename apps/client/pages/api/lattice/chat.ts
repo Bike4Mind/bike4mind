@@ -10,7 +10,7 @@ import { withRequestCompletionQuota } from '@server/utils/withRequestCompletionQ
  *
  * Production flow instead goes User -> Chat API -> EventBridge -> QuestProcessor Lambda
  * -> LLM -> Tools -> DB. EventBridge is preferred there: no API Gateway 29s timeout
- * pressure, supports long-running QuestMaster workflows, and has built-in LLM retry.
+ * pressure, supports long-running multi-step tool workflows, and has built-in LLM retry.
  * Always prefer the EventBridge pattern for complex/autonomous operations.
  */
 

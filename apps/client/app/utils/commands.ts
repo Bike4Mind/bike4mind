@@ -41,7 +41,6 @@ export type CommandArgExtra = {
   // Correct-and-retry target. Distinct from `questId`: that re-runs a quest in place, this
   // sends a new turn carrying the user's correction and links it to the answer it corrects.
   correctsQuestId?: string;
-  enableQuestMaster?: boolean;
   enableMementos?: boolean;
   enableArtifacts?: boolean;
   enableAgents?: boolean;

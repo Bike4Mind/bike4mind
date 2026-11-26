@@ -66,7 +66,10 @@ export interface TutorialStepProps {
   /** The anchor and scope the card is watching now, after any `setAnchor` override. */
   anchor?: string;
   anchorScope?: string;
-  /** Switches the card to the step's `doneBody` while its action is done and it waits for Next; `false` switches back. */
+  /**
+   * Switches the card to the step's `doneBody`, while the action is done and it waits for Next or while the step
+   * wants a shorter card (a modal open over the page); `false` switches back.
+   */
   markDone?: (done?: boolean) => void;
   /** The module's sheet in the user's files, for a step that has them attach it. */
   sheetFileId: () => Promise<string>;

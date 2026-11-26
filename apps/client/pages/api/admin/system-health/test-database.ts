@@ -50,7 +50,7 @@ const handler = adminApi({
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
-      console.error('Error testing database connection:', error);
+      req.logger.error('Error testing database connection', { error });
       return res.status(500).json({
         success: false,
         error: error instanceof Error ? error.message : 'Failed to test database connection',

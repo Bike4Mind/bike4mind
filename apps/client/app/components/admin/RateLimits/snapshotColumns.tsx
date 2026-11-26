@@ -1,6 +1,6 @@
 import React from 'react';
 import { Typography } from '@mui/joy';
-import type { DataColumn } from '../shared';
+import { DATETIME_COLUMN_WIDTH, type DataColumn } from '../shared';
 import type { RateLimitSnapshot } from './types';
 
 type SnapshotColumn = DataColumn<RateLimitSnapshot>;
@@ -8,7 +8,7 @@ type SnapshotColumn = DataColumn<RateLimitSnapshot>;
 const timestamp: SnapshotColumn = {
   id: 'timestamp',
   label: 'Timestamp',
-  width: '11rem',
+  width: DATETIME_COLUMN_WIDTH,
   render: snap => new Date(snap.timestamp).toLocaleString(),
 };
 const integration: SnapshotColumn = {

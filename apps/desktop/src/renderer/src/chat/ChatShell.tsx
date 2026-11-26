@@ -24,6 +24,7 @@ import {
   modelSupportsTools,
   SESSION_TITLE_MAX_LENGTH,
 } from '@shared/chat';
+import { hostChat } from '../host/hostChat';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 import { closingText, plainText, snippetOf } from '@shared/agentOutcome';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
@@ -63,7 +64,9 @@ import {
 } from './rail/places';
 import { STUDIO_STARTING, useStudioSession } from './rail/studioSession';
 import { usePlaceShortcuts } from './rail/shortcuts';
-import { StudioMain, StudioSidebar } from './rail/StudioPlace';
+import { StudioMain } from './rail/StudioPlace';
+import { LibraryMain, LibrarySidebar } from './rail/LibraryPlace';
+import type { LibraryFilter } from './library/libraryFeed';
 import { readSidebarWidth } from './sidebarWidth';
 import type { ModelsInUse } from '../models/InstalledTab';
 import type { ComposerFill } from './composerInput';
@@ -76,6 +79,7 @@ import { OpenPaneButtons, PanesMenu, type PaneControl } from './PanesMenu';
 import { SessionArtifactsButton } from './SessionArtifactsButton';
 import { paneDocument, sessionArtifacts, type SessionArtifact } from './sessionArtifacts';
 import { StudioPane } from './studio/StudioPane';
+import { StudioProductions } from './studio/productions/StudioProductions';
 import type { StudioController } from './studio/controller';
 import { useStudioController } from './studio/useStudioController';
 import { studioPaneLayout } from './studio/layout';
@@ -105,7 +109,7 @@ import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
-import { isUntouchedImport, projectForGroup, projectGroupDirectory } from './grouping';
+import { isUntouchedImport, nestedSessionsOf, projectForGroup, projectGroupDirectory } from './grouping';
 import { useImportedInline } from './importedInline';
 import { TerminalPanel } from './TerminalPanel';
 import {
@@ -132,6 +136,7 @@ import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
 import { presentReply } from './codeStream';
 import { seedOnArrival } from './firstRunSeed';
 import { readLastSession, useLastSession } from './lastSession';
+import { launchPlace, resolveLaunch, useFirstLaunchPlace } from './rail/launchPlace';
 import { newSessionInProject } from './newSessionInProject';
 import { isSessionDraft, useSessionDraft } from './useSessionDraft';
 import { roundsOf } from './replyRounds';
@@ -161,6 +166,8 @@ import { ambientHeld, isEditable, isPrintableKey, useAmbientSettle } from './orc
 import { inTavernDialogue } from './orchestrator/tavern/dialogue';
 import type { AgentActions, InnkeeperDesk, StageAmbient } from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
+import { agentsSurfaceAvailable as isAgentsSurfaceAvailable } from './orchestrator/agentsSurface';
+import { archivedAgentsOf } from '@shared/spawnTree';
 import {
   readAmbientHintSeen,
   readIntroSeen,
@@ -296,6 +303,17 @@ export function ChatShell({
   onOpenImportSettings?: (focus: ClaudeImportKind) => void;
   studio?: StudioController;
 }) {
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [placeMemory] = useState(readPlaceMemory);
+  const [launch] = useState(() =>
+    resolveLaunch({ preference: launchPlace(), memory: placeMemory, lastSession: readLastSession() })
+  );
+  const remembered = launch.session;
+  // The session to restore and the open one are fetched even when no loaded page holds them.
+  const keepIds = useMemo(
+    () => [remembered?.id, isSessionDraft(activeId) ? null : activeId].filter((id): id is string => !!id),
+    [remembered, activeId]
+  );
   const {
     sessions,
     loading,
@@ -314,7 +332,16 @@ export function ChatShell({
     exportError,
     clearExportError,
     apply,
-  } = useSessions();
+    hasMore,
+    loadingMore,
+    loadMore,
+    total: sessionTotal,
+    searchSessions,
+  } = useSessions(keepIds);
+  const sessionPaging = useMemo(
+    () => ({ hasMore, loadingMore, onLoadMore: loadMore, total: sessionTotal }),
+    [hasMore, loadingMore, loadMore, sessionTotal]
+  );
   const {
     sections: userSections,
     actions: sectionActions,
@@ -323,15 +350,10 @@ export function ChatShell({
     error: sectionError,
     dismissError: dismissSectionError,
   } = useSidebarSections();
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [remembered] = useState(readLastSession);
-  const [placeMemory] = useState(readPlaceMemory);
-  const [place, setPlace] = useState<Place>(placeMemory?.place ?? remembered?.mode ?? 'chat');
+  const [place, setPlace] = useState<Place>(launch.place);
   // The session mode the list filters by and New starts. A session place sets it; Studio leaves
   // it alone, so the conversation open underneath stays open for the return trip.
-  const [mode, setModeOnly] = useState<SessionPlace>(
-    placeMemory && isSessionPlace(placeMemory.place) ? placeMemory.place : (remembered?.mode ?? 'chat')
-  );
+  const [mode, setModeOnly] = useState<SessionPlace>(launch.mode);
   /** Opening a session in a mode takes the user to that mode's place. */
   const setMode = useCallback((next: SessionPlace) => {
     setModeOnly(next);
@@ -340,14 +362,15 @@ export function ChatShell({
   const onRestore = useCallback((session: ChatSessionSummary | null) => {
     const restoredMode = session && isSessionPlace(session.mode) ? session.mode : 'chat';
     setModeOnly(current => (session ? restoredMode : current));
-    // Studio and Agents are not where a session opens, so a restore leaves the user there.
+    // Studio, Agents and Library are not where a session opens, so a restore leaves the user there.
     setPlace(current => (!isSessionPlace(current) || !session ? current : restoredMode));
     if (session) setActiveId(session.id);
   }, []);
   const restoring = useLastSession({ remembered, loading, sessions, activeId, onRestore });
+  const detectingFirstPlace = useFirstLaunchPlace(launch.firstLaunch, setMode);
   // Until this is false the shell does not know which conversation it will show, so it draws
   // none of the empty-state copy that would otherwise flash up before the real one.
-  const settling = loading || restoring;
+  const settling = loading || restoring || detectingFirstPlace;
   const [importedInline] = useImportedInline();
 
   const [addFolderAlerts, setAddFolderAlerts] = useState<Record<string, AddFolderAlert>>({});
@@ -445,6 +468,8 @@ export function ChatShell({
   const inAgents = place === 'agents';
   // The conversation's side panels (tasks, browser, files, model, simulator) belong to Chat and Code.
   const inSessionPlace = isSessionPlace(place);
+  const inLibrary = place === 'library';
+  const [libraryFilter, setLibraryFilter] = useState<LibraryFilter>('all');
   const [studioRegion, studioWidth] = useElementWidth();
   const studioContainer = useRef<HTMLDivElement | null>(null);
   const setStudioRegion = useCallback(
@@ -893,7 +918,16 @@ export function ChatShell({
     modelSupportsTools(orchestrationSession.model, findModelOption(catalog.models, orchestrationSession.model));
   const delegating = orchestrationSession?.orchestrate === true;
   const hasAgents = spawnedStates.length > 0;
-  const agentsSurfaceAvailable = hasAgents || (delegating && orchestrateCapable);
+  const hasArchivedAgents = useMemo(
+    () => activeId !== null && archivedAgentsOf(sessions, activeId).length > 0,
+    [sessions, activeId]
+  );
+  const agentsSurfaceAvailable = isAgentsSurfaceAvailable({
+    session: orchestrationSession,
+    hasAgents,
+    hasArchivedAgents,
+    orchestrateCapable,
+  });
   const orchestrating = orchestratorPrefs.surface === 'orchestrate' && agentsSurfaceAvailable;
   // Presenter mode redacts the stage (orchestrator/presenter.ts). Around it, the header names the root as
   // "Orchestrator" without its project line, and the trays above the composer, which quote agents' questions
@@ -1165,7 +1199,7 @@ export function ChatShell({
   const agentActions = useMemo<AgentActions>(
     () => ({
       open: selectSession,
-      stop: sessionId => window.b4m.chat.stopReply(sessionId),
+      stop: sessionId => hostChat.stopReply(sessionId),
       archive: sessionId => {
         const session = sessions.find(candidate => candidate.id === sessionId);
         if (session) void toggleArchived(session);
@@ -1595,8 +1629,7 @@ export function ChatShell({
       markSessionStart('project');
       // Before the screen switches, so the git calls never leave the previous session's
       // composer live under the new one's id.
-      const inWorktree =
-        worktreeByDefault() && canHoldWorktree(await window.b4m.chat.inspectProject(sibling.directory));
+      const inWorktree = worktreeByDefault() && canHoldWorktree(await hostChat.inspectProject(sibling.directory));
       setScreen('conversation');
       setMode('code');
       setActiveId(sessionDraft.start('code', newSessionInProject(sibling, inWorktree)));
@@ -1606,12 +1639,34 @@ export function ChatShell({
   );
 
   const [deleteSessionId, setDeleteSessionId] = useState<string | null>(null);
+  const deleteTarget = useMemo(
+    () => (deleteSessionId ? sessions.find(session => session.id === deleteSessionId) : undefined),
+    [sessions, deleteSessionId]
+  );
+  const deleteNested = useMemo(
+    () => (deleteSessionId ? nestedSessionsOf(sessions, deleteSessionId) : []),
+    [sessions, deleteSessionId]
+  );
   const onDelete = useCallback(
-    async (sessionId: string, removeWorktree: boolean) => {
-      await remove(sessionId, removeWorktree);
-      clearAddFolderAlert(sessionId);
-      clearDefaultsReadFailure(sessionId);
-      setActiveId(current => (current === sessionId ? null : current));
+    async (
+      sessionId: string,
+      removeWorktree: boolean,
+      nestedIds: readonly string[] = [],
+      nestedWorktreeIds: readonly string[] = []
+    ) => {
+      const settle = (ids: readonly string[]) => {
+        for (const id of ids) {
+          clearAddFolderAlert(id);
+          clearDefaultsReadFailure(id);
+        }
+        setActiveId(current => (current && ids.includes(current) ? null : current));
+      };
+      try {
+        settle(await remove(sessionId, removeWorktree, nestedIds, nestedWorktreeIds));
+      } catch (err) {
+        settle((err as { deleted?: string[] }).deleted ?? []);
+        throw err;
+      }
     },
     [remove, clearAddFolderAlert, clearDefaultsReadFailure]
   );
@@ -1795,6 +1850,8 @@ export function ChatShell({
         <DeleteSessionDialog
           key={deleteSessionId}
           sessionId={deleteSessionId}
+          title={deleteTarget?.title ?? ''}
+          nested={deleteNested}
           onDelete={onDelete}
           onClose={() => setDeleteSessionId(null)}
         />
@@ -1840,22 +1897,15 @@ export function ChatShell({
           })}
         />
 
-        {inStudio ? (
+        {/* Studio, like web's, carries its own areas and medium rail in the main pane: it has no sidebar. */}
+        {inStudio ? null : inLibrary ? (
           !collapsed && (
-            <StudioSidebar
+            <LibrarySidebar
               width={readSidebarWidth()}
-              area={studioArea}
-              kind={studioKind}
-              controller={studio && studio.sessionId === studioSession.sessionId ? studio : undefined}
-              unavailableReason={studioPlaceReason}
-              onSelectKind={kind => {
+              filter={libraryFilter}
+              onSelectFilter={filter => {
                 setScreen('conversation');
-                setStudioArea('create');
-                setStudioKind(kind);
-              }}
-              onSelectArea={area => {
-                setScreen('conversation');
-                setStudioArea(area);
+                setLibraryFilter(filter);
               }}
               onToggleCollapsed={() => setCollapsed(current => !current)}
             />
@@ -1865,6 +1915,8 @@ export function ChatShell({
             sessions={sessions}
             mode={mode}
             loading={loading}
+            paging={sessionPaging}
+            searchSessions={searchSessions}
             activeId={selectedRosterId ?? activeId}
             statuses={statuses}
             prSummaries={prSummaries}
@@ -1948,9 +2000,27 @@ export function ChatShell({
           controller={studio && studio.sessionId === studioSession.sessionId ? studio : undefined}
           ready={!!studioSession.sessionId}
           unavailableReason={studioPlaceReason}
+          productions={<StudioProductions />}
+          library={
+            <LibraryMain
+              filter="all"
+              accountKey={studioAccountKey}
+              api={window.b4m.library}
+              onOpenSession={selectSession}
+              onOpenStudio={() => setStudioArea('create')}
+            />
+          }
         />
       ) : inAgents ? (
         <AgentsPlace groups={board} onOpen={selectSession} onOpenMissionControl={() => setScreen('mission-control')} />
+      ) : inLibrary ? (
+        <LibraryMain
+          filter={libraryFilter}
+          accountKey={studioAccountKey}
+          api={window.b4m.library}
+          onOpenSession={selectSession}
+          onOpenStudio={() => selectPlace('studio')}
+        />
       ) : (
         <Box
           ref={setStudioRegion}
@@ -1995,7 +2065,7 @@ export function ChatShell({
                 </Box>
                 <OrchestrateToggle
                   states={spawnedStates}
-                  enabled={delegating && orchestrateCapable}
+                  enabled={agentsSurfaceAvailable}
                   parentNeedsYou={!!activeId && statuses.get(activeId) === 'needs-action'}
                   surface={orchestrating ? 'orchestrate' : 'chat'}
                   onSurfaceChange={orchestratorPrefs.setSurface}
@@ -2257,7 +2327,7 @@ export function ChatShell({
                     processes: background.processes,
                     spawned,
                     onStopProcess: background.stop,
-                    onStopSession: sessionId => void window.b4m.chat.stopReply(sessionId),
+                    onStopSession: sessionId => void hostChat.stopReply(sessionId),
                     onOpenSession: selectSession,
                     onShowOutput: () => setTasksPanelOpen(true),
                   }}

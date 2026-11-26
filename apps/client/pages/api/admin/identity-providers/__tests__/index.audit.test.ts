@@ -49,13 +49,13 @@ const create = async () => {
     },
   });
   (req as Record<string, unknown>).user = { id: 'admin-1', isAdmin: true };
+  (req as Record<string, unknown>).logger = { error: vi.fn(), warn: vi.fn(), info: vi.fn() };
   await (handler as unknown as Route)(req, res);
   return { req, res };
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.spyOn(console, 'error').mockImplementation(() => undefined);
   h.findByEmailDomain.mockResolvedValue(null);
   h.createIDP.mockResolvedValue({
     id: 'idp-1',

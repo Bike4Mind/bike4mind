@@ -2,9 +2,11 @@ import { useState, type ReactNode } from 'react';
 import { Alert, Box, Button, IconButton, LinearProgress, Stack, Typography } from '@mui/joy';
 import CloseIcon from '@mui/icons-material/Close';
 import {
+  REVERSIBLE_TIER_ENFORCE_BAR,
   SHADOW_DETECTION_ENFORCE_BAR,
   isReviewOnlyCompletionDetector,
   shadowDetectionReadiness,
+  type ShadowDetectionBar,
   type ShadowDetectionSummaryRow,
   type ShadowDetectionVerdict,
 } from '@bike4mind/common';
@@ -13,7 +15,8 @@ import { StatTile } from './shared';
 
 /**
  * The Detections page's explanations: what shadow mode is, what each term and verdict means, and how
- * far each detector version is from the enforce bar (SHADOW_DETECTION_ENFORCE_BAR in common).
+ * far each detector version is from the enforce bars (SHADOW_DETECTION_ENFORCE_BAR and
+ * REVERSIBLE_TIER_ENFORCE_BAR in common).
  */
 
 export const DETECTIONS_INTRO_DISMISSED_KEY = 'admin-shadow-detections-intro-dismissed';
@@ -100,7 +103,10 @@ export function DetectionsIntro() {
           Grade each detection to measure its detector. A verdict changes nothing on the account. Once a detector
           version has {SHADOW_DETECTION_ENFORCE_BAR.minConclusive} conclusive verdicts at{' '}
           {percent(SHADOW_DETECTION_ENFORCE_BAR.minPrecision)} precision or better, an eligible detector can be
-          considered for enforcement. Review-only coordination detectors cannot trigger automatic containment.
+          considered for enforcement. The reversible, auto-expiring responses (limiting spend or holding the signup
+          grant) have a lower bar: {REVERSIBLE_TIER_ENFORCE_BAR.minConclusive} conclusive verdicts at{' '}
+          {percent(REVERSIBLE_TIER_ENFORCE_BAR.minPrecision)}. Review-only coordination detectors cannot trigger
+          automatic containment.
         </Typography>
         <Typography level="body-sm">
           Found real abuse? Act on the account&apos;s user page. Suspending it there with an abuse reason also grades
@@ -128,7 +134,8 @@ const TERM_HELP = {
   },
   graded: {
     term: 'Graded',
-    description: 'Detections that would have acted and have a verdict. Unreviewed ones still need one.',
+    description:
+      'Detections with a verdict that would have acted, or that come from a review-only detector. Unreviewed ones still need one.',
   },
   precision: {
     term: 'Precision',
@@ -145,6 +152,12 @@ const TERM_HELP = {
     description: `Guidance, not a switch: ${SHADOW_DETECTION_ENFORCE_BAR.minConclusive} conclusive verdicts at ${percent(
       SHADOW_DETECTION_ENFORCE_BAR.minPrecision
     )} precision or better. Automatic containment moves from shadow to enforce only when an admin changes its mode in admin settings, and that mode covers eligible detectors. Review-only coordination detectors remain excluded.`,
+  },
+  reversibleTierBar: {
+    term: 'Reversible bar',
+    description: `Guidance, not a switch: ${REVERSIBLE_TIER_ENFORCE_BAR.minConclusive} conclusive verdicts at ${percent(
+      REVERSIBLE_TIER_ENFORCE_BAR.minPrecision
+    )} precision or better before a reversible response (such as limiting spend or holding the signup grant) moves from shadow to enforce. These responses expire on their own and an admin can release them, so the bar is lower than for full containment. Each one has its own mode in the automatic containment settings.`,
   },
 } as const;
 
@@ -168,9 +181,48 @@ export const VERDICT_GUIDES: Record<ShadowDetectionVerdict, string> = {
 
 const READINESS_COPY = {
   collecting: (remaining: number) => `${remaining.toLocaleString()} more conclusive to go`,
-  below_bar: () => `Below the ${percent(SHADOW_DETECTION_ENFORCE_BAR.minPrecision)} precision bar`,
-  ready: () => `Meets the ${percent(SHADOW_DETECTION_ENFORCE_BAR.minPrecision)} precision bar`,
+  below_bar: (_remaining: number, bar: ShadowDetectionBar) => `Below the ${percent(bar.minPrecision)} precision bar`,
+  ready: (_remaining: number, bar: ShadowDetectionBar) => `Meets the ${percent(bar.minPrecision)} precision bar`,
 } as const;
+
+type BarTileProps = {
+  row: ShadowDetectionSummaryRow;
+  bar: ShadowDetectionBar;
+  label: string;
+  term: DetectionTerm;
+  testId: string;
+  progressLabel: string;
+};
+
+function BarTile({ row, bar, label, term, testId, progressLabel }: BarTileProps) {
+  const readiness = shadowDetectionReadiness(row, bar);
+  const { minConclusive } = bar;
+  const comparison: ReactNode = READINESS_COPY[readiness.status](
+    Math.max(0, minConclusive - readiness.conclusive),
+    bar
+  );
+  return (
+    <StatTile
+      label={label}
+      help={<TermHelp term={term} />}
+      value={
+        <Box component="span" data-testid={testId} data-status={readiness.status}>
+          {Math.min(readiness.conclusive, minConclusive).toLocaleString()} / {minConclusive.toLocaleString()}
+        </Box>
+      }
+      comparison={comparison}
+      sparkline={
+        <LinearProgress
+          determinate
+          value={Math.min(100, (readiness.conclusive / minConclusive) * 100)}
+          color="neutral"
+          aria-label={progressLabel}
+          sx={{ '--LinearProgress-thickness': '4px' }}
+        />
+      }
+    />
+  );
+}
 
 /** Conclusive verdicts toward the enforce bar, and whether precision clears it once there are enough. */
 export function EnforceBarTile({ row, testId }: { row: ShadowDetectionSummaryRow; testId: string }) {
@@ -187,28 +239,32 @@ export function EnforceBarTile({ row, testId }: { row: ShadowDetectionSummaryRow
       />
     );
   }
-  const readiness = shadowDetectionReadiness(row);
-  const { minConclusive } = SHADOW_DETECTION_ENFORCE_BAR;
-  const comparison: ReactNode = READINESS_COPY[readiness.status](Math.max(0, minConclusive - readiness.conclusive));
   return (
-    <StatTile
+    <BarTile
+      row={row}
+      bar={SHADOW_DETECTION_ENFORCE_BAR}
       label="Enforce bar"
-      help={<TermHelp term="enforceBar" />}
-      value={
-        <Box component="span" data-testid={`${testId}-enforce-bar`} data-status={readiness.status}>
-          {Math.min(readiness.conclusive, minConclusive).toLocaleString()} / {minConclusive.toLocaleString()}
-        </Box>
-      }
-      comparison={comparison}
-      sparkline={
-        <LinearProgress
-          determinate
-          value={Math.min(100, (readiness.conclusive / minConclusive) * 100)}
-          color="neutral"
-          aria-label="Conclusive verdicts toward the enforce bar"
-          sx={{ '--LinearProgress-thickness': '4px' }}
-        />
-      }
+      term="enforceBar"
+      testId={`${testId}-enforce-bar`}
+      progressLabel="Conclusive verdicts toward the enforce bar"
+    />
+  );
+}
+
+/**
+ * Conclusive verdicts toward the reversible-tier bar. Nothing for review-only detectors: the tiers skip
+ * them as they skip Contain, and EnforceBarTile already says so.
+ */
+export function ReversibleTierBarTile({ row, testId }: { row: ShadowDetectionSummaryRow; testId: string }) {
+  if (isReviewOnlyCompletionDetector(row.detector)) return null;
+  return (
+    <BarTile
+      row={row}
+      bar={REVERSIBLE_TIER_ENFORCE_BAR}
+      label="Reversible bar"
+      term="reversibleTierBar"
+      testId={`${testId}-reversible-bar`}
+      progressLabel="Conclusive verdicts toward the reversible-tier bar"
     />
   );
 }

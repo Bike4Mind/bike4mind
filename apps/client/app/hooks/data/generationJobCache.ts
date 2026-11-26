@@ -46,6 +46,8 @@ export type GenerationJobCache<TJob, TUpdate> = {
   reconcileFetchedPage: (queryClient: QueryClient, page: GenerationJobPage<TJob>) => GenerationJobPage<TJob>;
   /** Applies a websocket frame. Returns whether the job was cached anywhere. */
   patch: (queryClient: QueryClient, update: TUpdate) => boolean;
+  /** Whether a loaded gallery page holds the job. */
+  isListed: (queryClient: QueryClient, id: string) => boolean;
 };
 
 /**
@@ -142,5 +144,7 @@ export function createGenerationJobCache<TJob extends CacheableJob, TUpdate exte
     return found;
   };
 
-  return { seed, prepend, upsert, reconcileFetched, reconcileFetchedPage, patch };
+  const isListed = (queryClient: QueryClient, id: string): boolean => findListed(queryClient, id) !== undefined;
+
+  return { seed, prepend, upsert, reconcileFetched, reconcileFetchedPage, patch, isListed };
 }

@@ -852,8 +852,17 @@ describe('apiKeyAuth with an exchange key', () => {
     });
 
     it('admits a legacy ordinary key that lacks ai:generate', async () => {
-      validateUserApiKeyMock.mockResolvedValue(keyWith({ scopes: [ApiKeyScope.AI_CHAT] }));
+      validateUserApiKeyMock.mockResolvedValue(
+        keyWith({ scopes: [ApiKeyScope.AI_CHAT], createdAt: new Date('2026-01-01T00:00:00Z') })
+      );
       expect((await run([ApiKeyScope.AI_GENERATE], makeReq(), undefined, grandfathering)).passed).toBe(true);
+    });
+
+    it('refuses an ordinary key created after the legacy cutoff that lacks ai:generate', async () => {
+      validateUserApiKeyMock.mockResolvedValue(keyWith({ scopes: [ApiKeyScope.AI_CHAT], createdAt: new Date() }));
+      const { passed, error } = await run([ApiKeyScope.AI_GENERATE], makeReq(), undefined, grandfathering);
+      expect(passed).toBe(false);
+      expect(error).toBeInstanceOf(ForbiddenError);
     });
   });
 });

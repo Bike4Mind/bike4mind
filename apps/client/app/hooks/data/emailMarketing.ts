@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   IEmailTemplateDocument,
   IEmailJobDocument,
@@ -131,6 +131,7 @@ export const useEmailJobs = (params: ListJobsParams = {}) => {
       const response = await api.get('/api/admin/email/jobs', { params });
       return response.data;
     },
+    placeholderData: keepPreviousData,
   });
 };
 
@@ -232,7 +233,8 @@ export const useScheduleEmailJob = () => {
       });
       return response.data;
     },
-    onSuccess: (_, { id }) => {
+    // Also on error: a 400 usually means another tab already moved the job out of draft.
+    onSettled: (_data, _error, { id }) => {
       queryClient.invalidateQueries({ queryKey: ['email-jobs'] });
       queryClient.invalidateQueries({ queryKey: ['email-job', id] });
     },
@@ -371,6 +373,8 @@ export const useEmailJobHistory = (id: string, params: HistoryParams = {}) => {
       return response.data.attempts || { data: [], meta: { currentPage: 1, totalPages: 0, total: 0 } };
     },
     enabled: !!id,
+    // Keeps the current page on screen while the next one loads, but never another job's rows.
+    placeholderData: (previous, previousQuery) => (previousQuery?.queryKey[1] === id ? previous : undefined),
     refetchInterval: 5000, // Auto-refetch during active sends
   });
 };

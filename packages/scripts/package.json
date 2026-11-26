@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.107",
+  "version": "0.1.110",
   "private": true,
   "type": "module",
   "main": "index.ts",
@@ -135,7 +135,6 @@
     "bcryptjs": "^3.0.3",
     "dayjs": "^1.11.23",
     "glob": "^14.0.2",
-    "gray-matter": "^4.0.3",
     "mongoose": "^8.24.7",
     "sst": "4.17.1",
     "stripe": "^22.6.2",
@@ -144,7 +143,6 @@
   },
   "devDependencies": {
     "@bike4mind/auth": "workspace:*",
-    "@types/speakeasy": "^2.0.10",
     "@types/yargs": "^17.0.35",
     "@vitest/coverage-v8": "^4.1.12",
     "ajv": "^8.20.0",
@@ -152,7 +150,6 @@
     "aws-sdk-client-mock": "^4.1.0",
     "ora": "^9.4.1",
     "prettier": "^3.9.6",
-    "speakeasy": "^2.0.0",
     "tsx": "^4.23.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.12",

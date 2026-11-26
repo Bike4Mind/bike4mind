@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { WorktreeRemoval } from '@shared/worktreeRemoval';
+import type { SessionWorktreeRemoval } from '@shared/worktreeRemoval';
 import { desktopTheme } from '../theme';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
 
@@ -35,22 +35,46 @@ const element = (id: string) => {
   return found;
 };
 const checkbox = () => element('delete-session-worktree-checkbox').querySelector('input')!;
-const safe: WorktreeRemoval = { path: '/repo/.b4m/worktrees/test', branch: 'b4m/test', safe: true, reason: null };
+const safe: SessionWorktreeRemoval = {
+  path: '/repo/.b4m/worktrees/test',
+  branch: 'b4m/test',
+  safe: true,
+  removable: true,
+  reason: null,
+};
 
-async function mount(inspection: WorktreeRemoval | null, onDelete = vi.fn(async () => {})) {
+async function mount(
+  inspection: SessionWorktreeRemoval | null,
+  onDelete = vi.fn(async () => {}),
+  {
+    nested = [],
+    withNested = inspection,
+    nestedInspections = {},
+  }: {
+    nested?: { id: string; title: string }[];
+    withNested?: SessionWorktreeRemoval | null;
+    nestedInspections?: Record<string, SessionWorktreeRemoval>;
+  } = {}
+) {
   const onClose = vi.fn();
-  (window as unknown as { b4m: unknown }).b4m = { chat: { inspectWorktreeRemoval: vi.fn(async () => inspection) } };
+  const inspect = vi.fn(async (id: string, alsoDeleting?: string[]) => {
+    if (id !== 'session') return nestedInspections[id] ?? null;
+    return alsoDeleting ? withNested : inspection;
+  });
+  (window as unknown as { b4m: unknown }).b4m = { chat: { inspectWorktreeRemoval: inspect } };
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
-  await act(async () =>
-    root?.render(
-      <CssVarsProvider theme={desktopTheme}>
-        <DeleteSessionDialog sessionId="session" onDelete={onDelete} onClose={onClose} />
-      </CssVarsProvider>
-    )
-  );
-  return { onDelete, onClose };
+  const render = (list: { id: string; title: string }[]) =>
+    act(async () =>
+      root?.render(
+        <CssVarsProvider theme={desktopTheme}>
+          <DeleteSessionDialog sessionId="session" title="Parent" nested={list} onDelete={onDelete} onClose={onClose} />
+        </CssVarsProvider>
+      )
+    );
+  await render(nested);
+  return { onDelete, onClose, inspect, rerender: render };
 }
 
 describe('DeleteSessionDialog', () => {
@@ -58,27 +82,121 @@ describe('DeleteSessionDialog', () => {
     const { onDelete, onClose } = await mount(safe);
     expect(checkbox().checked).toBe(true);
     await act(async () => element('delete-session-confirm-btn').click());
-    expect(onDelete).toHaveBeenCalledWith('session', true);
+    expect(onDelete).toHaveBeenCalledWith('session', true, undefined);
     expect(onClose).toHaveBeenCalledOnce();
   });
   it('lets the user keep a safe worktree', async () => {
     const { onDelete } = await mount(safe);
     await act(async () => checkbox().click());
     await act(async () => element('delete-session-confirm-btn').click());
-    expect(onDelete).toHaveBeenCalledWith('session', false);
+    expect(onDelete).toHaveBeenCalledWith('session', false, undefined);
   });
   it.each([
-    '3 uncommitted files',
-    '2 commits not pushed or merged',
-    'Used by another conversation',
-    'Conversation is still running',
-  ])('keeps unsafe worktrees and displays %s', async reason => {
+    '3 uncommitted files will be discarded; branch b4m/test is kept',
+    'Branch b4m/test is kept: 2 commits not pushed or merged',
+  ])('defaults cleanup on for a discardable worktree and displays %s', async reason => {
     const { onDelete } = await mount({ ...safe, safe: false, reason });
-    expect(checkbox().checked).toBe(false);
-    expect(checkbox().disabled).toBe(true);
-    expect(document.body.textContent).toContain(reason);
+    expect(checkbox().checked).toBe(true);
+    expect(checkbox().disabled).toBe(false);
+    expect(element('delete-session-worktree-note').textContent).toBe(reason);
     await act(async () => element('delete-session-confirm-btn').click());
-    expect(onDelete).toHaveBeenCalledWith('session', false);
+    expect(onDelete).toHaveBeenCalledWith('session', true, undefined);
+  });
+  it.each(['Used by another conversation', 'Contains another worktree', 'Conversation is still running'])(
+    'keeps unsafe worktrees and displays %s',
+    async reason => {
+      const { onDelete } = await mount({ ...safe, safe: false, removable: false, reason });
+      expect(checkbox().checked).toBe(false);
+      expect(checkbox().disabled).toBe(true);
+      expect(document.body.textContent).toContain(reason);
+      await act(async () => element('delete-session-confirm-btn').click());
+      expect(onDelete).toHaveBeenCalledWith('session', false, undefined);
+    }
+  );
+  it('offers only a single delete when nothing is nested', async () => {
+    await mount(safe);
+    expect(document.querySelector('[data-testid="delete-session-with-nested-btn"]')).toBeNull();
+    expect(element('delete-session-confirm-btn').textContent).toBe('Delete');
+  });
+  it('deletes only the parent, leaving nested sessions to move up', async () => {
+    const { onDelete } = await mount(safe, undefined, { nested: [{ id: 'child', title: 'Child' }] });
+    expect(element('delete-session-message').textContent).toContain('"Parent" has a nested session');
+    expect(element('delete-session-confirm-btn').textContent).toBe('Delete this session');
+    await act(async () => element('delete-session-confirm-btn').click());
+    expect(onDelete).toHaveBeenCalledWith('session', true, undefined);
+  });
+  it('deletes the parent with every nested session', async () => {
+    const { onDelete } = await mount(safe, undefined, {
+      nested: [
+        { id: 'child', title: 'Child' },
+        { id: 'grandchild', title: 'Grandchild' },
+      ],
+    });
+    expect(element('delete-session-message').textContent).toContain('has 2 nested sessions');
+    expect(element('delete-session-with-nested-btn').textContent).toBe('Delete 3 sessions');
+    await act(async () => element('delete-session-with-nested-btn').click());
+    expect(onDelete).toHaveBeenCalledWith('session', true, ['child', 'grandchild'], []);
+  });
+  it('removes a checkout shared with nested sessions only when they are deleted too', async () => {
+    const shared = { ...safe, safe: false, removable: false, reason: 'Used by another conversation' };
+    const { onDelete, inspect } = await mount(shared, undefined, {
+      nested: [{ id: 'child', title: 'Child' }],
+      withNested: safe,
+    });
+    expect(inspect).toHaveBeenCalledWith('session', ['child']);
+    expect(checkbox().checked).toBe(true);
+    expect(element('delete-session-worktree-note').textContent).toContain('only when its nested sessions are deleted');
+    await act(async () => element('delete-session-confirm-btn').click());
+    expect(onDelete).toHaveBeenCalledWith('session', false, undefined);
+  });
+  it('lists what each nested worktree discards or keeps and removes only the removable ones shown', async () => {
+    const dirty = {
+      ...safe,
+      path: '/repo/.b4m/worktrees/child',
+      branch: 'b4m/child',
+      safe: false,
+      reason: '1 uncommitted file will be discarded; branch b4m/child is kept',
+    };
+    const shared = { ...safe, safe: false, removable: false, reason: 'Used by another conversation' };
+    const { onDelete } = await mount(null, undefined, {
+      nested: [
+        { id: 'child', title: 'Child' },
+        { id: 'sharing', title: 'Sharing' },
+        { id: 'plain', title: 'Plain chat' },
+      ],
+      nestedInspections: { child: dirty, sharing: shared },
+    });
+    expect(checkbox().checked).toBe(true);
+    expect(element('delete-session-nested-worktree-child').textContent).toBe(
+      'Child: 1 uncommitted file will be discarded; branch b4m/child is kept'
+    );
+    expect(element('delete-session-nested-worktree-sharing').textContent).toBe(
+      'Sharing: worktree kept: Used by another conversation'
+    );
+    expect(document.querySelector('[data-testid="delete-session-nested-worktree-plain"]')).toBeNull();
+    await act(async () => element('delete-session-with-nested-btn').click());
+    expect(onDelete).toHaveBeenCalledWith('session', false, ['child', 'sharing', 'plain'], ['child']);
+  });
+  it('sends no nested worktrees when cleanup is unticked', async () => {
+    const { onDelete } = await mount(safe, undefined, {
+      nested: [{ id: 'child', title: 'Child' }],
+      nestedInspections: { child: { ...safe, path: '/repo/.b4m/worktrees/child' } },
+    });
+    await act(async () => checkbox().click());
+    await act(async () => element('delete-session-with-nested-btn').click());
+    expect(onDelete).toHaveBeenCalledWith('session', false, ['child'], []);
+  });
+  it('keeps an unticked cleanup choice when a live nested session changes and the dialog re-inspects', async () => {
+    const nestedInspections = { child: safe };
+    const nested = [{ id: 'child', title: 'Child' }];
+    const { inspect, rerender } = await mount(safe, undefined, { nested, nestedInspections });
+    expect(checkbox().checked).toBe(true);
+    await act(async () => checkbox().click());
+    expect(checkbox().checked).toBe(false);
+    const before = inspect.mock.calls.length;
+    await rerender([{ id: 'child', title: 'Renamed child' }]);
+    expect(inspect.mock.calls.length).toBeGreaterThan(before);
+    expect(checkbox().checked).toBe(false);
   });
   it('hides the option for a session without an app worktree', async () => {
     await mount(null);

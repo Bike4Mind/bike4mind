@@ -589,6 +589,7 @@ describe('function calls', () => {
       paramsJson: null,
       timeoutMs: FUNCTION_READ_TIMEOUT_MS,
       nonce: expect.any(String),
+      files: [],
     });
     fromSandbox(callResult({ contractJson: '{"name": "f"}', output: 'hi\n' }));
     await expect(call).resolves.toEqual({

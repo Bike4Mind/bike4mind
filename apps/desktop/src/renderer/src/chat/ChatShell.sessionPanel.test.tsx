@@ -18,6 +18,7 @@ import { ChatShell } from './ChatShell';
 import { SESSION_PANEL_SPACE_VAR } from './layout';
 import { reloadReplyStatsPrefs } from './replyStatsPrefs';
 import { SESSION_PANEL_SPACE } from './sessionPanelState';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -157,6 +158,7 @@ beforeEach(() => {
   );
   (window as unknown as { b4m: unknown }).b4m = new Proxy(
     {
+      host: chatBackedHostBridge(),
       studio: quietBridge({
         get: async (sessionId: string) => ({
           sessionId,
@@ -172,7 +174,12 @@ beforeEach(() => {
           ({ ...SESSIONS.find(entry => entry.id === id), messages: transcript }) as unknown as ChatSession,
         listBackgroundProcesses: async () => processes,
         getLoop: async () => loop,
-        inspectProject: async () => ({ currentBranch: 'main', branches: [] }),
+        inspectProject: async (directory: string) => ({
+          directory,
+          isRepository: false,
+          currentBranch: 'main',
+          branches: [],
+        }),
         updateProject: () => updateProject(),
         sendMessage: () => sendMessage(),
         getQueuedMessages: async () => [],

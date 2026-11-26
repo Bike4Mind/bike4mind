@@ -150,6 +150,8 @@ Individual users subscribe to specific events:
 
 Subscriptions support filters by project, priority, and issue type, with delivery to Slack channels or DMs.
 
+Each event is delivered only to subscribers whose own Atlassian connection is to the same site and can see the event's issue, comment, project or board. A skipped delivery is recorded as `filtered`. If your Jira alerts stop, reconnect Atlassian and check that your Jira account can still open the issue.
+
 ### Secret Rotation
 
 Rotate the webhook secret without downtime:

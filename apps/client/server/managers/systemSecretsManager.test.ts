@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
 import {
   clearSecretCache,
   getSecret,
@@ -39,6 +40,7 @@ import { decryptSecret, isValidEncryptionKey } from '@bike4mind/server-utils/sec
 
 describe('systemSecretsManager', () => {
   beforeEach(() => {
+    configureSecretsAtRest('a'.repeat(64));
     vi.clearAllMocks();
     clearSecretCache();
   });

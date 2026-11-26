@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { createHash } from 'crypto';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 type Handler = (req: NextApiRequest, res: NextApiResponse) => Promise<unknown>;
@@ -29,17 +30,18 @@ vi.mock('@server/auth/auth', () => ({ setupSamlStrategy: (...a: unknown[]) => h.
 
 import '../index';
 
+const errorSpy = vi.fn();
+
 function run(query: Record<string, string>) {
   const { req, res } = createMocks<NextApiRequest, NextApiResponse>({ method: 'GET', query });
+  (req as unknown as Record<string, unknown>).logger = { error: errorSpy, warn: vi.fn(), info: vi.fn() };
   return { done: h.handler!(req, res), res };
 }
 
 describe('GET /api/auth/saml', () => {
-  let errorSpy: ReturnType<typeof vi.spyOn>;
-
   beforeEach(() => {
     vi.clearAllMocks();
-    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    errorSpy.mockReset();
     h.setupSamlStrategy.mockReturnValue('saml-idp-1');
     h.authenticate.mockReturnValue(vi.fn());
   });
@@ -79,7 +81,7 @@ describe('GET /api/auth/saml', () => {
     const { done, res } = run({ idp: 'idp-1' });
     await done;
 
-    expect(errorSpy).toHaveBeenCalledWith('SAML identity provider lookup failed:', expect.any(Error));
+    expect(errorSpy).toHaveBeenCalledWith('SAML identity provider lookup failed', { error: expect.any(Error) });
     expect(res._getRedirectUrl()).toBe('/login?error=saml_setup_failed');
     expect(h.authenticate).not.toHaveBeenCalled();
   });
@@ -92,6 +94,22 @@ describe('GET /api/auth/saml', () => {
     expect(h.authenticate).toHaveBeenCalledWith('saml-idp-1', expect.anything());
   });
 
+  it('binds the login to this browser: a nonce cookie whose hash rides RelayState', async () => {
+    h.findByIdWithSecrets.mockResolvedValue({ id: 'idp-1', isActive: true, type: 'saml', samlConfig: {} });
+
+    const { done, res } = run({ idp: 'idp-1' });
+    await done;
+
+    const cookie = String(res.getHeader('Set-Cookie'));
+    const nonce = /^b4m_saml_nonce=([0-9a-f]+);/.exec(cookie)?.[1];
+    expect(nonce).toBeDefined();
+    expect(cookie).toContain('HttpOnly');
+    expect(cookie).toContain('SameSite=None; Secure');
+    const relayState = new URLSearchParams(h.authenticate.mock.calls[0][1].additionalParams.RelayState);
+    expect(relayState.get('idp')).toBe('idp-1');
+    expect(relayState.get('nh')).toBe(createHash('sha256').update(nonce!).digest('hex'));
+  });
+
   it('still logs an unexpected strategy setup failure at error and redirects to the login page', async () => {
     h.findByIdWithSecrets.mockResolvedValue({ id: 'idp-1', isActive: true, type: 'saml', samlConfig: {} });
     h.setupSamlStrategy.mockImplementation(() => {
@@ -101,7 +119,7 @@ describe('GET /api/auth/saml', () => {
     const { done, res } = run({ idp: 'idp-1' });
     await done;
 
-    expect(errorSpy).toHaveBeenCalledWith('SAML authentication error:', expect.any(Error));
+    expect(errorSpy).toHaveBeenCalledWith('SAML authentication error', { error: expect.any(Error) });
     expect(res._getRedirectUrl()).toBe('/login?error=saml_setup_failed');
   });
 });

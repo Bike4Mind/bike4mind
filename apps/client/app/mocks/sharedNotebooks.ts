@@ -1,4 +1,4 @@
-import { ISessionDocument, Permission } from '@bike4mind/common';
+import { ISessionDocument, Permission, randomUuid } from '@bike4mind/common';
 
 // Generate mock shared notebooks for the last 7 days
 export function generateMockSharedNotebooks(currentUserId: string): ISessionDocument[] {
@@ -144,7 +144,7 @@ export function generateMockSharedNotebooks(currentUserId: string): ISessionDocu
       const firstCreated = new Date(notebookDate.getTime() - Math.random() * 7 * 24 * 60 * 60 * 1000); // Created up to 7 days before last update
 
       const notebook: ISessionDocument = {
-        id: crypto.randomUUID(),
+        id: randomUuid(),
         name: template.name,
         userId: owner.id, // The owner of the notebook
         lastUpdated: notebookDate,

@@ -65,6 +65,7 @@ export class ServerToolExecutor {
       const err = error as {
         response?: { data?: { error?: string; errorCode?: string }; status?: number };
         message?: string;
+        code?: string;
       };
       const errorMessage = err?.response?.data?.error || err?.message || 'Unknown error';
       const status = err?.response?.status || 'unknown';
@@ -72,7 +73,8 @@ export class ServerToolExecutor {
         return outOfCreditsToolResult(toolName, err.response.data.error);
       }
       logger.error(`[ServerToolExecutor] Request failed for ${toolName}: ${errorMessage} (status: ${status})`);
-      logger.debug(`[ServerToolExecutor] Full error: ${JSON.stringify(err, null, 2)}`);
+      // Never serialize the whole error: its request config carries the auth headers.
+      logger.debug(`[ServerToolExecutor] Error code: ${err?.code ?? 'none'}`);
 
       // Return error as string (LLM can read and explain to user)
       return `Error executing ${toolName}: ${errorMessage}`;

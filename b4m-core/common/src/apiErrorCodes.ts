@@ -26,6 +26,7 @@ export const MCP_ACTION_REPLACED_ERROR_CODE = 'action_replaced';
 export const PENDING_ACTION_EXPIRED_ERROR_CODE = 'action_expired';
 export const PENDING_ACTION_ALREADY_RESOLVED_ERROR_CODE = 'action_already_resolved';
 export const BRIEF_QUESTION_CLOSED_ERROR_CODE = 'question_closed';
+export const BRIEF_DECISION_CLOSED_ERROR_CODE = 'decision_closed';
 export const END_USER_ID_NOT_ALLOWED_ERROR_CODE = 'end_user_id_not_allowed';
 export const INVALID_END_USER_ID_ERROR_CODE = 'invalid_end_user_id';
 
@@ -74,6 +75,7 @@ export const API_ERROR_CODES = [
   UNKNOWN_MODEL_ERROR_CODE,
   /** The model is outside the free-tier allowlist; remediation is a paid plan or a model from GET /api/v1/models. */
   MODEL_REQUIRES_SUBSCRIPTION_ERROR_CODE,
+  /** No longer raised: kept because quests that settled before the in-chat QuestMaster plan was retired carry it. */
   FREE_QUEST_LIMIT_REACHED_ERROR_CODE,
   /** An organization-billed API key named a different billing organization; remediation is omitting it. */
   BILLING_ORGANIZATION_MISMATCH_ERROR_CODE,
@@ -119,6 +121,8 @@ export const API_ERROR_CODES = [
   PENDING_ACTION_ALREADY_RESOLVED_ERROR_CODE,
   /** A 409: the brief question was already replied to, or the conversation moved past it; nothing was sent. */
   BRIEF_QUESTION_CLOSED_ERROR_CODE,
+  /** A 409: the brief follow-up decision was already approved or dismissed; nothing changed. */
+  BRIEF_DECISION_CLOSED_ERROR_CODE,
   // Video generation (POST /api/v1/video-generations). Must stay in sync with VIDEO_GENERATION_API_ERROR_CODES.
   'unsupported_duration',
   'unsupported_aspect_ratio',

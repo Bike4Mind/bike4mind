@@ -9,9 +9,7 @@ function register() {
   const handlers = new Map<string, Handler>();
   const creation: SessionCreation = {
     createSession: vi.fn(async mode => ({ id: 's1', mode }) as ChatSessionSummary),
-    createCodeSession: vi.fn(),
     place: vi.fn(async () => ({ failed: false })),
-    rememberFolder: vi.fn(),
   };
   registerSessionCreateIpc(
     { handle: (channel: string, handler: Handler) => handlers.set(channel, handler) } as never,

@@ -25,6 +25,7 @@
     static let pendingActionAPI: any PendingActionAPI = FixturePendingActionAPI()
     static let stepUp: any StepUpAPI = FixtureStepUpAPI()
     static let briefSchedule: any BriefScheduleAPI = FixtureBriefScheduleAPI()
+    static let busyBlocks: any BusyBlocksAPI = FixtureBusyBlocksAPI()
     static let briefAPI: any BriefAPI = FixtureBriefAPI()
     static let instructionAPI: any InstructionAPI = FixtureInstructionAPI()
     /// The first fixture session's turn that starts out working and settles a few seconds after it is opened.
@@ -340,6 +341,17 @@
       func save(_ schedule: BriefSchedule) async throws -> BriefSchedule {
         stored = schedule
         return schedule
+      }
+    }
+
+    private actor FixtureBusyBlocksAPI: BusyBlocksAPI {
+      private var stored = BusyBlocksState(enabled: false, blocks: [])
+
+      func state() async throws -> BusyBlocksState { stored }
+
+      func save(enabled: Bool, blocks: [BusyBlock]) async throws -> BusyBlocksState {
+        stored = BusyBlocksState(enabled: enabled, blocks: enabled ? blocks : [])
+        return stored
       }
     }
 

@@ -141,7 +141,7 @@ const handler = adminApi({
         });
       }
     } catch (operationError) {
-      console.error(`Error processing bulk operation ${action} for ${id}:`, operationError);
+      req.logger.error('Error processing bulk operation', { action, id, error: operationError });
       results.push({
         id,
         action,
@@ -157,7 +157,7 @@ const handler = adminApi({
         await rapidReplyAuditLogRepository.createLog(log);
       }
     } catch (auditError) {
-      console.error('Error creating audit logs for bulk operation:', auditError);
+      req.logger.error('Error creating audit logs for bulk operation', { error: auditError });
     }
   }
 

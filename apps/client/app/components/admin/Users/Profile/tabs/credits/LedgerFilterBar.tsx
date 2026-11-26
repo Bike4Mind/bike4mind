@@ -76,6 +76,7 @@ export const LedgerFilterBar: React.FC<LedgerFilterBarProps> = ({ value, onChang
         min={MIN_DAY}
         max={value.to || MAX_DAY}
         aria-label="From (UTC)"
+        error={inverted}
         testId="user-credits-from"
       />
       <Typography level="body-xs" sx={{ color: 'admin.inkMuted' }}>
@@ -92,6 +93,7 @@ export const LedgerFilterBar: React.FC<LedgerFilterBarProps> = ({ value, onChang
         min={value.from || MIN_DAY}
         max={MAX_DAY}
         aria-label="To (UTC)"
+        error={inverted}
         testId="user-credits-to"
       />
       <Typography level="body-xs" sx={{ color: inverted ? 'admin.status.bad.foreground' : 'admin.inkMuted' }}>

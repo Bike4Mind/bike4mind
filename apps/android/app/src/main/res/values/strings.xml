@@ -34,6 +34,13 @@
     <string name="sessions_load_failed">Could not load chats</string>
 
     <!-- Chat -->
+    <!-- Launcher shortcuts (xml/shortcuts.xml): the Pixel launcher menu shows the short label. -->
+    <string name="shortcut_ask_short">Ask</string>
+    <string name="shortcut_ask_long">Ask Bike4Mind</string>
+    <string name="shortcut_note_short">Capture note</string>
+    <string name="shortcut_note_long">Capture note</string>
+    <string name="shortcut_quest_short">Start quest</string>
+    <string name="shortcut_quest_long">Start quest</string>
     <string name="chat_title">Chat</string>
     <string name="chat_title_new">New chat</string>
     <string name="chat_message_placeholder">Message</string>
@@ -119,6 +126,29 @@
     <string name="brief_handled">Handled</string>
     <string name="brief_happened">What happened</string>
     <string name="brief_open_approval">Open approval</string>
+    <string name="brief_followup_dictate">Dictate follow-up</string>
+    <string name="brief_followup_ok">OK</string>
+    <string name="brief_followup_no_mail_app">No mail app is set up on this device to send the draft.</string>
+    <string name="brief_followup_action_item">Action item</string>
+    <string name="brief_followup_email">Follow-up email</string>
+    <string name="brief_followup_reminder_at">Reminder, %1$s</string>
+    <string name="brief_followup_reminder_unset">Reminder, no time set yet</string>
+    <string name="brief_followup_to">To: %1$s</string>
+    <string name="brief_followup_subject">Subject: %1$s</string>
+    <string name="brief_followup_approve">Approve</string>
+    <string name="brief_followup_edit">Edit</string>
+    <string name="brief_followup_dismiss">Dismiss</string>
+    <string name="brief_followup_approved">Approved</string>
+    <string name="brief_followup_open_mail">Open in mail app</string>
+    <string name="brief_followup_dismissed">Dismissed</string>
+    <string name="brief_followup_edit_title">Edit follow-up</string>
+    <string name="brief_followup_text">Text</string>
+    <string name="brief_followup_email_to">To</string>
+    <string name="brief_followup_email_subject">Subject</string>
+    <string name="brief_followup_email_body">Message</string>
+    <string name="brief_followup_pick_time">Time</string>
+    <string name="brief_followup_save">Save</string>
+    <string name="brief_followup_cancel">Cancel</string>
 
     <!-- Settings -->
     <string name="settings_title">Settings</string>
@@ -127,6 +157,12 @@
     <string name="settings_notifications_intro">Choose what Bike4Mind tells you about. This applies to every device you\'re signed in on.</string>
     <string name="settings_notifications_off">Notifications are off for Bike4Mind on this device.</string>
     <string name="settings_notifications_open_system">Open notification settings</string>
+    <string name="settings_busy_block_title">Brief after busy blocks</string>
+    <string name="settings_busy_block_detail">Hold run updates while a calendar event marks you busy, then get one brief of what happened when it ends. Only event start and end times leave this device.</string>
+    <string name="settings_busy_block_denied">Bike4Mind needs calendar access for this. Allow calendar access in system settings, then turn it on again.</string>
+    <string name="settings_busy_block_open_settings">Open settings</string>
+    <string name="settings_busy_block_load_failed">Couldn\'t load your busy-block setting. Try again later.</string>
+    <string name="settings_busy_block_save_failed">Couldn\'t save your busy-block setting. Try again.</string>
     <string name="settings_save_failed">Couldn\'t save that change. Try again.</string>
     <string name="settings_account">Account</string>
     <string name="settings_credits">Credits</string>
@@ -294,6 +330,7 @@
     <string name="notification_channel_agent_runs">Running agents</string>
     <string name="agent_run_working">Working</string>
     <string name="agent_run_iteration">Step %1$d</string>
+    <string name="agent_run_steps_done">%1$d of %2$d steps done</string>
     <string name="agent_run_chip">Agent</string>
     <string name="agent_run_needs_you">Needs you</string>
 </resources>

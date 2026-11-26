@@ -1,3 +1,4 @@
+import type { ChartStyle } from '@client/app/components/Charts/chartStyle';
 import { ACCENT, AXIS_TICK, BAD, BORDER, GOOD, INK, INK_MUTED } from '../../shared/chartParts';
 
 // recharts paints SVG attributes and inline styles, so colors are the admin CSS variables (shared with
@@ -22,12 +23,32 @@ export const CHART_MUTED = `color-mix(in srgb, ${INK_MUTED} 40%, transparent)`;
 export function adminChartSeries(count: number): string[] {
   return Array.from({ length: Math.max(0, count) }, (_, index) => {
     if (index === 0) return ACCENT;
-    const opacity = 1 - ((1 - MIN_SERIES_OPACITY) * index) / (count - 1);
-    return `color-mix(in srgb, ${ACCENT} ${Math.round(opacity * 100)}%, transparent)`;
+    return `color-mix(in srgb, ${ACCENT} ${Math.round(seriesOpacity(index, count) * 100)}%, transparent)`;
   });
 }
 
+function seriesOpacity(index: number, count: number): number {
+  return 1 - ((1 - MIN_SERIES_OPACITY) * index) / (count - 1);
+}
+
+/** Text over series `index` of `count` from `adminChartSeries`: the card color on the dense steps, `ink` on the faint ones. */
+export function adminChartTextOn(index: number, count: number): string {
+  return index === 0 || seriesOpacity(index, count) >= 0.55 ? SURFACE : INK;
+}
+
 export const chartGridProps = { stroke: BORDER, strokeDasharray: '3 3' };
+
+/** Axis, grid and label styles for the shared recharts components in the admin. */
+export const adminChartStyle: ChartStyle = {
+  tick: AXIS_TICK,
+  tickLine: false,
+  axisLabel: { fill: INK_MUTED, fontSize: AXIS_TICK.fontSize },
+  gridStroke: BORDER,
+  gridDash: chartGridProps.strokeDasharray,
+  surface: SURFACE,
+  cursorStroke: INK_MUTED,
+};
+
 export const chartAxisProps = { tick: AXIS_TICK, tickLine: false, axisLine: { stroke: BORDER } };
 export const chartTooltipProps = {
   cursor: { fill: HOVER, stroke: HOVER },

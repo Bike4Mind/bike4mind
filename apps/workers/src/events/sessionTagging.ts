@@ -224,7 +224,7 @@ export const handler = withEventContext(async (event, logger) => {
   if (parsedTags && parsedTags.length > 0) {
     session.tags = parsedTags;
     session.taggedAt = new Date();
-    logger.info(`Tags: ${JSON.stringify(session.tags)}`);
+    logger.info('Tags generated', { sessionId, tagCount: parsedTags.length });
     // Persist ONLY the tag fields. The read-to-write window spans a full LLM
     // completion; a whole-session write would revert any share revocation,
     // visibility change or soft-delete the owner made during it.

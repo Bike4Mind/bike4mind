@@ -314,13 +314,35 @@ function parseRequest(line: string): CallableFunctionChildRequest | null {
   if (typeof request.glue !== 'string' || typeof request.code !== 'string') return null;
   if (typeof request.pyodideVersion !== 'string') return null;
   if (request.paramsJson !== null && typeof request.paramsJson !== 'string') return null;
+  const dataDir = request.dataDir ?? null;
+  if (dataDir !== null && typeof dataDir !== 'string') return null;
   return {
     op: request.op,
     glue: request.glue,
     code: request.code,
     paramsJson: request.paramsJson,
     pyodideVersion: request.pyodideVersion,
+    dataDir,
   };
+}
+
+// The parent's read-only directory of this call's files. The process may only read it, so a write fails on the host
+// as well as in Pyodide's own permission check on the read-only modes.
+function mountData(pyodide: PyodideInterface, dataDir: string | null): void {
+  const fs = pyodide.FS as {
+    mkdirTree: (path: string) => void;
+    mount: (type: unknown, options: { root: string }, mountpoint: string) => void;
+    unmount: (mountpoint: string) => void;
+    filesystems: { NODEFS: unknown };
+  };
+  try {
+    fs.unmount('/data');
+  } catch {
+    // Nothing mounted yet.
+  }
+  if (dataDir === null) return;
+  fs.mkdirTree('/data');
+  fs.mount(fs.filesystems.NODEFS, { root: dataDir }, '/data');
 }
 
 async function load(): Promise<PyodideInterface> {
@@ -449,6 +471,12 @@ async function main(): Promise<void> {
       await pyodide.loadPackagesFromImports(request.code, { messageCallback: () => {}, errorCallback: () => {} });
     } catch {
       // Same as above.
+    }
+    try {
+      mountData(pyodide, request.dataDir);
+    } catch {
+      await send({ ok: false, failure: 'load' });
+      break;
     }
     if (isolated && !locked) {
       lockDown(pyodide);

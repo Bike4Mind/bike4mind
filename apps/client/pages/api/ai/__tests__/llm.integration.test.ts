@@ -185,7 +185,7 @@ vi.mock('@bike4mind/server-utils/utils/untrustedCompletionQuota', () => ({
 }));
 
 import handler from '../llm';
-import { ApiKeyScope, CreditHolderType, TooManyRequestsError } from '@bike4mind/common';
+import { FILE_READ_TOOL_NAMES, ApiKeyScope, CreditHolderType, TooManyRequestsError } from '@bike4mind/common';
 
 const VALID_KEY = 'sk-test-valid-key';
 const OWN_ORG = '650000000000000000000abc';
@@ -320,6 +320,21 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     expect(mockInvoke).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    ['key without read', VALID_KEY, [ApiKeyScope.AI_CHAT], false],
+    ['key with read', VALID_KEY, [ApiKeyScope.AI_CHAT, ApiKeyScope.READ_FILES], true],
+    ['session', null, [ApiKeyScope.AI_CHAT], true],
+  ] as const)('stamps trusted file admission for %s despite a forged body flag', async (_, apiKey, scopes, allowed) => {
+    validateWithScopes([...scopes]);
+    const { req, res } = fire({ apiKey, body: { fileInputsAllowed: true, fabFileIds: ['private-canary'] } });
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockInvoke.mock.calls[0][0]).toEqual(expect.objectContaining({ fileInputsAllowed: allowed }));
+    expect(mockGetOrCreateSession.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ fabFileIds: allowed ? ['private-canary'] : [] })
+    );
+  });
+
   it.each([null, VALID_KEY])('withholds server-only quest fields from a %j caller', async apiKey => {
     validateWithScopes([ApiKeyScope.AI_CHAT]);
     mockInvoke.mockResolvedValue({
@@ -345,7 +360,7 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     const invokedDenied = () => (mockInvoke.mock.calls[0][0] as { body: { deniedTools?: string[] } }).body.deniedTools;
 
     it('denies list/create/save to an ai:chat key without any data-lake scope', async () => {
-      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.READ_FILES]);
       const { req, res } = fire();
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
@@ -353,7 +368,7 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
     });
 
     it('keeps a client deniedTools and adds to it, so a client can never lift the denial', async () => {
-      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.READ_FILES]);
       const { req, res } = fire({ body: { deniedTools: ['web_search'] } });
       await handler(req, res);
       expect(invokedDenied()).toEqual([
@@ -385,11 +400,18 @@ describe('POST /api/ai/llm (integration - ai:chat scope enforcement)', () => {
       expect(mockGetOrCreateSession).not.toHaveBeenCalled();
     });
 
-    it('denies nothing to a key that holds datalake:write', async () => {
-      validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
+    it('denies nothing to a key that holds datalake:write and files:read', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE, ApiKeyScope.READ_FILES]);
       const { req, res } = fire();
       await handler(req, res);
       expect(invokedDenied()).toBeUndefined();
+    });
+
+    it('denies the file-reading tools to a key without files:read', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT, ApiKeyScope.DATALAKE_WRITE]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(invokedDenied()).toEqual([...FILE_READ_TOOL_NAMES]);
     });
 
     it('denies nothing to a JWT/browser caller', async () => {

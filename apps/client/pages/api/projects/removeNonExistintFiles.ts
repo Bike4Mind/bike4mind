@@ -61,7 +61,7 @@ const handler = baseApi({ requiredScopes: PROJECTS_WRITE_SCOPES }).delete(async 
 
       results.push(updatedProject);
     } catch (error) {
-      console.error('Error processing project %s: %s', project.id, error);
+      req.logger.error('Error processing project', { projectId: project.id, error });
       // don't let one failing project abort the batch
     }
   }

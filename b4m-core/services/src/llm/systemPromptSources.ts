@@ -33,7 +33,6 @@ export type PromptSourceId =
   | 'toolPrompt'
   | 'toolContext'
   | 'agentDetection'
-  | 'questMaster'
   | 'organizationPrompt'
   | 'sessionPrompt'
   | 'skills'
@@ -73,7 +72,6 @@ export const PROMPT_SOURCE_ORDER: PromptSourceId[] = [
   // varies per request, and in front of that block it split the deployment-wide shareable
   // prefix (see SHAREABLE_PREFIX_SOURCES) down to dateContext alone.
   'extraContext',
-  'questMaster',
   'organizationPrompt',
   'sessionPrompt',
   'skills',
@@ -365,7 +363,6 @@ export const SYSTEM_PROMPT_PRIORITY: Record<PromptSourceId, number> = {
   sessionPrompt: 11,
   skills: 12,
   agentDetection: 13,
-  questMaster: 14,
   // Unlike the priority-0 caller-content sources above, this one IS a system-role message that
   // reaches the budget - it is the caller's own per-request guidance, ranked just behind the
   // tenant/session band it must defer to.
@@ -420,8 +417,8 @@ export function filterByPromptMode(tagged: TaggedSystemMessage[], mode?: PromptM
  * Features excluded whenever a prompt mode is set, because filtering their messages out of the
  * prompt is not sufficient. Mementos is the reason this exists: it distils the turn into durable
  * user memory as a side effect, so suppressing only its injected text would still let an API
- * workload rewrite what the model believes about the user on every later completion. QuestMaster
- * and agent detection author their own prompt content and can replace the reply outright.
+ * workload rewrite what the model believes about the user on every later completion. Agent
+ * detection authors its own prompt content.
  * Context summarization writes `session.contextSummary`, an admitted source in every non-raw
  * mode, so a mode turn that ran it would quietly shape later in-app completions on the session.
  *
@@ -430,12 +427,7 @@ export function filterByPromptMode(tagged: TaggedSystemMessage[], mode?: PromptM
  * summaries) whose output never re-enters a prompt. Session history itself still accrues -
  * that is what a session is.
  */
-const FEATURES_EXCLUDED_BY_PROMPT_MODE = new Set<featureNames>([
-  'mementos',
-  'questMaster',
-  'agentDetection',
-  'contextSummarization',
-]);
+const FEATURES_EXCLUDED_BY_PROMPT_MODE = new Set<featureNames>(['mementos', 'agentDetection', 'contextSummarization']);
 
 export function filterFeaturesByPromptMode<T extends string>(features: T[], mode?: PromptMode): T[] {
   if (!mode) return features;
@@ -518,7 +510,6 @@ export const PROMPT_SOURCE_METADATA: Record<
   toolPrompt: { origin: 'admin', name: 'tool_guidance' },
   toolContext: { origin: 'session', name: 'tool_context' },
   agentDetection: { origin: 'hardcoded', name: 'agent_detection' },
-  questMaster: { origin: 'session', name: 'quest_master' },
   organizationPrompt: { origin: 'org', name: 'organization_prompt' },
   sessionPrompt: { origin: 'session', name: 'session_prompt' },
   skills: { origin: 'session', name: 'skills' },

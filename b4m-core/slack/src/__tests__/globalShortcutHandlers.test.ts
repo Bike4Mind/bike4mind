@@ -161,7 +161,7 @@ describe('GlobalShortcutHandlers', () => {
 
     const mockUser = {
       id: 'user123',
-      slackSettings: { slackUserId: 'U12345' },
+      slackSettings: { slackUserId: 'U12345', slackTeamId: 'T12345' },
     };
 
     it('should return empty object when bot token is missing', async () => {
@@ -262,7 +262,7 @@ describe('GlobalShortcutHandlers', () => {
 
       expect(mockUserFindOne).toHaveBeenCalledWith({
         'slackSettings.slackUserId': 'U12345',
-        'slackSettings.slackTeamId': { $type: 'string', $ne: '' },
+        'slackSettings.slackTeamId': 'T12345',
       });
     });
   });
@@ -271,6 +271,7 @@ describe('GlobalShortcutHandlers', () => {
     const basePayload: ViewSubmissionPayload = {
       type: 'view_submission',
       user: { id: 'U12345', name: 'testuser' },
+      team: { id: 'T12345' },
       view: {
         callback_id: 'create_notebook_modal',
         private_metadata: JSON.stringify({ userId: 'user123' }),
@@ -287,7 +288,7 @@ describe('GlobalShortcutHandlers', () => {
     beforeEach(() => {
       mockUserFindById.mockResolvedValue({
         id: 'user123',
-        slackSettings: { slackUserId: 'U12345' },
+        slackSettings: { slackUserId: 'U12345', slackTeamId: 'T12345' },
       });
       mockDefineAbilitiesFor.mockReturnValue({});
       mockCreateSession.mockResolvedValue({ id: 'session123' });
@@ -470,6 +471,7 @@ describe('GlobalShortcutHandlers', () => {
     const basePayload: ViewSubmissionPayload = {
       type: 'view_submission',
       user: { id: 'U12345' },
+      team: { id: 'T12345' },
       view: {
         callback_id: 'quick_ask_modal',
         private_metadata: JSON.stringify({ userId: 'user123', workspaceId: 'ws123' }),
@@ -486,7 +488,7 @@ describe('GlobalShortcutHandlers', () => {
     beforeEach(() => {
       mockUserFindById.mockResolvedValue({
         id: 'user123',
-        slackSettings: { slackUserId: 'U12345', defaultNotebookId: 'session123' },
+        slackSettings: { slackUserId: 'U12345', slackTeamId: 'T12345', defaultNotebookId: 'session123' },
       });
       mockDefineAbilitiesFor.mockReturnValue({});
       mockSessionFindById.mockResolvedValue({ id: 'session123' });
@@ -519,7 +521,7 @@ describe('GlobalShortcutHandlers', () => {
       }
     });
 
-    it('publishes the quick ask request and does no Slack or DB work', async () => {
+    it('publishes the quick ask request after one submitter check and does no Slack work', async () => {
       mockConversationsOpen.mockClear();
       mockInvoke.mockClear();
       mockUserFindById.mockClear();
@@ -537,8 +539,20 @@ describe('GlobalShortcutHandlers', () => {
       });
       expect(Object.keys(detail).some(k => k.toLowerCase().includes('token'))).toBe(false);
       expect(mockConversationsOpen).not.toHaveBeenCalled();
-      expect(mockUserFindById).not.toHaveBeenCalled();
+      expect(mockUserFindById).toHaveBeenCalledTimes(1);
       expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['another Slack member', { slackUserId: 'U99999', slackTeamId: 'T12345' }],
+      ['the same member id linked in another workspace', { slackUserId: 'U12345', slackTeamId: 'T99999' }],
+    ])('refuses a submission naming an account linked to %s', async (_label, slackSettings) => {
+      mockUserFindById.mockResolvedValue({ id: 'user123', slackSettings });
+
+      const result = await handleQuickAskSubmission(basePayload, 'xoxb-token');
+
+      expect(result).toEqual({ response_action: 'errors', errors: { question_block: 'Unauthorized access.' } });
+      expect(mockQuickAskPublish).not.toHaveBeenCalled();
     });
 
     it('returns a modal error when publish fails', async () => {
@@ -690,7 +704,7 @@ describe('GlobalShortcutHandlers', () => {
   describe('View Notebooks Modal', () => {
     const mockUser = {
       id: 'user123',
-      slackSettings: { slackUserId: 'U12345' },
+      slackSettings: { slackUserId: 'U12345', slackTeamId: 'T12345' },
     };
 
     const basePayload: GlobalShortcutPayload = {

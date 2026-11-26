@@ -23,6 +23,7 @@ import {
   type VoiceClientBootstrap,
 } from '@bike4mind/common';
 import { sessionService } from '@bike4mind/services';
+import { fileInputsAllowedFor } from '@bike4mind/server-utils/files/fileScopes';
 import { assertSpendNotFrozen } from '@bike4mind/services/creditService';
 import {
   billedOrganizationIdForFreeze,
@@ -55,6 +56,9 @@ import { assertAiAccessAllowed } from '@bike4mind/server-utils/auth/assertAiAcce
 import { admitRequestCompletion } from '@bike4mind/server-utils/utils/untrustedCompletionQuota';
 import { newAccountSpendCapAdaptersWithAlert } from '@bike4mind/server-utils/billing/newAccountSpendCapWithAlert';
 import { recordVoiceRefusal } from '@bike4mind/server-utils/billing/userLimitEvents';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'voiceSessions' } });
 
 const DEFAULT_MODEL = ChatModels.CLAUDE_4_6_SONNET as ChatModelName;
 // Mirror v1's concurrency guard so a user (or a leaked session endpoint) can't
@@ -79,7 +83,7 @@ function remapVoiceModel(modelId: ChatModelName): ChatModelName {
     // CloudWatch-searchable signal so ops can quantify impact and confirm when
     // the workaround is safe to remove. Mirrors the [model-sunset] convention
     // used by resolveDeprecatedModelId.
-    console.warn(`[voice-model-remap] ${modelId} -> ${remapped} (reason: marketplace subscription pending)`);
+    logger.warn('[voice-model-remap] marketplace subscription pending', { modelId, remapped });
     return remapped;
   }
   return modelId;
@@ -206,6 +210,7 @@ const handler = nextRouteForContract(createVoiceSessionContract).post(async (req
       sessionId: String(resolvedSessionId),
       reasoningModelId,
       ...requestTurnAuth(req),
+      fileInputsAllowed: fileInputsAllowedFor(req),
       ...(req.apiKeyInfo?.billingOwnerType ? { apiKeyBillingOwnerType: req.apiKeyInfo.billingOwnerType } : {}),
       ...(adminRoleWithheldFor(req.apiKeyInfo) ? { adminRoleWithheld: true } : {}),
       voiceHoldStartedAt: holdStartedAt.toISOString(),

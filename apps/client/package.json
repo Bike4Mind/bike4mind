@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/client",
-  "version": "0.1.108",
+  "version": "0.1.111",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/copy-tavern-assets.mjs && node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs",
@@ -48,10 +48,13 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
     "@aws-sdk/client-apigatewaymanagementapi": "^3.1150.0",
+    "@aws-sdk/client-application-auto-scaling": "3.1151.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1150.0",
     "@aws-sdk/client-cloudfront": "^3.1150.0",
     "@aws-sdk/client-cloudwatch": "^3.1150.0",
     "@aws-sdk/client-cloudwatch-logs": "^3.1150.0",
+    "@aws-sdk/client-ecs": "3.1151.0",
+    "@aws-sdk/client-elastic-load-balancing-v2": "3.1151.0",
     "@aws-sdk/client-eventbridge": "^3.1150.0",
     "@aws-sdk/client-lambda": "^3.1150.0",
     "@aws-sdk/client-s3": "^3.1150.0",
@@ -98,9 +101,6 @@
     "@mui/joy": "^5.0.0-beta.52",
     "@mui/material-nextjs": "^7.3.9",
     "@mui/system": "^5.15.15",
-    "@nivo/bar": "^0.99.0",
-    "@nivo/line": "^0.99.0",
-    "@nivo/pie": "^0.99.0",
     "@node-saml/passport-saml": "^5.1.0",
     "@simplewebauthn/browser": "^14.0.0",
     "@slack/oauth": "^3.0.5",
@@ -179,7 +179,6 @@
     "react-i18next": "^17.0.9",
     "react-markdown": "^10.1.0",
     "react-simple-code-editor": "^0.14.1",
-    "react-spinners": "^0.17.0",
     "react-syntax-highlighter": "^16.1.1",
     "react-use-websocket": "github:MillionOnMars/react-use-websocket",
     "react-virtuoso": "^4.18.10",
@@ -201,7 +200,6 @@
     "unpdf": "^1.6.2",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.6.6",
-    "zod-validation-error": "^5.0.0",
     "zustand": "^5.0.13"
   },
   "devDependencies": {
@@ -235,7 +233,6 @@
     "@types/react-dom": "^19.3.0",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@types/sanitize-html": "^2.16.1",
-    "@types/speakeasy": "^2.0.10",
     "@types/yauzl": "^3.4.0",
     "@vitejs/plugin-react": "^6.1.2",
     "aws-sdk-client-mock": "^4.1.0",
@@ -245,7 +242,6 @@
     "mongodb-memory-server": "^11.3.0",
     "node-mocks-http": "^1.18.1",
     "serwist": "9.5.3",
-    "speakeasy": "^2.0.0",
     "tsx": "^4.23.0",
     "typescript": "^5.9.3",
     "vite": "^8.3.4",

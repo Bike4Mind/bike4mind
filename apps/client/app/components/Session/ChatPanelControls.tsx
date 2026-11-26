@@ -34,6 +34,10 @@ const LAYOUT_LABELS: Record<LayoutChoice, string> = {
   floatingChat: 'Float',
 };
 
+/** The layout menu's accessible name: what it is, and the layout it shows, if any. */
+const layoutMenuName = (activeLayout?: LayoutChoice): string =>
+  activeLayout ? `Chat layout: ${LAYOUT_LABELS[activeLayout]}` : 'Chat layout';
+
 interface ChatPanelControlsProps {
   /** data-testid prefix, e.g. 'docked-chat' or 'floating-chat' */
   testIdPrefix: string;
@@ -83,7 +87,10 @@ const ChatPanelControls: React.FC<ChatPanelControlsProps> = ({
             </Typography>
           )}
           slotProps={{
-            button: { 'data-testid': `${testIdPrefix}-layout-select-btn` },
+            // A combobox takes no name from its contents, and the button shows only the current
+            // layout or the placeholder. The name carries the shown layout, so speech control finds
+            // the button by the words on it ("Dock left"); "Layout" is already in "Chat layout".
+            button: { 'data-testid': `${testIdPrefix}-layout-select-btn`, 'aria-label': layoutMenuName(activeLayout) },
             listbox: {
               'data-testid': `${testIdPrefix}-layout-listbox`,
               sx: theme => ({

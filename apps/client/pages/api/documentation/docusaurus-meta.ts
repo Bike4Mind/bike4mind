@@ -6,6 +6,9 @@
  */
 
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { Logger } from '@bike4mind/observability';
+
+const logger = new Logger({ metadata: { service: 'docusaurusMeta' } });
 
 export interface DocusaurusDoc {
   id: string;
@@ -178,7 +181,7 @@ export default async function handler(_req: NextApiRequest, res: NextApiResponse
       docs,
     });
   } catch (error) {
-    console.error('Error fetching Docusaurus docs from production:', error);
+    logger.error('Error fetching Docusaurus docs from production', { error });
     res.status(500).json({
       success: false,
       error: 'Failed to fetch documentation from production site',

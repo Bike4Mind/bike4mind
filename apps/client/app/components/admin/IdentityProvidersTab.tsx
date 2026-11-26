@@ -532,7 +532,7 @@ const IdentityProvidersTab: React.FC = () => {
                   {editingIdp && (
                     <FormHelperText>
                       {editingIdp.hasSecrets?.clientSecret
-                        ? 'A secret is stored. Leave blank to keep it.'
+                        ? 'A secret is stored. Leave blank to keep it, or re-enter it if you change the audience.'
                         : 'No secret is stored for this provider - logins will fall back to the deploy-level Okta credentials.'}
                     </FormHelperText>
                   )}

@@ -20,6 +20,7 @@ import type { CreatedSession } from '@shared/ipc';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { groupSessions } from './grouping';
 import { useSidebarSections } from './useSidebarSections';
+import { chatBackedHostBridge, chatStubs } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -68,7 +69,9 @@ describe('opening a chat', () => {
       clearContext,
       setApprovalMode,
     };
-    Object.assign(window, { b4m: { chat, claudeImport: { onSessionsChanged: () => () => {} } } });
+    Object.assign(window, {
+      b4m: { host: chatBackedHostBridge(), chat, claudeImport: { onSessionsChanged: () => () => {} } },
+    });
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -641,7 +644,7 @@ describe('per-chat setters', () => {
     const before = sessionFor('s1');
     let answerFirstRead: (session: ChatSession) => void = () => {};
     const counted = { reads: 0 };
-    window.b4m.chat.getSession = async (id: string) => {
+    chatStubs().getSession = async (id: string) => {
       if (id !== 's1') return sessionFor(id);
       counted.reads++;
       return counted.reads === 1
@@ -678,7 +681,9 @@ describe('per-chat setters', () => {
       saves[entry.save] = vi.fn<Save>();
       chat[entry.save] = saves[entry.save];
     }
-    Object.assign(window, { b4m: { chat, claudeImport: { onSessionsChanged: () => () => {} } } });
+    Object.assign(window, {
+      b4m: { host: chatBackedHostBridge(), chat, claudeImport: { onSessionsChanged: () => () => {} } },
+    });
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -898,6 +903,7 @@ describe('generation settings', () => {
     setSessionGeneration.mockClear();
     Object.assign(window, {
       b4m: {
+        host: chatBackedHostBridge(),
         chat: {
           getSession: async () => session,
           setSessionGeneration,
@@ -1009,7 +1015,7 @@ describe('generation settings', () => {
       });
       expect(conversation.session?.generation).toEqual({ temperature: 0.4 });
 
-      window.b4m.chat.getSession = async () => ({ ...session, generation: { topK: 20 } });
+      chatStubs().getSession = async () => ({ ...session, generation: { topK: 20 } });
       let saved: boolean | undefined;
       await act(async () => {
         failSecond(new Error('disk full'));
@@ -1022,7 +1028,7 @@ describe('generation settings', () => {
 
     it('does not put a save that lands after a switch on the conversation now open', async () => {
       const other: ChatSession = { ...session, id: 's2', generation: { topP: 0.5 } };
-      window.b4m.chat.getSession = async (id: string) => (id === 's2' ? other : session);
+      chatStubs().getSession = async (id: string) => (id === 's2' ? other : session);
       await act(async () => root.render(<Harness />));
       let answer: (summary: ChatSessionSummary) => void = () => {};
       setSessionGeneration.mockImplementationOnce(() => new Promise<ChatSessionSummary>(resolve => (answer = resolve)));
@@ -1047,7 +1053,7 @@ describe('generation settings', () => {
       setSessionGeneration.mockImplementationOnce(
         () => new Promise<ChatSessionSummary>((_resolve, reject) => (failFirst = reject))
       );
-      window.b4m.chat.getSession = () => new Promise<ChatSession>(resolve => (read = resolve));
+      chatStubs().getSession = () => new Promise<ChatSession>(resolve => (read = resolve));
       let first: Promise<boolean> | undefined;
       await act(async () => {
         first = conversation.setGeneration({ topK: 20 });
@@ -1067,7 +1073,7 @@ describe('generation settings', () => {
 
       it('shows a save that lands while its chat is being reopened, whose first read predates it', async () => {
         const other: ChatSession = { ...session, id: 's2', generation: { topP: 0.5 } };
-        window.b4m.chat.getSession = async (id: string) => (id === 's2' ? other : session);
+        chatStubs().getSession = async (id: string) => (id === 's2' ? other : session);
         await act(async () => root.render(<Harness />));
         let answer: (summary: ChatSessionSummary) => void = () => {};
         setSessionGeneration.mockImplementationOnce(
@@ -1080,7 +1086,7 @@ describe('generation settings', () => {
         await act(async () => root.render(<Harness id="s2" />));
         let answerFirstRead: (value: ChatSession) => void = () => {};
         let reads = 0;
-        window.b4m.chat.getSession = async (id: string) => {
+        chatStubs().getSession = async (id: string) => {
           if (id === 's2') return other;
           reads++;
           return reads === 1
@@ -1100,7 +1106,7 @@ describe('generation settings', () => {
 
       it('tells only the chat it failed in, and leaves the open one as it was', async () => {
         const other: ChatSession = { ...session, id: 's2', generation: { topP: 0.5 } };
-        window.b4m.chat.getSession = async (id: string) => (id === 's2' ? other : session);
+        chatStubs().getSession = async (id: string) => (id === 's2' ? other : session);
         await act(async () => root.render(<Harness />));
         let fail: (error: Error) => void = () => {};
         setSessionGeneration.mockImplementationOnce(
@@ -1122,7 +1128,7 @@ describe('generation settings', () => {
 
       it("applies a chat's save that lands after a save in another chat", async () => {
         const other: ChatSession = { ...session, id: 's2', generation: undefined };
-        window.b4m.chat.getSession = async (id: string) => (id === 's2' ? other : session);
+        chatStubs().getSession = async (id: string) => (id === 's2' ? other : session);
         await act(async () => root.render(<Harness />));
         let answer: (summary: ChatSessionSummary) => void = () => {};
         setSessionGeneration.mockImplementationOnce(
@@ -1145,7 +1151,7 @@ describe('generation settings', () => {
 
       it("reports a chat's failed save once it is open again, after a save in another chat", async () => {
         const other: ChatSession = { ...session, id: 's2', generation: undefined };
-        window.b4m.chat.getSession = async (id: string) => (id === 's2' ? other : session);
+        chatStubs().getSession = async (id: string) => (id === 's2' ? other : session);
         await act(async () => root.render(<Harness />));
         let fail: (error: Error) => void = () => {};
         setSessionGeneration.mockImplementationOnce(
@@ -1170,7 +1176,7 @@ describe('generation settings', () => {
 
     it('saves nothing before the conversation has loaded', async () => {
       let finish: (value: ChatSession) => void = () => {};
-      window.b4m.chat.getSession = () => new Promise<ChatSession>(resolve => (finish = resolve));
+      chatStubs().getSession = () => new Promise<ChatSession>(resolve => (finish = resolve));
       await act(async () => root.render(<Harness />));
       expect(await conversation.setGeneration({ topK: 20 })).toBe(false);
       expect(setSessionGeneration).not.toHaveBeenCalled();
@@ -1231,6 +1237,7 @@ describe('imported transcripts and history consent', () => {
     getSession.mockResolvedValue(imported('old'));
     Object.assign(window, {
       b4m: {
+        host: chatBackedHostBridge(),
         chat: {
           getSession,
           setSessionHistory,
@@ -1513,6 +1520,7 @@ describe('sending while navigating', () => {
     Element.prototype.scrollIntoView = () => undefined;
     Object.assign(window, {
       b4m: {
+        host: chatBackedHostBridge(),
         chat: {
           getSession,
           sendMessage,
@@ -1692,6 +1700,7 @@ describe('sharing a folder', () => {
 
   function stubBridge(chat: Record<string, unknown>) {
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: {
         getQueuedMessages: async () => [],
         onSessionSummary: () => () => undefined,
@@ -1845,6 +1854,7 @@ describe('background notices', () => {
   beforeEach(() => {
     Object.assign(window, {
       b4m: {
+        host: chatBackedHostBridge(),
         chat: {
           getSession: async (id: string) => sessionNamed(id),
           listSessions: async () => [],
@@ -1983,6 +1993,7 @@ describe('refused send', () => {
     sendMessage.mockReset();
     Object.assign(window, {
       b4m: {
+        host: chatBackedHostBridge(),
         chat: {
           getSession: async () => session,
           sendMessage,
@@ -2075,6 +2086,7 @@ describe('summary push', () => {
     getSession.mockReset().mockResolvedValue(empty);
     Object.assign(window, {
       b4m: {
+        host: chatBackedHostBridge(),
         chat: {
           getSession,
           sendMessage: async () => ({ ok: true, messageId: 'm1' }),
@@ -2142,6 +2154,7 @@ describe('delete prefs', () => {
 
   async function mount() {
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: {
         listSessions: vi.fn(() => Promise.resolve([summary('listed')])),
         deleteSession: vi.fn(() => Promise.resolve()),
@@ -2221,6 +2234,7 @@ describe('reload ordering', () => {
 
   async function mount(listSessions: () => Promise<ChatSessionSummary[]>) {
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: {
         listSessions,
         onSessionSummary: vi.fn(() => () => {}),
@@ -2257,23 +2271,27 @@ describe('reload ordering', () => {
       const controller = await mount(listSessions);
 
       let firstDone = false;
-      let listedWhenFirstDone: string[] = [];
+      let firstReload: Promise<void> = Promise.resolve();
       await act(async () => {
-        void controller()
+        firstReload = controller()
           .reload()
           .then(() => {
             firstDone = true;
-            listedWhenFirstDone = controller().sessions.map(session => session.id);
           });
         void controller().reload();
         first.resolve([summary('fresh'), summary('old')]);
       });
       expect(firstDone).toBe(false);
 
-      await act(async () => second.resolve([summary('fresh'), summary('old')]));
+      // The listing now crosses the host bridge, so it settles some microtasks after the stub
+      // does; the rendered list is read once act has flushed the update the reload applied.
+      await act(async () => {
+        second.resolve([summary('fresh'), summary('old')]);
+        await firstReload;
+      });
 
       expect(firstDone).toBe(true);
-      expect(listedWhenFirstDone).toContain('fresh');
+      expect(controller().sessions.map(session => session.id)).toContain('fresh');
     });
 
     it('still lets the newer listing win when the older one lands last', async () => {
@@ -2412,16 +2430,18 @@ describe('session placement', () => {
 
   async function mount(
     chat: { createSession?: unknown; createCodeSession?: unknown; listSessions?: unknown; onStreamEvent?: unknown },
-    mode: ChatSessionMode = 'chat'
+    mode: ChatSessionMode = 'chat',
+    sidebarStubs: Record<string, unknown> = {}
   ) {
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: {
         listSessions: vi.fn(() => Promise.resolve([summary('old')])),
         onSessionSummary: vi.fn(() => () => {}),
         onStreamEvent: vi.fn(() => () => {}),
         ...chat,
       },
-      sidebar: { getSections: vi.fn(() => Promise.resolve(work)) },
+      sidebar: { getSections: vi.fn(() => Promise.resolve(work)), ...sidebarStubs },
     };
     const seen: Placement[] = [];
     let controller: SessionsController | null = null;
@@ -2513,17 +2533,36 @@ describe('session placement', () => {
 
     it('draws a new Code session inside its section from its first render', async () => {
       const createCodeSession = vi.fn((): Promise<CreateCodeSessionResult> =>
-        Promise.resolve({ ok: true, session: summary('fresh', { mode: 'code' }), sidebarSections: placed })
+        Promise.resolve({ ok: true, session: summary('fresh', { mode: 'code' }) })
       );
-      const { seen, start } = await mount({ createCodeSession }, 'code');
+      const moveSession = vi.fn(() => Promise.resolve(placed));
+      const { seen, start } = await mount({ createCodeSession }, 'code', { moveSession });
 
       await start((sessions, place, failure) =>
         sessions.createCode({}, { sectionId: 'work', placed: place, failed: failure })
       );
 
-      expect(createCodeSession).toHaveBeenCalledWith({ sectionId: 'work' });
+      expect(createCodeSession).toHaveBeenCalledWith({});
+      expect(moveSession).toHaveBeenCalledWith('fresh', 'work');
       expect(seen.at(-1)).toBe('work');
       expect(seen).not.toContain('loose');
+    });
+
+    it('falls back to the default list when a Code session could not be moved into its section', async () => {
+      const createCodeSession = vi.fn((): Promise<CreateCodeSessionResult> =>
+        Promise.resolve({ ok: true, session: summary('fresh', { mode: 'code' }) })
+      );
+      const moveSession = vi.fn(() => Promise.reject(new Error('section gone')));
+      const placedSpy = vi.fn();
+      const { seen, start, failed } = await mount({ createCodeSession }, 'code', { moveSession });
+
+      await start((sessions, _place, failure) =>
+        sessions.createCode({}, { sectionId: 'work', placed: placedSpy, failed: failure })
+      );
+
+      expect(placedSpy).not.toHaveBeenCalled();
+      expect(failed).toHaveBeenCalled();
+      expect(seen.at(-1)).toBe('loose');
     });
 
     it('asks for no section and adds the row to the default list from plain New', async () => {

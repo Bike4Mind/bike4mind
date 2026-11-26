@@ -11,7 +11,8 @@ import {
 import type { AuthState } from '@shared/auth';
 import { AuthService, DESKTOP_OAUTH_CLIENT_ID, readPhotoSource, toDesktopUser } from './AuthService';
 import { fetchProfilePhoto, LOCAL_FILE_PROXY_BASE, type ProfilePhotoCache } from './profilePhoto';
-import { TokenVault, type SecretCipher, type VaultFile } from './tokenVault';
+import { TokenVault, type VaultFile } from './tokenVault';
+import type { SecretCipher } from '../../host/ports';
 
 // The download itself is MediaApiClient's and tested there; what matters here is the base the
 // service hands it, which is the only thing standing between a self-host account and initials.
@@ -174,6 +175,29 @@ describe('AuthService', () => {
     expect(states.find(state => state.status === 'awaiting-approval')?.pending?.verificationUriComplete).toBe(
       `${HOSTED}/activate`
     );
+    service.dispose();
+  });
+
+  it('opens only a web or mail verification address', async () => {
+    process.env[BAKED] = HOSTED;
+    const device = fakeDeviceFlow({
+      initiateDeviceFlow: vi.fn().mockResolvedValue({
+        device_code: 'device-code',
+        user_code: 'WDJB-MJHT',
+        verification_uri: 'file:///Applications/Calculator.app',
+        verification_uri_complete: 'smb://example.com/share',
+        expires_in: 600,
+        interval: 5,
+      }),
+    });
+    const { service, states, openExternal } = build({ device });
+
+    await service.initialize();
+    await service.signIn();
+    await service.openAccountPage('verification');
+
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(states.filter(state => state.status === 'awaiting-approval').at(-1)?.pending?.browserOpened).toBe(false);
     service.dispose();
   });
 

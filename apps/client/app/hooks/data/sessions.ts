@@ -165,14 +165,15 @@ export function useGetOwnSessions(search: string = '', surface?: string, filters
 
   return useInfiniteQuery({
     queryKey,
-    initialPageParam: { page: 1 },
+    initialPageParam: { page: 1 } as { page: number; cursor?: string },
     queryFn: async params => {
-      const { page = 1 } = params.pageParam || {};
+      const { page = 1, cursor } = params.pageParam || {};
       const result = await getSessionsFromServer(search, {
         pagination: {
           page,
           limit: OWN_SESSIONS_LIMIT,
         },
+        cursor,
         surface,
         filters,
       });
@@ -185,8 +186,10 @@ export function useGetOwnSessions(search: string = '', surface?: string, filters
     enabled: !!currentUser,
     getNextPageParam: (lastPage, _allPages, { page }) => {
       if (lastPage.hasMore) {
+        // The keyset cursor keeps a deep page as cheap as the first; `page` is the offset fallback.
         return {
           page: page + 1,
+          ...(lastPage.nextCursor ? { cursor: lastPage.nextCursor } : {}),
         };
       }
       return undefined;

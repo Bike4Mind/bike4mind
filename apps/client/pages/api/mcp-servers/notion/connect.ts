@@ -4,6 +4,7 @@ import { getNotionOAuthConfig, NOTION_OAUTH_AUTHORIZE_URL } from '@server/integr
 import { userRepository } from '@bike4mind/database';
 import crypto from 'crypto';
 import { Config } from '@bike4mind/server-utils/utils/config';
+import { issueStateNonce, NONCE_SLOT } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 
 /**
  * Initiates the Notion OAuth flow.
@@ -18,7 +19,6 @@ const handler = baseApi().get(async (req, res) => {
 
   const user = await userRepository.findById(userId);
   if (user?.notionConnect?.status === 'connected') {
-    console.log(`[Notion Connect] User ${userId} already connected`);
     return res.json({
       alreadyConnected: true,
       workspaceName: user.notionConnect.workspaceName,
@@ -35,13 +35,17 @@ const handler = baseApi().get(async (req, res) => {
   const csrfToken = crypto.randomBytes(32).toString('hex');
   const timestamp = Date.now();
 
-  // HMAC-sign the state to detect tampering with userId or timestamp
   const secret = Config.JWT_SECRET;
   if (!secret) {
     throw new Error('JWT_SECRET environment variable is required');
   }
+
+  // Bind the flow to this browser (see oauthFlowCookie.ts). The nonce hash is signed so a
+  // captured state cannot be re-pointed at another browser's cookie.
+  const nonceHash = issueStateNonce(res, NONCE_SLOT.notionConnect);
+
   const hmac = crypto.createHmac('sha256', secret);
-  hmac.update(`${userId}:${csrfToken}:${timestamp}`);
+  hmac.update(`${userId}:${csrfToken}:${timestamp}:${nonceHash}`);
   const signature = hmac.digest('hex');
 
   const referrer = req.headers.referer || '/profile?tab=integrations';
@@ -51,6 +55,7 @@ const handler = baseApi().get(async (req, res) => {
       referrer,
       csrfToken,
       timestamp,
+      nonceHash,
       signature,
     })
   );
@@ -65,8 +70,6 @@ const handler = baseApi().get(async (req, res) => {
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('owner', 'user'); // Request access to user's workspaces
   authUrl.searchParams.set('state', state);
-
-  console.log('[Notion Connect] OAuth authorization URL generated');
 
   return res.json({ authUrl: authUrl.toString(), state });
 });

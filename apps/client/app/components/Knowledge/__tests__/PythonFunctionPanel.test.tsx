@@ -18,6 +18,7 @@ const fns = vi.hoisted(() => ({
   remove: { mutate: vi.fn(), isPending: false },
   dialog: vi.fn(),
   toastError: vi.fn(),
+  dataFiles: vi.fn(),
 }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: {} }));
 vi.mock('@client/app/hooks/data/callableFunctions', async importOriginal => ({
@@ -31,6 +32,7 @@ vi.mock('@client/app/hooks/data/callableFunctions', async importOriginal => ({
   useSetCallableFunctionEnabled: () => fns.setEnabled,
   useSetCallableFunctionApproval: () => fns.setApproval,
   useDeleteCallableFunction: () => fns.remove,
+  fetchCallableFunctionDataFiles: (...args: unknown[]) => fns.dataFiles(...args),
 }));
 vi.mock('../SaveFunctionDialog', () => ({
   default: (props: Record<string, unknown>) => {
@@ -39,6 +41,7 @@ vi.mock('../SaveFunctionDialog', () => ({
   },
 }));
 vi.mock('sonner', () => ({ toast: { error: fns.toastError } }));
+vi.mock('../FunctionDataSection', () => ({ default: () => null }));
 // Its own behavior is in PromoteFunctionSection.test.tsx; here only where it mounts and why it is blocked.
 vi.mock('../PromoteFunctionSection', () => ({
   default: ({ blocked }: { blocked: string | null }) => (
@@ -192,6 +195,7 @@ describe('PythonFunctionPanel', () => {
     expect(callFunction).toHaveBeenLastCalledWith(
       CODE,
       { load: 1000, span: 4, elastic_modulus: 200000000000, second_moment: 0.000008 },
+      [],
       []
     );
     const row = within(result).getByText('deflection').closest('tr') as HTMLElement;
@@ -273,6 +277,7 @@ describe('PythonFunctionPanel', () => {
     expect(callFunction).toHaveBeenLastCalledWith(
       CODE,
       { load: 1000, span: 3, elastic_modulus: 200000000000, second_moment: 0.000008 },
+      [],
       []
     );
   });
@@ -436,7 +441,7 @@ describe('PythonFunctionPanel', () => {
     );
     fireEvent.click(screen.getByTestId('python-function-call-btn'));
     await screen.findByTestId('python-function-result');
-    expect(callFunction).toHaveBeenLastCalledWith(edited, expect.objectContaining({ span: 4 }), []);
+    expect(callFunction).toHaveBeenLastCalledWith(edited, expect.objectContaining({ span: 4 }), [], []);
   });
 });
 
@@ -477,8 +482,8 @@ describe('PythonFunctionPanel tests', () => {
     fireEvent.click(within(section).getByTestId('python-function-tests-run-btn'));
 
     await waitFor(() => expect(statuses()).toEqual(['Passed', 'Passed']));
-    expect(callFunction).toHaveBeenNthCalledWith(2, CODE, STEEL_INPUT, []);
-    expect(callFunction).toHaveBeenNthCalledWith(3, CODE, { ...STEEL_INPUT, span: 2 }, []);
+    expect(callFunction).toHaveBeenNthCalledWith(2, CODE, STEEL_INPUT, [], []);
+    expect(callFunction).toHaveBeenNthCalledWith(3, CODE, { ...STEEL_INPUT, span: 2 }, [], []);
     expect(screen.getAllByTestId('python-function-test-row').map(row => row.textContent)).toEqual([
       '4 m steel beamPassed (2 ms)',
       '2 m steel beamPassed (2 ms)',
@@ -617,6 +622,7 @@ describe('PythonFunctionPanel save controls', () => {
     fns.saved = { data: null, isLoading: false };
     fns.others = [];
     fns.query.mockReset();
+    fns.dataFiles.mockReset();
     fns.repin = { mutate: vi.fn(), isPending: false };
     fns.setEnabled = { mutate: vi.fn(), isPending: false };
     fns.setApproval = { mutate: vi.fn(), isPending: false };
@@ -631,7 +637,8 @@ describe('PythonFunctionPanel save controls', () => {
     expect(screen.queryByTestId('python-function-save-btn')).toBeNull();
     expect(screen.queryByTestId('python-function-save-blocked')).toBeNull();
     expect(screen.queryByTestId('python-function-saved-status')).toBeNull();
-    expect(fns.query).not.toHaveBeenCalled();
+    // The hook is disabled for a null artifact, so no lookup is made.
+    expect(fns.query.mock.calls.every(([artifactId]) => artifactId === null)).toBe(true);
   });
 
   it('shows no save controls while the saved tool loads', async () => {
@@ -713,6 +720,36 @@ describe('PythonFunctionPanel save controls', () => {
     expect(screen.queryByTestId('python-function-repin-btn')).toBeNull();
     expect(screen.getByTestId('python-function-enable-btn').textContent).toBe('Turn off');
     expect(screen.getByTestId('python-function-delete-btn').textContent).toBe('Delete');
+  });
+
+  it("hands a pinned tool's verified data files to the call", async () => {
+    const pin = { name: 'points.csv', sha256: 'a'.repeat(64), bytes: 3, pinnedAt: '2026-11-22T10:00:00.000Z' };
+    const files = [{ name: 'points.csv', bytes: new Uint8Array([1, 2, 3]).buffer }];
+    fns.saved = { data: savedView({ dataPins: [pin] }), isLoading: false };
+    fns.dataFiles.mockResolvedValueOnce(files);
+    await renderReady(TARGET);
+    callFunction.mockResolvedValueOnce({ success: true, value: { deflection: 1 }, output: '', executionTime: 1 });
+
+    fillSampleInputs();
+    fireEvent.click(screen.getByTestId('python-function-call-btn'));
+
+    await screen.findByTestId('python-function-result');
+    expect(fns.dataFiles).toHaveBeenCalledWith('fn-1', [pin]);
+    expect(callFunction).toHaveBeenLastCalledWith(CODE, expect.objectContaining({ span: 4 }), [], files);
+  });
+
+  it("shows a pinned file's read failure and does not call run", async () => {
+    const pin = { name: 'points.csv', sha256: 'a'.repeat(64), bytes: 3, pinnedAt: '2026-11-22T10:00:00.000Z' };
+    fns.saved = { data: savedView({ dataPins: [pin] }), isLoading: false };
+    fns.dataFiles.mockRejectedValueOnce(new Error('The data file points.csv does not match its pinned hash.'));
+    await renderReady(TARGET);
+
+    fillSampleInputs();
+    fireEvent.click(screen.getByTestId('python-function-call-btn'));
+
+    const error = await screen.findByTestId('python-function-error');
+    expect(error.textContent).toContain('The data file points.csv does not match its pinned hash.');
+    expect(callFunction).toHaveBeenCalledTimes(1);
   });
 
   it('mounts promotion under a saved tool, blocked while the tool is off or pinned to another version', async () => {

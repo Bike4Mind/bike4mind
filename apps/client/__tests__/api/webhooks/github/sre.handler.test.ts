@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import crypto from 'crypto';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { encryptSecret, generateEncryptionKey } from '@bike4mind/server-utils/security/secretEncryption';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
 
 /**
  * Handler-level regression test for the SRE webhook decrypt path.
@@ -26,6 +27,8 @@ const REPO_SLUG = 'MillionOnMars/lumina5';
 
 // Secret stored in the SRE config, encrypted under the now-previous key.
 const secretEncryptedWithPreviousKey = encryptSecret(PLAINTEXT_SECRET, previousKey);
+
+configureSecretsAtRest(currentKey, previousKey);
 
 const mockConfig: Record<string, string | undefined> = {
   MONGODB_URI: 'mongodb://localhost:27017/%STAGE%',
@@ -76,6 +79,11 @@ vi.mock('@bike4mind/server-utils/integrations/github/sreRevisionDispatch', () =>
   dispatchReviewToSreRevision: (...args: unknown[]) => mockDispatchReviewToSreRevision(...args),
 }));
 
+const mockRecordSrePullRequestEvent = vi.fn().mockResolvedValue({ recorded: true });
+vi.mock('@bike4mind/server-utils/integrations/github/srePullRequestTracking', () => ({
+  recordSrePullRequestEvent: (...args: unknown[]) => mockRecordSrePullRequestEvent(...args),
+}));
+
 const mockTryClaimForProcessing = vi.fn().mockResolvedValue({ claimed: true });
 vi.mock('@server/integrations/github/GitHubEvent', () => ({
   GitHubEvent: vi.fn(function () {
@@ -103,11 +111,11 @@ function signPayload(rawBody: string, secret: string): string {
   return 'sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
 }
 
-function createReqRes(rawBody: string, signature: string) {
+function createReqRes(rawBody: string, signature: string, eventType = 'issues') {
   const req = {
     method: 'POST',
     headers: {
-      'x-github-event': 'issues',
+      'x-github-event': eventType,
       'x-github-delivery': 'delivery-123',
       'x-hub-signature-256': signature,
     },
@@ -181,5 +189,41 @@ describe('SRE webhook handler — secret decrypt with key rotation', () => {
     expect(mockSyncSreIssueStateFromWebhook).toHaveBeenCalledTimes(1);
     // Handler forwards the parsed payload; the sync fn decides open/closed from action.
     expect(mockSyncSreIssueStateFromWebhook.mock.calls[0][0]).toMatchObject({ action: 'closed' });
+  });
+});
+
+describe('SRE webhook handler - pull_request tracking', () => {
+  const prBody = JSON.stringify({
+    action: 'labeled',
+    label: { name: 'sre-fix-correct' },
+    pull_request: { number: 5, merged: false, head: { ref: 'sre-fix/abc' } },
+    repository: { full_name: REPO_SLUG },
+    sender: { login: 'octocat' },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSettingsValue.mockResolvedValue({});
+    mockTryClaimForProcessing.mockResolvedValue({ claimed: true });
+    mockResolveWebhookSecret.mockReturnValue(secretEncryptedWithPreviousKey);
+  });
+
+  it('records a signed pull_request event against SRE tracking', async () => {
+    const { req, res } = createReqRes(prBody, signPayload(prBody, PLAINTEXT_SECRET), 'pull_request');
+
+    await handler(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(mockRecordSrePullRequestEvent).toHaveBeenCalledTimes(1);
+    expect(mockRecordSrePullRequestEvent.mock.calls[0][0]).toMatchObject({ action: 'labeled' });
+  });
+
+  it('rejects a pull_request event not signed with the SRE secret', async () => {
+    const { req, res } = createReqRes(prBody, signPayload(prBody, 'tenant-secret'), 'pull_request');
+
+    await handler(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(mockRecordSrePullRequestEvent).not.toHaveBeenCalled();
   });
 });
