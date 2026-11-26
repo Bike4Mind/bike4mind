@@ -663,6 +663,25 @@ describe('/api/otc/verify — domain-grant signup credits (Register now flow)', 
     expect(adapters.db.grantPackages).toBe(grantPackageRepositoryStub);
   });
 
+  it("passes the new account's stored signupClientId to its signup event, undefined when it has none", async () => {
+    mockRegisterViaOTC.mockResolvedValue({
+      id: 'user-1',
+      tokenVersion: 0,
+      currentCredits: 1000,
+      signupClientId: 'client-1',
+    });
+    const first = makeReqRes(NON_DOMAIN_EMAIL);
+    await handler(first.req, first.res);
+    expect(mockRecordSignupNetwork).toHaveBeenLastCalledWith(
+      expect.objectContaining({ userId: 'user-1', clientId: 'client-1' })
+    );
+
+    mockRegisterViaOTC.mockResolvedValue({ id: 'user-1', tokenVersion: 0, currentCredits: 1000 });
+    const second = makeReqRes(NON_DOMAIN_EMAIL);
+    await handler(second.req, second.res);
+    expect(mockRecordSignupNetwork.mock.calls.at(-1)?.[0].clientId).toBeUndefined();
+  });
+
   it('persists the signup touches and reports email_verified and credits_granted for the new user', async () => {
     const acquisition = { firstTouch: { source: 'widgets' }, signupMethod: 'otc', capturedAt: new Date() };
     mockRecordSignupAcquisition.mockResolvedValueOnce({ acquisition, isSynthetic: false });

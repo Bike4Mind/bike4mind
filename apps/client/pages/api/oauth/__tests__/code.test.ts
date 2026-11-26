@@ -19,6 +19,8 @@ const h = vi.hoisted(() => ({
   upsertGrant: vi.fn(),
   decideConsent: vi.fn(),
   creditOAuthSignup: vi.fn(),
+  recordSignIn: vi.fn(),
+  withAccountNotPurging: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -36,7 +38,9 @@ vi.mock('@server/auth/oauthServer', () => ({
 }));
 vi.mock('@bike4mind/database', () => ({
   oauthGrantRepository: { findGrant: h.findGrant, upsertGrant: h.upsertGrant },
+  oauthClientSignInRepository: { recordSignIn: h.recordSignIn },
 }));
+vi.mock('@server/auth/withAccountNotPurging', () => ({ withAccountNotPurging: h.withAccountNotPurging }));
 vi.mock('@server/auth/oauthConsent', () => ({ decideConsent: h.decideConsent }));
 vi.mock('@server/analytics/oauthSignupCredit', () => ({ creditOAuthSignup: h.creditOAuthSignup }));
 
@@ -348,5 +352,85 @@ describe('POST /api/oauth/code OAuth signup credit', () => {
 
     expect(res.statusCode).toBe(400);
     expect(h.creditOAuthSignup).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/oauth/code per-client sign-in record', () => {
+  const registered = {
+    clientId: 'stored-client-1',
+    tokenEndpointAuthMethod: 'none',
+    allowedScopes: ['openid', 'email', 'profile'],
+  };
+  const pkceBody = { ...baseBody, code_challenge: VALID_CHALLENGE, code_challenge_method: 'S256' };
+
+  const callWithLogger = async (body: Record<string, unknown>, user: unknown = { id: 'u1' }) => {
+    const res = mockRes();
+    const logger = { warn: vi.fn(), info: vi.fn() };
+    await (handler as unknown as (req: unknown, res: Res) => Promise<unknown>)({ body, user, logger }, res);
+    return { res, logger };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (h.generateAuthCode as Mock).mockResolvedValue('the-code');
+    (h.creditOAuthSignup as Mock).mockResolvedValue([]);
+    (h.validateClient as Mock).mockResolvedValue(registered);
+    h.withAccountNotPurging.mockImplementation(async (_id: string, write: () => Promise<unknown>) => write());
+    h.recordSignIn.mockResolvedValue(undefined);
+  });
+
+  it('records the sign-in for the user and client once a code is issued', async () => {
+    const { res } = await callWithLogger(pkceBody);
+
+    expect(res.body?.code).toBe('the-code');
+    expect(h.withAccountNotPurging).toHaveBeenCalledWith('u1', expect.any(Function));
+    expect(h.recordSignIn).toHaveBeenCalledOnce();
+    expect(h.recordSignIn).toHaveBeenCalledWith({ userId: 'u1', clientId: 'stored-client-1', at: expect.any(Date) });
+  });
+
+  it.each<[string, Record<string, unknown>, unknown, () => void]>([
+    ['no user', pkceBody, null, () => undefined],
+    ['unknown client', pkceBody, { id: 'u1' }, () => (h.validateClient as Mock).mockResolvedValue(null)],
+    ['PKCE rejection', baseBody, { id: 'u1' }, () => undefined],
+    ['invalid scope', { ...pkceBody, scope: 'openid admin' }, { id: 'u1' }, () => undefined],
+    [
+      'consent required',
+      pkceBody,
+      { id: 'u1' },
+      () => {
+        (h.validateClient as Mock).mockResolvedValue({ ...registered, clientType: 'relying-party' });
+        (h.findGrant as Mock).mockResolvedValue(null);
+        (h.decideConsent as Mock).mockReturnValue('consent_required');
+      },
+    ],
+  ])('does not record on %s', async (_name, body, user, arrange) => {
+    arrange();
+    await callWithLogger(body, user);
+
+    expect(h.recordSignIn).not.toHaveBeenCalled();
+    expect(h.withAccountNotPurging).not.toHaveBeenCalled();
+  });
+
+  it('still returns the code and logs a warning when the write fails', async () => {
+    h.recordSignIn.mockRejectedValue(new Error('db down'));
+
+    const { res, logger } = await callWithLogger(pkceBody);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body?.code).toBe('the-code');
+    expect(logger.warn).toHaveBeenCalledWith('Failed to record OAuth client sign-in', {
+      clientId: 'client-1',
+      error: expect.objectContaining({ message: 'db down' }),
+    });
+  });
+
+  it('writes nothing for an account being purged, and still returns the code', async () => {
+    h.withAccountNotPurging.mockRejectedValue(new Error('Account deletion is in progress'));
+
+    const { res, logger } = await callWithLogger(pkceBody);
+
+    expect(h.recordSignIn).not.toHaveBeenCalled();
+    expect(res.body?.code).toBe('the-code');
+    expect(logger.warn).toHaveBeenCalledOnce();
   });
 });

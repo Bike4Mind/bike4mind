@@ -186,3 +186,27 @@ describe('findRecentSignupsOnIp', () => {
     expect(rows.map(r => r.userId)).toEqual(['b']);
   });
 });
+
+describe('clientId', () => {
+  let server: Awaited<ReturnType<typeof createMongoServer>>;
+
+  beforeAll(async () => {
+    server = await createMongoServer();
+    await mongoose.connect(server.getUri());
+    await AuthEventModel.init();
+  });
+  afterAll(async () => {
+    await mongoose.disconnect();
+    await server?.stop();
+  });
+
+  it('round-trips on a signup row and is absent when not given', async () => {
+    await authEventRepository.record({ userId: 'a', type: 'signup', method: 'otc', clientId: 'client-1' });
+    await authEventRepository.record({ userId: 'b', type: 'signup', method: 'otc' });
+
+    const [withClient] = await authEventRepository.findByUser('a');
+    const [without] = await authEventRepository.findByUser('b');
+    expect(withClient.clientId).toBe('client-1');
+    expect(without.clientId).toBeUndefined();
+  });
+});

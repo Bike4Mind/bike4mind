@@ -511,7 +511,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
     user.password = null;
 
     if (isNewUser) {
-      await recordSignupNetwork({ req, userId: user.id, method: AuthStrategy.Okta });
+      await recordSignupNetwork({ req, userId: user.id, method: AuthStrategy.Okta, clientId: user.signupClientId });
       // After recordSignupNetwork so the datacenter signal sees the stored signup network.
       await refreshSignupRiskScore(user.id, Logger.globalInstance);
       const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.Okta });

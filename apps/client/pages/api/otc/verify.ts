@@ -666,7 +666,7 @@ const handler = baseApi({ auth: false })
       type: AuthEvents.REGISTER,
       metadata: { strategy: 'otc' },
     }).catch(err => req.logger.error('OTC registration analytics log failed', err));
-    await recordSignupNetwork({ req, userId: newUser.id, method: 'otc' });
+    await recordSignupNetwork({ req, userId: newUser.id, method: 'otc', clientId: newUser.signupClientId });
     // After recordSignupNetwork so the datacenter signal sees the stored signup network.
     await refreshSignupRiskScore(newUser.id, req.logger);
     // Funnel floor (server/analytics/funnel.ts): keep the consented touches on the user so later

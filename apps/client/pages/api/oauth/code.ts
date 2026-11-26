@@ -10,11 +10,12 @@
 
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
-import { oauthGrantRepository } from '@bike4mind/database';
+import { oauthClientSignInRepository, oauthGrantRepository } from '@bike4mind/database';
 import { generateAuthCode, validateClient } from '@server/auth/oauthServer';
 import { PKCE_S256_CHALLENGE_RE } from '@server/auth/pkce';
 import { decideConsent } from '@server/auth/oauthConsent';
 import { logOAuthError } from '@server/auth/oauthErrorLog';
+import { withAccountNotPurging } from '@server/auth/withAccountNotPurging';
 import { creditOAuthSignup } from '@server/analytics/oauthSignupCredit';
 
 const RequestSchema = z.object({
@@ -140,6 +141,16 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(async (req, res) => {
     codeChallenge: code_challenge,
     nonce,
   });
+
+  // Never fails the request: the code is already issued. The guard keeps a sign-in from resurrecting
+  // rows of an account being purged.
+  try {
+    await withAccountNotPurging(user.id, () =>
+      oauthClientSignInRepository.recordSignIn({ userId: user.id, clientId: client.clientId, at: new Date() })
+    );
+  } catch (err) {
+    req.logger.warn('Failed to record OAuth client sign-in', { clientId: client_id, error: err });
+  }
 
   // An account created to sign in to this client is credited to the client's product. Never throws.
   await creditOAuthSignup({ req, userId: user.id, client });

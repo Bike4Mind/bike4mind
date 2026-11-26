@@ -260,7 +260,7 @@ const handler = baseApi({ auth: false })
             req.logger.error('Failed to log OAuth registration', { error: logError });
           }
           await stampOAuthSourceTag(user.id, stateResult?.valid ? stateResult.payload.clientId : undefined);
-          await recordSignupNetwork({ req, userId: user.id, method: strategy });
+          await recordSignupNetwork({ req, userId: user.id, method: strategy, clientId: user.signupClientId });
           await recordSignupLanding({ userId: user.id, redirectTo }, req.logger);
           // After recordSignupNetwork so the datacenter signal sees the stored signup network.
           await refreshSignupRiskScore(user.id, req.logger);

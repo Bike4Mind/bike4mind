@@ -74,6 +74,7 @@ export async function recordSignupNetwork(opts: {
   req: NetworkRequest;
   userId: string;
   method: string;
+  clientId?: string | null;
 }): Promise<void> {
   const meta = readNetworkMeta(opts.req);
   try {
@@ -85,7 +86,13 @@ export async function recordSignupNetwork(opts: {
     warnNotRecorded('signup network metadata', err);
   }
   try {
-    await authEventRepository.record({ ...meta, userId: opts.userId, type: 'signup', method: opts.method });
+    await authEventRepository.record({
+      ...meta,
+      userId: opts.userId,
+      type: 'signup',
+      method: opts.method,
+      ...(opts.clientId ? { clientId: opts.clientId } : {}),
+    });
   } catch (err) {
     warnNotRecorded('signup event', err);
   }

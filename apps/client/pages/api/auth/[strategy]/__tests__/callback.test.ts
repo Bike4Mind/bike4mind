@@ -521,6 +521,18 @@ describe('[strategy]/callback - signup credited to the source product', () => {
     );
   });
 
+  it("passes the new account's stored signupClientId to its signup event, undefined when it has none", async () => {
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true, signupClientId: 'client-1' }, undefined, {
+      cookie: touchCookie,
+    });
+    expect(mockRecordSignupNetwork).toHaveBeenLastCalledWith(
+      expect.objectContaining({ userId: 'u-new', clientId: 'client-1' })
+    );
+
+    await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
+    expect(mockRecordSignupNetwork.mock.calls.at(-1)?.[0].clientId).toBeUndefined();
+  });
+
   it('rescores a new account only after its signup network is stamped', async () => {
     await runCallback(null, { id: 'u-new', isBanned: false, isNewUser: true }, undefined, { cookie: touchCookie });
 
