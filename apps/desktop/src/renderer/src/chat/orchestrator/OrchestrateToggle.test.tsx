@@ -24,6 +24,16 @@ describe('OrchestrateToggle', () => {
     expect(query('chat-surface-toggle')).toBeNull();
   });
 
+  it('offers Agent View with no agents when enabled, and hides it from live agents when not', async () => {
+    await themed.render(<OrchestrateToggle states={[]} enabled surface="chat" onSurfaceChange={onSurfaceChange} />);
+    expect(query('chat-surface-toggle')).not.toBeNull();
+    themed.unmount();
+    await themed.render(
+      <OrchestrateToggle states={['working']} enabled={false} surface="chat" onSurfaceChange={onSurfaceChange} />
+    );
+    expect(query('chat-surface-toggle')).toBeNull();
+  });
+
   it('labels the conversation icon accessibly and shows the Agents label', async () => {
     await renderToggle(['working']);
     expect(el('chat-surface-toggle-chat').getAttribute('aria-label')).toBe('Show conversation');
