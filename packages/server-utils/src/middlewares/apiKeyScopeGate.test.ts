@@ -267,10 +267,13 @@ describe('isLegacyApiKey', () => {
   const after = new Date('2027-01-02T00:00:00Z');
   const midWindow = new Date('2027-02-01T00:00:00Z');
 
-  it('ships with no cutoff and no end date, so every key is legacy until the dates are set', () => {
-    expect(LEGACY_API_KEY_WINDOW).toEqual({ cutoff: null, endsAt: null });
-    expect(isLegacyApiKey(after)).toBe(true);
-    expect(isLegacyApiKey(undefined)).toBe(true);
+  it('ships with a fixed cutoff, so a key minted after it is never legacy', () => {
+    const shipped = LEGACY_API_KEY_WINDOW.cutoff;
+    expect(shipped).toEqual(new Date('2026-11-26T00:00:00.000Z'));
+    expect(isLegacyApiKey(new Date('2026-11-25T23:59:59.000Z'))).toBe(true);
+    expect(isLegacyApiKey(shipped!)).toBe(false);
+    expect(isLegacyApiKey(new Date())).toBe(false);
+    expect(isLegacyApiKey(undefined)).toBe(false);
   });
 
   it('counts only keys created before the cutoff once it is set', () => {
@@ -336,8 +339,11 @@ describe('getApiKeyLegacyStatus', () => {
     expect(getApiKeyLegacyStatus(expired, midWindow, window).legacy).toBe(false);
   });
 
-  it('reports legacy with no end date while the window is unset', () => {
-    expect(getApiKeyLegacyStatus({ ...ACTIVE, createdAt: before })).toEqual({ legacy: true, legacyEndsAt: null });
+  it('reports a pre-cutoff key as legacy with no end date while the end date is unset', () => {
+    expect(getApiKeyLegacyStatus({ ...ACTIVE, createdAt: new Date('2026-01-01T00:00:00Z') })).toEqual({
+      legacy: true,
+      legacyEndsAt: null,
+    });
   });
 
   it('reports no end date while the cutoff is unset, as a replacement key would be legacy too', () => {

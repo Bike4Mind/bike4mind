@@ -394,6 +394,41 @@ describe('rotateUserApiKey - no escalation by rotation', () => {
   });
 });
 
+describe('rotateUserApiKey - no outliving the calling key', () => {
+  beforeEach(() => vi.clearAllMocks());
+  const callerExpiresAt = new Date('2027-01-01T00:00:00Z');
+  const withExpiry = (stored: Record<string, unknown>) => ({
+    ...makeAdapters(stored, [ApiKeyScope.READ_NOTEBOOKS]),
+    callerExpiresAt,
+  });
+
+  it('refuses an expiring caller rotating a key with no expiry', async () => {
+    const adapters = withExpiry(key());
+
+    await expect(rotateUserApiKey('owner-1', { keyId: 'k1' }, adapters as never)).rejects.toThrow(
+      /outlives the calling key/i
+    );
+    expect(adapters.db.userApiKeys.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses an expiring caller rotating a key that expires later', async () => {
+    const adapters = withExpiry(key({ expiresAt: new Date('2027-06-01T00:00:00Z') }));
+
+    await expect(rotateUserApiKey('owner-1', { keyId: 'k1' }, adapters as never)).rejects.toThrow(
+      /outlives the calling key/i
+    );
+    expect(adapters.db.userApiKeys.update).not.toHaveBeenCalled();
+  });
+
+  it('allows an expiring caller rotating a key that expires no later than it', async () => {
+    const adapters = withExpiry(key({ expiresAt: callerExpiresAt }));
+
+    const result = await rotateUserApiKey('owner-1', { keyId: 'k1' }, adapters as never);
+
+    expect(result.key).toMatch(/^b4m_live_/);
+  });
+});
+
 /**
  * An embed:chat key's userId is the embed runtime's identity, not just an owner label:
  * the bound agent's ownership check AND the owner's BYOK LLM keys, tools and KB all
