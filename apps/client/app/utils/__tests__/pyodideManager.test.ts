@@ -651,6 +651,21 @@ describe('function calls', () => {
     await expect(call).resolves.toMatchObject({ success: true });
   });
 
+  it('reads a result of exactly the 5 MB cap on the page in well under a second', async () => {
+    const { pyodideManager, fromSandbox } = await readySandbox();
+    const call = pyodideManager.callFunction('code', [], {});
+    await Promise.resolve();
+    const head = '{"text": "';
+    const valueJson = `${head}${'x'.repeat(5 * 1024 * 1024 - head.length - 2)}"}`;
+
+    const started = performance.now();
+    fromSandbox(callResult({ contractJson: '{}', valueJson }));
+    const result = await call;
+
+    expect(result).toMatchObject({ success: true });
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
   it('refuses an oversized result before parsing it', async () => {
     const { pyodideManager, fromSandbox, FUNCTION_RESULT_TOO_LARGE } = await readySandbox();
     const call = pyodideManager.callFunction('code', [], {});
