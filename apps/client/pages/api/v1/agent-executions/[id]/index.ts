@@ -51,6 +51,7 @@ const handler = nextRouteForContract(getAgentExecutionContract, {
     error: trace.error,
     steps,
     total_iterations: trace.totalIterations,
+    step_progress: trace.stepProgress,
     created_at: trace.createdAt.toISOString(),
     updated_at: trace.updatedAt.toISOString(),
   });

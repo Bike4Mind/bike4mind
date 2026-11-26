@@ -101,6 +101,13 @@ export async function serializeBriefs(
           state: questionStateFor(decision.repliedAt, questionByQuest.get(decision.question.questId)),
         },
       }),
+      ...(decision.followUp && {
+        followUp: {
+          kind: decision.followUp.kind,
+          state: decision.followUp.state,
+          remindAt: decision.followUp.remindAt ? decision.followUp.remindAt.toISOString() : null,
+        },
+      }),
       ...(decision.draftReply && {
         draftReply: {
           to: decision.draftReply.to,

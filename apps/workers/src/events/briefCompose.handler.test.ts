@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   markEmailsBriefed: vi.fn(),
   storedEmailIds: vi.fn(),
   markDelegationsBriefed: vi.fn(),
+  findDueReminders: vi.fn(),
+  markRemindersSurfaced: vi.fn(),
   getOperationsModel: vi.fn(),
   recordUsage: vi.fn(),
   payerCanFund: vi.fn(),
@@ -30,6 +32,8 @@ vi.mock('@bike4mind/database', () => ({
     markReady: mocks.markReady,
     markFailed: mocks.markFailed,
     removeEmailSourcedItems: vi.fn(),
+    findDueReminders: mocks.findDueReminders,
+    markRemindersSurfaced: mocks.markRemindersSurfaced,
   },
   userRepository: { findById: mocks.findUser },
   agentExecutionRepository: { findByUserIdPaginated: mocks.listRuns },
@@ -102,6 +106,7 @@ describe('brief.compose handler', () => {
       { questId: 'q2', sessionId: 's1', ts: 8, tool: 'archive' },
     ]);
     mocks.openQuestions.mockResolvedValue([]);
+    mocks.findDueReminders.mockResolvedValue([]);
     mocks.loadEmails.mockResolvedValue([
       {
         emailId: 'e1',
@@ -127,6 +132,7 @@ describe('brief.compose handler', () => {
       expect.any(Date),
       undefined
     );
+    expect(mocks.findDueReminders).toHaveBeenCalledWith('u1', expect.any(Date), expect.any(Number));
     expect(mocks.recordUsage).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'b1', operation: 'assistant_brief', completionInfo: { outputTokens: 5 } })
     );

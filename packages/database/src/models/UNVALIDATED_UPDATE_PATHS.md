@@ -91,6 +91,7 @@ The table below remains the literal-update inventory, not proof that all databas
 | AdminMorningBrief | `delivery` | enum | `infra/admin/AdminMorningBriefModel.ts#finishDelivery` | route-schema | `apps/workers/src/admin/morningBrief.ts#outcome` | Only caller sets literal union; Slack helper returns sent/unconfigured/failed literals only |
 | AssistantBrief | `status` | enum | `content/AssistantBriefModel.ts#markFailed` | schema | `runValidators` | update call passes runValidators |
 | AssistantBrief | `status` | enum | `content/AssistantBriefModel.ts#markReady` | schema | `runValidators` | update call passes runValidators |
+| AssistantBrief | `decisions.followUp.state` | enum | `content/AssistantBriefModel.ts#resolveFollowUpDecision` | schema | `runValidators` | update call passes runValidators |
 | AdminMorningBrief | `delivery` | enum | `infra/admin/AdminMorningBriefModel.ts#saveOnce` | repository-check | `literal` | writes "ready" |
 | Agent | `memoryJournal.content` | maxlength | `ai/AgentModel.ts#AgentRepository.appendMemory` | repository-check | `packages/database/src/models/ai/AgentModel.ts#clampMemoryContent` | Writer slices content to the schema maxlength before the $push; tavern-conversation.ts appends LLM-extracted content via String(item.content) |
 | Agent | `memoryJournal.importance` | min,max | `ai/AgentModel.ts#AgentRepository.appendMemory` | route-schema | `b4m-core/services/src/agentMemoryService/index.ts#clampImportance` | Sole caller's entries come from extractMemoriesFromConversation, clamped to 1-5 |

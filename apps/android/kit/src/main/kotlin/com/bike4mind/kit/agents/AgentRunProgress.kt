@@ -19,8 +19,10 @@ enum class AgentRunPhase {
 data class AgentRunProgress(
     val phase: AgentRunPhase,
     val stageLabel: String? = null,
-    /** ReAct iterations so far. The server sends no total, so this is how far along, not a fraction. */
+    /** ReAct iterations so far: a count, not a fraction, since iterations have no total. */
     val iterations: Int? = null,
+    /** Present only when the server knows the run's step total; draw determinate progress from this alone. */
+    val steps: StepProgress? = null,
 ) {
     companion object {
         const val STARTING_LABEL = "Starting agent"
@@ -36,7 +38,11 @@ data class AgentRunProgress(
          */
         fun from(run: AgentRunStatus): AgentRunProgress {
             val iterations = run.iterations?.takeIf { it > 0 }
-            return when (run.state) {
+            return phaseAndLabel(run, iterations).copy(steps = run.stepProgress)
+        }
+
+        private fun phaseAndLabel(run: AgentRunStatus, iterations: Int?): AgentRunProgress =
+            when (run.state) {
                 AgentRunStatus.State.COMPLETED -> AgentRunProgress(AgentRunPhase.COMPLETED, iterations = iterations)
                 AgentRunStatus.State.FAILED -> AgentRunProgress(AgentRunPhase.FAILED, stageLabel(run.error), iterations)
                 AgentRunStatus.State.ABORTED -> AgentRunProgress(AgentRunPhase.STOPPED, iterations = iterations)
@@ -49,7 +55,6 @@ data class AgentRunProgress(
                 AgentRunStatus.State.AWAITING_DAG_CHILDREN,
                 -> AgentRunProgress(AgentRunPhase.RUNNING, stageLabel(run.steps), iterations)
             }
-        }
 
         /** "Using <tool>" while a tool runs, "Finished <tool>" once its observation arrives. */
         private fun stageLabel(steps: List<AgentRunStatus.Step>): String? {

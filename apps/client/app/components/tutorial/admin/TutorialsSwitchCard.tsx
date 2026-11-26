@@ -1,5 +1,6 @@
 import { FC } from 'react';
-import { Box, Card, CircularProgress, Switch, Typography } from '@mui/joy';
+import { Box, Card, Switch, Typography } from '@mui/joy';
+import { ErrorState, LoadingState } from '@client/app/components/admin/shared';
 import { useSetTutorialsSwitch, useTutorialsSwitch } from '@client/app/hooks/tutorials/useTutorialsSwitch';
 
 export const DEFAULT_SWITCH_TITLE = 'Guided tutorials';
@@ -31,23 +32,22 @@ const TutorialsSwitchCard: FC<Props> = ({
             {description}
           </Typography>
         </Box>
-        {current.isLoading ? (
-          <CircularProgress size="sm" />
-        ) : (
-          <Switch
-            checked={enabled}
-            disabled={current.isError || save.isPending}
-            onChange={event => save.mutate(event.target.checked)}
-            slotProps={{
-              input: { 'aria-label': title, 'data-testid': 'tutorials-switch' } as Record<string, unknown>,
-            }}
-          />
-        )}
+        <Switch
+          checked={enabled}
+          disabled={current.isLoading || current.isError || save.isPending}
+          onChange={event => save.mutate(event.target.checked)}
+          slotProps={{
+            input: { 'aria-label': title, 'data-testid': 'tutorials-switch' } as Record<string, unknown>,
+          }}
+        />
       </Box>
+      {current.isLoading && <LoadingState label="Loading the tutorials switch" />}
       {current.isError && (
-        <Typography level="body-sm" color="danger">
-          Could not read the tutorials switch.
-        </Typography>
+        <ErrorState
+          message="Could not read the tutorials switch."
+          onRetry={() => void current.refetch()}
+          retrying={current.isFetching}
+        />
       )}
     </Card>
   );

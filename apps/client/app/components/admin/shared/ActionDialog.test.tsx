@@ -64,6 +64,13 @@ describe('ActionDialog', () => {
     expect(confirm).toBeEnabled();
   });
 
+  it('matches the typed value on the whitespace the inline code shows', () => {
+    const confirm = openDialog({ reasonRequired: false, typedConfirm: { expected: 'Fall  release', noun: 'title' } });
+    expect(screen.getByTestId('adjust-dialog-typed-expected')).toHaveTextContent(/^Fall release$/);
+    fireEvent.change(screen.getByTestId('adjust-dialog-typed-input'), { target: { value: 'Fall release' } });
+    expect(confirm).toBeEnabled();
+  });
+
   it('seeds a complete, editable reason from initialReason', async () => {
     const onConfirm = vi.fn();
     expect(isAdminReasonComplete(ACCEPTED_AI_REASON)).toBe(true);
