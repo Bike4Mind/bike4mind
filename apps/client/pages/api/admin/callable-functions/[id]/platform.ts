@@ -9,7 +9,8 @@ import { recordAdminActionFromRequest, userAuditTarget } from '@bike4mind/server
  * The `platform` trust label on any person's callable function.
  *   POST   -> mark it, only while it is live and `verified`; records the admin on the function and in the audit log.
  *   DELETE -> remove the mark.
- * A promotion or examples edit that leaves the function `unverified` drops the mark too (CallableFunctionModel).
+ * A code, data, or source edit that returns the function to draft, and a promotion or examples edit that leaves it
+ * `unverified`, drop the mark too (CallableFunctionModel).
  */
 
 const ReasonSchema = z.object({ reason: z.string().max(1000).optional() });

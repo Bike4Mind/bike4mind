@@ -130,7 +130,9 @@ describe('PythonFunctionPanel', () => {
     // Each numeric input carries its unit beside it.
     const spanControl = screen.getByTestId('python-function-input-span').parentElement as HTMLElement;
     expect(within(spanControl).getByText('m')).toBeTruthy();
-    expect(screen.getByText('Calls run in your browser. Call results are not saved.')).toBeTruthy();
+    expect(
+      screen.getByText('Calls run in your browser. They are not saved and do not appear in the call log.')
+    ).toBeTruthy();
   });
 
   it('lists contract problems and offers no call button', async () => {

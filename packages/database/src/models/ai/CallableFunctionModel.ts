@@ -449,7 +449,7 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
           description: update.description,
           state: 'draft',
         },
-        $unset: { 'pin.seq': 1, 'pin.runtime': 1, trustLabel: 1, lastServerRun: 1, caseResults: 1 },
+        $unset: { 'pin.seq': 1, 'pin.runtime': 1, trustLabel: 1, platform: 1, lastServerRun: 1, caseResults: 1 },
       },
       { new: true, runValidators: true }
     );
@@ -614,7 +614,7 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
       { _id: id, ...ownerFilter(owner), updatedAt: expected.updatedAt },
       {
         $set: { 'pin.dataPins': dataPins, state: 'draft' },
-        $unset: { 'pin.seq': 1, 'pin.runtime': 1, trustLabel: 1, lastServerRun: 1, caseResults: 1 },
+        $unset: { 'pin.seq': 1, 'pin.runtime': 1, trustLabel: 1, platform: 1, lastServerRun: 1, caseResults: 1 },
       },
       { new: true, runValidators: true }
     );
@@ -637,6 +637,7 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
           'pin.seq': 1,
           'pin.runtime': 1,
           trustLabel: 1,
+          platform: 1,
           lastServerRun: 1,
           caseResults: 1,
         },

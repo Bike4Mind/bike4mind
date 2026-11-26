@@ -450,6 +450,48 @@ describe('CallableFunctionModel', () => {
       expect(edited?.trustLabel).toBe('unverified');
       expect(edited?.platform).toBeUndefined();
     });
+
+    it('is dropped by a code, data, or source edit, and a verified re-promotion does not bring it back', async () => {
+      const created = await callableFunctionRepository.create(fn());
+      const live = await promoteAs(created, 'verified');
+      await callableFunctionRepository.setPlatformMark(created.id, mark);
+      const repinned = await callableFunctionRepository.repin(created.id, OWNER, 1, {
+        pin: {
+          artifactId: 'artifact-1',
+          version: 2,
+          contentHash: calculateContentHash(`${SOURCE}# v2\n`),
+          source: `${SOURCE}# v2\n`,
+          pinnedAt: new Date(),
+        },
+        contract: live.contract,
+        description: live.description,
+      });
+      expect(repinned?.state).toBe('draft');
+      expect(repinned?.platform).toBeUndefined();
+      const relive = await promoteAs(repinned!, 'verified', 2);
+      expect(relive.platform).toBeUndefined();
+
+      const remarked = (await callableFunctionRepository.setPlatformMark(created.id, mark))!;
+      const pinned = await callableFunctionRepository.setDataPins(
+        created.id,
+        OWNER,
+        { updatedAt: remarked.updatedAt },
+        [DATA_PIN]
+      );
+      expect(pinned?.platform).toBeUndefined();
+
+      await promoteAs(pinned!, 'verified', 3);
+      const marked = (await callableFunctionRepository.setPlatformMark(created.id, mark))!;
+      expect(marked.platform).toEqual(mark);
+      const resourced = await callableFunctionRepository.setSources(
+        created.id,
+        OWNER,
+        { updatedAt: marked.updatedAt },
+        [{ name: 'base.csv', url: 'https://data.example.com/base.csv', mode: 'pinned' }]
+      );
+      expect(resourced?.state).toBe('draft');
+      expect(resourced?.platform).toBeUndefined();
+    });
   });
 
   describe('setDataPins', () => {

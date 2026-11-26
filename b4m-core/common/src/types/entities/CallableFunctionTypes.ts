@@ -261,7 +261,10 @@ export interface ICallableFunction {
   contract: FunctionContract;
   examples?: CallableFunctionExample[];
   trustLabel?: CallableFunctionPromotionTrustLabel;
-  /** Set and cleared only through the admin route; a promotion or examples edit that unverifies drops it. */
+  /**
+   * Set and cleared only through the admin route. Any write that returns the function to draft or leaves it
+   * `unverified` drops it, so a re-promotion never brings it back.
+   */
   platform?: CallableFunctionPlatformMark;
   lastServerRun?: CallableFunctionServerRun;
   promoted?: CallableFunctionPromotion;
