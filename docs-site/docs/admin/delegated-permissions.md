@@ -62,8 +62,10 @@ As a credit delegate, you cannot change your own account, an account with admin 
 When a full administrator adds credits to their own account, or to an organization they own, administer, bill for, or have joined, the grant waits for another admin to approve it under **Approvals**. This applies to credit adjustments, subscription grants, organization grants, and top-ups, whether or not approvals are turned on and whatever the approval threshold. You see "Submitted for approval" instead of a new balance.
 
 - Only an admin who holds `credits:approve_self_grant` can approve it. They do not need to be a Super Admin, and a Super Admin without the permission cannot approve. To see the **Approvals** tab they also need `support:read`. You cannot approve your own request.
+- Super Admins do not hold `credits:approve_self_grant` by default, so they see held self-grant requests redacted and cannot approve or reject them. If no admin holds it, a request waits until it expires.
 - An adjustment held for approval must be sent on its own. Make any other profile change separately.
 - On an organization profile, editing the balance up for an organization you belong to is refused. Use **Top up** instead, so the grant can be approved.
+- On a subscription of an organization you belong to, raising or clearing the per-cycle credit override is refused. Only lowering an existing override is allowed.
 - Removing credits from your own account does not need approval.
 - An admin who holds `credits:self_grant` skips the approval. Super Admin does not include this permission: it must be granted to each admin who needs it.
 - Only an admin who holds `credits:self_grant` or `credits:approve_self_grant` can grant or revoke that permission, directly or through a role. A Super Admin who does not hold it cannot hand it out.
@@ -75,6 +77,8 @@ pnpm db:grant-explicit-admin-permission <email> credits:approve_self_grant
 ```
 
 The script writes no audit entry, so use it only for the first holders and grant the rest from the admin console.
+
+A holder can grant `credits:approve_self_grant` to another account they control, which could then approve their requests, so grant it only to people you trust as a second check.
 
 Every grant to your own account, approved or exempt, is recorded in the audit log and flagged as a self-grant.
 
