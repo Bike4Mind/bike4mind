@@ -9,7 +9,7 @@ tags: [admin, permissions, security]
 
 A delegated admin holds one or more named permissions instead of full admin access. API routes check the permission declared for each HTTP method. Console access is separate: a delegated admin can enter only when a tab supports one of their permissions, and sees only those tabs. See [Console tabs](#console-tabs) for the current list.
 
-Full administrators (the legacy `isAdmin` flag) have every permission implicitly. Account-action safeguards still apply, including the role-change rules below.
+Full administrators (the legacy `isAdmin` flag) have every permission implicitly except `credits:self_grant`. Account-action safeguards still apply, including the role-change rules below.
 
 ## Permissions
 
@@ -114,7 +114,7 @@ To change full admin access, open the user's profile and choose **More > Change 
 
 A full administrator is a user whose `isAdmin` flag is set. This is the legacy admin model. A full admin:
 
-- Has every permission implicitly without being listed in `adminPermissions`.
+- Has every permission except `credits:self_grant` implicitly, without it being listed in `adminPermissions`.
 - Can act on other admins, subject to each action's safeguards.
 - Can grant or revoke another user's full-admin flag, subject to role-change safeguards.
 
