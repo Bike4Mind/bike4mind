@@ -19,11 +19,15 @@ vi.mock('@bike4mind/server-utils/utils/errors', () => ({
 }));
 vi.mock('./tokenGenerator', () => ({ authTokenGenerator: { signAccessToken: vi.fn() } }));
 vi.mock('./sessionDevice', () => ({ buildSessionDevice: () => ({ label: 'test' }) }));
-vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({ setRefreshCookie: vi.fn() }));
+const setRefreshCookie = vi.fn();
+vi.mock('@bike4mind/server-utils/auth/refreshCookie', () => ({
+  setRefreshCookie: (...args: unknown[]) => setRefreshCookie(...args),
+}));
 const recordLoginEvent = vi.fn();
 vi.mock('./networkMeta', () => ({ recordLoginEvent: (...args: unknown[]) => recordLoginEvent(...args) }));
 
-import { issueSessionForRequest } from './issueSession';
+import { issueBrowserSession, issueSessionForRequest } from './issueSession';
+import { authTokenGenerator } from './tokenGenerator';
 
 const req = { headers: {} };
 
@@ -40,6 +44,59 @@ describe('issueSessionForRequest', () => {
     await issueSessionForRequest(req, 'u1', { createdVia: 'oauth-token', tokenVersion: 0, clientId: 'c1' });
     expect(issueSession).toHaveBeenCalledWith('u1', expect.objectContaining({ clientId: 'c1' }), expect.anything());
     expect(guardedWrite).toHaveBeenCalledWith('u1', expect.any(Function));
+  });
+
+  describe('alsoWithinGuard', () => {
+    it('runs inside the purge guard after the session is issued', async () => {
+      const order: string[] = [];
+      issueSession.mockImplementation(async () => {
+        order.push('issue');
+        return { accessToken: 'a', refreshToken: 'r', sid: 's' };
+      });
+      guardedWrite.mockImplementationOnce(async (_id, write) => {
+        order.push('guard-start');
+        const out = await write();
+        order.push('guard-end');
+        return out;
+      });
+      const hook = vi.fn(async () => {
+        order.push('hook');
+      });
+
+      const out = await issueSessionForRequest(req, 'u1', {
+        createdVia: 'oauth-token',
+        tokenVersion: 0,
+        alsoWithinGuard: hook,
+      });
+
+      expect(order).toEqual(['guard-start', 'issue', 'hook', 'guard-end']);
+      expect(out).toEqual({ accessToken: 'a', refreshToken: 'r', sid: 's' });
+    });
+
+    it('is a no-op when omitted', async () => {
+      const out = await issueSessionForRequest(req, 'u1', { createdVia: 'oauth-token', tokenVersion: 0 });
+      expect(out.sid).toBe('s');
+    });
+
+    it('is blocked together with the session when the guard refuses', async () => {
+      guardedWrite.mockRejectedValueOnce(new Error('purging'));
+      const hook = vi.fn();
+
+      await expect(
+        issueSessionForRequest(req, 'u1', { createdVia: 'oauth-token', tokenVersion: 0, alsoWithinGuard: hook })
+      ).rejects.toThrow('purging');
+
+      expect(issueSession).not.toHaveBeenCalled();
+      expect(hook).not.toHaveBeenCalled();
+    });
+
+    it('propagates a hook failure so the session is not returned', async () => {
+      const hook = vi.fn().mockRejectedValue(new Error('write failed'));
+      await expect(
+        issueSessionForRequest(req, 'u1', { createdVia: 'oauth-token', tokenVersion: 0, alsoWithinGuard: hook })
+      ).rejects.toThrow('write failed');
+      expect(recordLoginEvent).not.toHaveBeenCalled();
+    });
   });
 
   it('leaves clientId unset when the caller passes none', async () => {
@@ -59,6 +116,26 @@ describe('issueSessionForRequest', () => {
       expect(recordLoginEvent).not.toHaveBeenCalled();
     }
   );
+
+  it('binds the access-token signer to the shared generator', async () => {
+    issueSession.mockImplementation(async (_id, _params, deps) => {
+      deps.signAccessToken('u1', 2, { kind: 'oauth' });
+      return { accessToken: 'a', refreshToken: 'r', sid: 's' };
+    });
+
+    await issueSessionForRequest(req, 'u1', { createdVia: 'device', tokenVersion: 0 });
+
+    expect(authTokenGenerator.signAccessToken).toHaveBeenCalledWith('u1', 2, { kind: 'oauth' });
+  });
+
+  it('issueBrowserSession puts the refresh token in the cookie and returns only the access token', async () => {
+    const res = {} as never;
+
+    const out = await issueBrowserSession(req, res, 'u1', { createdVia: 'otc', tokenVersion: 0 });
+
+    expect(setRefreshCookie).toHaveBeenCalledWith(res, 'r');
+    expect(out).toEqual({ accessToken: 'a', sid: 's' });
+  });
 
   describe('test personas', () => {
     const future = () => new Date(Date.now() + 60_000);

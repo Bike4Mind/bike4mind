@@ -64,11 +64,13 @@ export async function issueSessionForRequest(
     clientId?: string | null;
     device?: IAuthSessionDevice;
     refreshTtlMs?: number;
+    // Runs in the session's purge-guard transaction, so a purge blocks both and no extra user write is needed.
+    alsoWithinGuard?: () => Promise<unknown>;
   }
 ): Promise<{ accessToken: string; refreshToken: string; sid: string }> {
   await assertPersonaSessionAllowed(userId, params.createdVia);
-  const session = await withAccountNotPurging(userId, () =>
-    authSessionService.issueSession(
+  const session = await withAccountNotPurging(userId, async () => {
+    const issued = await authSessionService.issueSession(
       userId,
       {
         createdVia: params.createdVia,
@@ -84,8 +86,10 @@ export async function issueSessionForRequest(
         signAccessToken: (id, tv, extra) => authTokenGenerator.signAccessToken(id, tv, extra),
         logger: req.logger,
       }
-    )
-  );
+    );
+    await params.alsoWithinGuard?.();
+    return issued;
+  });
   if (!NOT_A_LOGIN.has(params.createdVia)) {
     await recordLoginEvent({ req, userId, method: params.createdVia });
   }
