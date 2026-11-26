@@ -159,7 +159,8 @@ describe('needsYou', () => {
           seedPrompt: 'seed child',
         },
       ]).get('child');
-      expect(persona?.label).toMatch(/ the Warden$/);
+      expect(persona?.epithet).toBe('Warden');
+      expect(persona?.label).toBe(persona?.name);
       expect(needsYouTitle(sessions, 'child', 'root')).toBe(`${persona?.label} needs you`);
       expect(needsYouTitle(sessions, 'root', 'root')).toBe('Audit needs you');
     });
