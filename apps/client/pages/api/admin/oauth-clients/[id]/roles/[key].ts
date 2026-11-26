@@ -7,6 +7,7 @@ import { ApiKeyScope } from '@bike4mind/common';
 /** DELETE removes a role from the client and every assignment of it ({ reason }). */
 const handler = adminApi({
   adminPermissions: { DELETE: 'settings:manage' },
+  auth: 'jwtOnly',
   requiredScopes: [ApiKeyScope.ADMIN],
 }).delete(async (req, res) => {
   const { id, key } = req.query;

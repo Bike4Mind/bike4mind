@@ -7,6 +7,7 @@ import { ApiKeyScope, oauthClientRoleSchema } from '@bike4mind/common';
 /** GET lists the roles a client offers and who holds each; POST adds a role ({ key, label, reason }). */
 const handler = adminApi({
   adminPermissions: { GET: ['support:read', 'settings:manage'], POST: 'settings:manage' },
+  auth: 'jwtOnly',
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(async (req, res) => {
