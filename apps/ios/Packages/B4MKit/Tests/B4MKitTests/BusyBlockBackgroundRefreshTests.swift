@@ -35,6 +35,20 @@ private final class FakeTask: BackgroundRefreshTask {
   }
 }
 
+/// Holds a fake sync open until `open()`, ignoring cancellation like a sync joined from another caller.
+@MainActor
+private final class SyncGate {
+  private var continuation: CheckedContinuation<Void, Never>?
+  var isWaiting: Bool { continuation != nil }
+
+  func wait() async { await withCheckedContinuation { continuation = $0 } }
+
+  func open() {
+    continuation?.resume()
+    continuation = nil
+  }
+}
+
 private struct SubmitRefused: Error {}
 
 @MainActor
@@ -175,6 +189,47 @@ final class BusyBlockBackgroundRefreshTests: XCTestCase {
     XCTAssertEqual(task.completions, [false])
     XCTAssertEqual(scheduler.submits.count, 1)
     XCTAssertNil(task.expirationHandler)
+  }
+
+  func testExpirationCompletesOnceWhenTheSyncIgnoresCancelAndFinishesLater() async {
+    let scheduler = FakeScheduler()
+    let task = FakeTask()
+    let gate = SyncGate()
+    let refresh = refresh(scheduler) {
+      await gate.wait()
+      return .synced
+    }
+    let completed = expectation(description: "completed")
+    task.onComplete = { completed.fulfill() }
+
+    refresh.handle(task)
+    for _ in 0..<10_000 where !gate.isWaiting { await Task.yield() }
+    XCTAssertTrue(gate.isWaiting)
+    task.expirationHandler?()
+    await fulfillment(of: [completed], timeout: 2)
+    gate.open()
+    for _ in 0..<10 { await Task.yield() }
+
+    XCTAssertEqual(task.completions, [false])
+    XCTAssertEqual(scheduler.submits.count, 1)
+  }
+
+  func testExpirationAfterCompletionDoesNothing() async {
+    let scheduler = FakeScheduler()
+    let task = FakeTask()
+    let refresh = refresh(scheduler) { .synced }
+    let expire = { () -> (@Sendable () -> Void)? in
+      refresh.handle(task)
+      return task.expirationHandler
+    }()
+
+    for _ in 0..<10_000 where task.completions.isEmpty { await Task.yield() }
+    for _ in 0..<10 { await Task.yield() }
+    expire?()
+    for _ in 0..<10 { await Task.yield() }
+
+    XCTAssertEqual(task.completions, [true])
+    XCTAssertEqual(scheduler.submits.count, 1)
   }
 
   func testDelayPerOutcome() {
