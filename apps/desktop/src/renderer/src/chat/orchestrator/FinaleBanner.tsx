@@ -23,6 +23,7 @@ const SERIF = 'Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", 
 const MONO = 'ui-monospace, Menlo, Consolas, monospace';
 
 export type FinaleLook = 'tavern' | 'office';
+export type FinalePortrait = { idle: string; cheering: string };
 
 interface Look {
   ink: string;
@@ -129,7 +130,7 @@ function StatChip({
  * The finale card, muted when not every agent finished done. `scene` pins it over the top of the scene art;
  * `inline` sets it in the flow above a Board or Table so it never covers their rows. `spend` is the run's
  * settled total from the server; until it arrives, or when there is none, the card shows the local estimate.
- * `look` dresses it for the scene it sits on.
+ * `look` dresses it for the scene it sits on; `portrait` is that scene's host, the Innkeeper by default.
  */
 export function FinaleBanner({
   agents,
@@ -137,6 +138,7 @@ export function FinaleBanner({
   onDismiss,
   placement = 'scene',
   look: lookId = 'tavern',
+  portrait = INNKEEPER_ART,
   spend,
 }: {
   agents: readonly AgentView[];
@@ -145,6 +147,7 @@ export function FinaleBanner({
   onDismiss(): void;
   placement?: 'scene' | 'inline';
   look?: FinaleLook;
+  portrait?: FinalePortrait;
 }) {
   const look = LOOKS[lookId];
   const stats = finaleStats(agents);
@@ -218,7 +221,7 @@ export function FinaleBanner({
       ) : (
         <Box
           component="img"
-          src={succeeded ? INNKEEPER_ART.cheering : INNKEEPER_ART.idle}
+          src={succeeded ? portrait.cheering : portrait.idle}
           alt=""
           draggable={false}
           sx={{

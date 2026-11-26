@@ -343,6 +343,7 @@ export function OrchestratorStage({
       spend={presenting ? undefined : spend}
       placement={bannerInScene ? 'scene' : 'inline'}
       look={sceneInfo?.finale}
+      portrait={sceneInfo?.portrait}
       onRead={() => {
         finale.dismiss();
         onReadReport?.(report.id);

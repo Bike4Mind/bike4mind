@@ -37,9 +37,10 @@ import type { AgentDetailsSkin } from './AgentPeekDrawer';
 import { SkinMenuSection } from './SkinMenuSection';
 import { SoundPackMenuSection } from './SoundPackMenuSection';
 import { PaneSessionMenu, type PaneSessionChoices } from './PaneSessionMenu';
-import type { FinaleLook } from './FinaleBanner';
+import type { FinaleLook, FinalePortrait } from './FinaleBanner';
 import type { SceneDefinition } from './scene/sceneDefinition';
 import { TAVERN_SCENE } from './tavern/tavernScene';
+import { AQUARIUM_SCENE } from './aquarium/aquariumScene';
 
 type ViewGroup = 'scene' | 'layout';
 
@@ -50,6 +51,8 @@ export interface SceneStageInfo {
   /** Answers every agent request in its own dialogue box, so the stage and composer leave theirs out. */
   inSceneDecisions: boolean;
   finale: FinaleLook;
+  /** The host's art for the finale card, where the look draws one. */
+  portrait?: FinalePortrait;
   /** The scene's lines for the settled Needs-you card, the quiet header, the talk button and the empty stage. */
   copy: { host: string; quiet: string; talk: string; empty: string };
 }
@@ -59,6 +62,7 @@ const frameworkScene = (scene: SceneDefinition): SceneStageInfo => ({
   host: true,
   inSceneDecisions: true,
   finale: scene.look.finale,
+  portrait: scene.cast.host.sprites,
   copy: scene.copy.stage,
 });
 
@@ -100,8 +104,7 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
       light: { background: '#e7eff0', border: '#a9bec3' },
       dark: { background: '#1d2c31', border: '#49616a' },
     },
-    // Not on the scene framework yet: no host character or dialogue box, and the Tavern's lines.
-    scene: { host: false, inSceneDecisions: false, finale: 'tavern', copy: TAVERN_STAGE_COPY },
+    scene: frameworkScene(AQUARIUM_SCENE),
   },
   office: {
     label: 'Office',

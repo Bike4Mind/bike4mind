@@ -7,10 +7,10 @@ import { singlePaneLayout } from './orchestratorLayout';
 import type { AgentView } from './roster';
 import { sceneView } from './scene/SceneStage';
 import { TAVERN_SCENE } from './tavern/tavernScene';
+import { AQUARIUM_SCENE } from './aquarium/aquariumScene';
 
 const TavernView = sceneView(TAVERN_SCENE);
-import { Aquarium } from './aquarium/Aquarium';
-import { snapshotView } from './snapshotView';
+const AquariumView = sceneView(AQUARIUM_SCENE);
 import { agentFixture, createThemedMount, el, query, typeInto } from './testUtils';
 
 const FIXTURE = [
@@ -145,7 +145,7 @@ describe('OrchestratorStage', () => {
   });
 
   // Office shares the Tavern's parentScene branch.
-  it.each(['tavern', 'aquarium'] as const)(
+  it.each(['tavern', 'aquarium', 'board'] as const)(
     'keeps the %s parent scene action distinct from attention focus',
     async view => {
       const onParentFocus = vi.fn();
@@ -163,8 +163,8 @@ describe('OrchestratorStage', () => {
         />
       );
       await act(async () => el('scene-parent-action').click());
-      expect(onParentToggle).toHaveBeenCalledTimes(view !== 'aquarium' ? 1 : 0);
-      expect(onParentFocus).toHaveBeenCalledTimes(view === 'aquarium' ? 1 : 0);
+      expect(onParentToggle).toHaveBeenCalledTimes(view !== 'board' ? 1 : 0);
+      expect(onParentFocus).toHaveBeenCalledTimes(view === 'board' ? 1 : 0);
     }
   );
 
@@ -286,8 +286,7 @@ describe('OrchestratorStage', () => {
     expect(query('orchestrator-peek-drawer')).toBeNull();
   });
 
-  it('opens compact details inside the Aquarium through its snapshot host', async () => {
-    const AquariumView = snapshotView(Aquarium, { displayName: 'Aquarium' });
+  it('opens compact details inside the Aquarium artwork', async () => {
     await themed.render(
       <OrchestratorStage
         agents={FIXTURE}
@@ -299,7 +298,7 @@ describe('OrchestratorStage', () => {
       />
     );
     const tank = el('orchestrator-aquarium');
-    await act(async () => el('orchestrator-fish-w1').click());
+    await act(async () => el('orchestrator-aquarium-agent-w1').click());
     expect(el('orchestrator-peek-drawer-region').parentElement).toBe(tank);
     expect(el('orchestrator-aquarium')).toBe(tank);
     expect(el('orchestrator-peek-actions').parentElement).toBe(el('orchestrator-peek-action-row'));

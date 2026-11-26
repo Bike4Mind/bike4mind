@@ -539,7 +539,7 @@ describe('orchestrate mode in the chat shell', () => {
       expect(query('orchestrator-dock-resize-handle')).toBeNull();
       const scene = el('orchestrator-aquarium');
       expect(getComputedStyle(scene).getPropertyValue('anchor-name')).toBe('--orchestrator-scene');
-      const agent = el(`orchestrator-fish-${CHILD.id}`);
+      const agent = el(`orchestrator-aquarium-agent-${CHILD.id}`);
       await act(async () => agent.click());
       expect(el('orchestrator-stage').getAttribute('data-agent-details-open')).toBe('true');
       await act(async () => el('orchestrator-dock-toggle-btn').click());
