@@ -232,6 +232,7 @@ function decideByLinkRule(input: InterventionInput, rule: LinkRuleDecision): Int
   const named = new Set(detection.userIds);
   if (named.size === 0) return skip('no_accounts');
   if (named.size > config.maxAccountsPerDetection) return skip('too_many_accounts');
+  // Rule ids come from facts loaded for detection.userIds, so the named filter is defensive; empty here means rollout excluded every account.
   const userIds = rule.userIds.filter(id => named.has(id) && rolloutBucket(id) < tierConfig.rolloutPercent);
   if (userIds.length === 0) return skip('not_in_rollout');
 
