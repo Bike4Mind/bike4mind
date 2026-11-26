@@ -207,6 +207,7 @@ export * from './utils/signedImageUrl';
 export * from './utils/sanitizeTelemetryError';
 export * from './utils/sessionRedaction';
 export * from './utils/promptMetaRedaction';
+export * from './utils/agentStepRedaction';
 export * from './utils/promptMetaSessionBinding';
 export * from './utils/toolPayloads';
 export * from './utils/triggerWord';
