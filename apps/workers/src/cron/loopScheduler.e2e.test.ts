@@ -149,8 +149,20 @@ describe('runLoopSchedulerTick', () => {
     });
     const after = await reload(due.id);
     expect(after).toMatchObject({ lastExecutionId: 'exec-1', activeExecutionIds: ['exec-1'] });
-    expect(after.nextRunAt).toEqual(new Date(NOW.getTime() + 15 * 60_000));
+    // One interval after it was due (PAST), not after the tick.
+    expect(after.nextRunAt).toEqual(new Date(PAST.getTime() + 15 * 60_000));
     expect(after.leaseUntil).toBeUndefined();
+  });
+
+  it('schedules the next run from when it was due, or from now once a run is an interval late', async () => {
+    const onTime = await createLoop({ nextRunAt: new Date(NOW.getTime() - 40_000) });
+    await runLoopSchedulerTick(NOW, logger);
+    expect((await reload(onTime.id)).nextRunAt).toEqual(new Date(NOW.getTime() - 40_000 + 15 * 60_000));
+
+    await mongoose.connection.dropDatabase();
+    const late = await createLoop({ nextRunAt: new Date(NOW.getTime() - 20 * 60_000) });
+    await runLoopSchedulerTick(NOW, logger);
+    expect((await reload(late.id)).nextRunAt).toEqual(new Date(NOW.getTime() + 15 * 60_000));
   });
 
   it('claims and dispatches nothing when EnableLoops is off', async () => {

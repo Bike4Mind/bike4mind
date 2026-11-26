@@ -1245,6 +1245,17 @@ async function dispatchTriage(
   return settleDispatch(loop, null, result, now, logger, more);
 }
 
+/**
+ * One interval after the run was due rather than after this tick, so tick jitter does not push an on-time loop a
+ * whole tick late every other run. A run more than an interval late counts from now instead.
+ */
+function nextScheduledRunAt(loop: ILoop, now: Date): Date | null {
+  const fromNow = nextIntervalRunAt(loop, now);
+  if (!fromNow || !loop.nextRunAt || new Date(loop.nextRunAt) > now) return fromNow;
+  const fromDue = nextIntervalRunAt(loop, new Date(loop.nextRunAt))!;
+  return fromDue > now ? fromDue : fromNow;
+}
+
 /** Puts the created run on the loop under its claim before the executor is invoked; refuses it if the claim lapsed. */
 function recordPendingRun(loop: ILoop): ((executionId: string) => Promise<boolean>) | undefined {
   const lease = loop.leaseUntil;
@@ -1295,7 +1306,7 @@ async function settleDispatch(
       loop,
       ticket,
       result.executionId,
-      more && free ? now : nextIntervalRunAt(loop, now),
+      more && free ? now : nextScheduledRunAt(loop, now),
       more && !free && loopMaxConcurrent(loop) > 1 ? now : undefined,
       logger
     );
