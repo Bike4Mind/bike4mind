@@ -18,21 +18,18 @@ test.describe('Admin - Tutorials tab', () => {
     const modules = page.getByTestId('tutorial-modules-card');
     await expect(modules).toBeVisible();
     await expect(
-      modules.getByTestId('tutorial-modules-empty').or(modules.locator('[data-testid^="tutorial-module-row-"]').first())
+      modules.getByTestId('admin-empty-state').or(modules.locator('[data-testid^="tutorial-module-row-"]').first())
     ).toBeVisible();
 
     const drafts = page.getByTestId('tutorial-drafts-card');
     await expect(drafts).toBeVisible();
     await expect(drafts.getByTestId('tutorial-capture-submit')).toBeVisible();
-    // The list is an empty Stack with no height while no draft exists, so Playwright reports it
-    // hidden: attached is the right bar for "the drafts read finished without an error".
-    await expect(
-      drafts.getByTestId('tutorial-drafts-list').or(drafts.getByTestId('tutorial-drafts-error'))
-    ).toBeAttached();
-    await expect(drafts.getByTestId('tutorial-drafts-error')).toHaveCount(0);
+    await expect(drafts.getByTestId('tutorial-drafts-list').or(drafts.getByTestId('admin-empty-state'))).toBeVisible();
+    await expect(drafts.getByTestId('admin-error-state')).toHaveCount(0);
 
     const toggle = page.getByTestId('tutorials-switch');
     await expect(toggle).toBeAttached();
+    await expect(page.getByTestId('tutorials-switch-card').getByTestId('admin-loading-state')).toHaveCount(0);
     if (await toggle.isDisabled()) return;
     const before = await toggle.isChecked();
     try {

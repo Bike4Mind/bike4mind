@@ -18,6 +18,7 @@ import { AdminDialog, AdminDialogFooter } from '@client/app/components/admin/sha
 
 import { useGeneratePrReport, useSendPrReport, type GenerateReportResult } from '@client/app/hooks/data/prReport';
 import { PrReportPreview } from './PrReportPreview';
+import { randomUuid } from '@bike4mind/common';
 
 /**
  * PR report generator - the two-phase dialog.
@@ -64,7 +65,7 @@ export function PrReportDialog({ open, onClose }: PrReportDialogProps) {
         setReport(result);
         setText(result.text);
         // A new draft is a new send intent, so it gets its own key.
-        setIdempotencyKey(crypto.randomUUID());
+        setIdempotencyKey(randomUuid());
         setGenerateError(null);
         setFailure(null);
         setSendState('idle');
@@ -117,7 +118,7 @@ export function PrReportDialog({ open, onClose }: PrReportDialogProps) {
     // Edited text is a DIFFERENT digest, so it must not be absorbed as a duplicate of
     // the previous one. Re-keying on edit is what keeps the dedupe scoped to genuine
     // retries (a double-click, which does not change the text).
-    setIdempotencyKey(crypto.randomUUID());
+    setIdempotencyKey(randomUuid());
     setSendState('idle');
     setFailure(null);
   };
@@ -147,7 +148,7 @@ export function PrReportDialog({ open, onClose }: PrReportDialogProps) {
    * the original landed.
    */
   const confirmResendAfterUnknown = () => {
-    setIdempotencyKey(crypto.randomUUID());
+    setIdempotencyKey(randomUuid());
     setSendState('idle');
     setFailure(null);
   };

@@ -773,18 +773,30 @@ removed on quit. A spare left behind by a crash is recognized by its git metadat
 `HEAD`; one that has been changed, or that the app does not own, is left alone and no spare is
 made.
 
-**Deleting a session can also remove its worktree and branch.** The delete confirmation offers
-this only for an app-created checkout under `.b4m/worktrees` on a `b4m/` branch. It defaults on
-only when no other conversation (including archived ones) uses the directory or branch, the
-checkout has no uncommitted or untracked files, and its commits are preserved in its upstream
-or base branch. Ordinary ignored files do not prevent removal; nested worktrees and folders
-used by other conversations are kept. Running conversations must stop first; unsafe checkouts
-show the reason and are kept. Cleanup stops background processes, waits for terminal shells
-to exit and closes the browser, then rechecks safety and uses `git worktree remove` and
-`git branch -d`, without force. A shell that cannot be stopped keeps its checkout. New workspace
-bindings wait until cleanup finishes. Git refusals are shown in the dialog; the conversation is
-kept so you can retry or delete it without cleanup. Archiving, imported-session deletion and
-the agent's `session_delete` tool keep their worktrees.
+**Deleting a session removes its worktree by default.** The delete confirmation offers this
+only for an app-created checkout under `.b4m/worktrees` on a `b4m/` branch, and the option starts
+ticked whenever the checkout is removable. A clean checkout whose commits are preserved in its
+upstream or base branch goes with its branch, through `git worktree remove` and `git branch -d`.
+A checkout with uncommitted, untracked or ignored files (an ignored `node_modules` aside) is
+force-removed and its branch kept, and one whose commits are not proven pushed or merged keeps
+its branch too, so no commit is lost; the dialog names what is discarded or kept before you
+confirm. A checkout another conversation uses (including archived ones), one containing another
+worktree, a running conversation and a workspace being prepared all keep it, with the reason
+shown. Cleanup stops background processes, waits for terminal shells to exit and closes the
+browser, then rechecks everything. A shell that cannot be stopped keeps its checkout. New
+workspace bindings wait until cleanup finishes. Git refusals are shown in the dialog; the
+conversation is kept so you can retry or delete it without cleanup. Only the Electron dialog may
+discard files: the host protocol's `session/delete` still removes a safe checkout alone.
+Archiving, imported-session deletion and the agent's `session_delete` tool keep their worktrees.
+
+**A session with nested sessions can be deleted with them.** Its confirmation offers "Delete this
+session", after which the nested sessions move to the top level, or "Delete N sessions", which
+deletes them deepest first and the parent last. The dialog checks each nested session's own
+worktree and lists what it discards or keeps; only those it listed as removable go. A checkout a
+nested session shares with the parent counts as removable once they are deleted together; one shared between two nested sessions, rather
+than with the parent, is kept. A
+delete that fails part way stops there and shows the error; the sessions already deleted stay
+deleted.
 
 ### Starting a session in a worktree
 

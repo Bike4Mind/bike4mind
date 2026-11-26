@@ -222,13 +222,16 @@ describe('DirectButton', () => {
     expect(setProgrammaticLaunch.mock.calls[0][0].promptContent).toContain('It already has 1 shot from an earlier');
   });
 
-  it('falls back to a time-based nonce without crypto.randomUUID', async () => {
-    vi.stubGlobal('crypto', {});
+  it('still mints a uuid nonce without crypto.randomUUID', async () => {
+    const realGetRandomValues = globalThis.crypto.getRandomValues.bind(globalThis.crypto);
+    vi.stubGlobal('crypto', { getRandomValues: realGetRandomValues });
     try {
       openDialog();
       fireEvent.click(screen.getByTestId('production-direct-submit-btn'));
       await waitFor(() => expect(setProgrammaticLaunch).toHaveBeenCalledTimes(1));
-      expect(setProgrammaticLaunch.mock.calls[0][0].dispatchNonce).toMatch(/^\d+-[a-z0-9]+$/);
+      expect(setProgrammaticLaunch.mock.calls[0][0].dispatchNonce).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+      );
     } finally {
       vi.unstubAllGlobals();
     }

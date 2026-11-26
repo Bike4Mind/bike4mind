@@ -105,6 +105,16 @@ class AgentRunWireTest {
     }
 
     @Test
+    fun aKnownStepTotalIsReadAndANullOneStaysNull() = runTest {
+        val known = wire(HttpStatusCode.OK, """{"id":"e1","status":"running","steps":[],"step_progress":{"completed":2,"total":5}}""").run("e1")
+        assertEquals(StepProgress(2, 5), known.stepProgress)
+
+        assertNull(wire(HttpStatusCode.OK, """{"id":"e1","status":"running","steps":[],"step_progress":null}""").run("e1").stepProgress)
+        assertNull(wire(HttpStatusCode.OK, """{"id":"e1","status":"running","steps":[]}""").run("e1").stepProgress)
+        assertNull(wire(HttpStatusCode.OK, """{"id":"e1","status":"running","steps":[],"step_progress":{"completed":1,"total":0}}""").run("e1").stepProgress)
+    }
+
+    @Test
     fun aFailedRunCarriesItsReason() = runTest {
         val run = wire(HttpStatusCode.OK, """{"id":"e1","status":"failed","error":"Tool needs approval: web_browse","steps":[]}""").run("e1")
         assertEquals("Tool needs approval: web_browse", run.error)

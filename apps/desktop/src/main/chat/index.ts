@@ -126,26 +126,20 @@ import { LOCAL_SERVER_ID } from '@shared/modelServers';
 import { MODEL_SETTINGS_FILE_NAME } from '@shared/modelSettings';
 import { sessionScopeFor, sessionScopeForChat, sessionScopeKey } from './sessionScope';
 import { readWorkspaceChanges } from './project/workspaceChanges';
-import { accountSkillsProvider } from './skills/accountSkills';
-import { ProjectTrustStore } from './skills/ProjectTrustStore';
 import { formatApprovalSummary, readApprovalLog, summarizeApprovals } from './permissions/approvalSummary';
-import { ClaudeCodeSettings } from './permissions/ClaudeCodeSettings';
 import { PermissionRuleStore } from './permissions/PermissionRuleStore';
-import { PermissionService } from './permissions/PermissionService';
 import { CapabilityLedger } from './capabilities/CapabilityLedger';
 import {
   capabilityHandlers,
   completeCapabilityMutation,
   retireSessionApprovals,
 } from './capabilities/capabilityHandlers';
-import { SkillCatalog } from './skills/SkillCatalog';
 import { parseSkillsScope, skillsTrustTargetSchema } from './skills/scope';
 import { detectLaunchSignals } from './launchSignals';
-import { appWorktreeMainCheckout, SpareWorktrees } from './project/workspace';
+import { SpareWorktrees } from './project/workspace';
 import { folderToRemember } from './project/recentFolderToRecord';
 import type { BackgroundProcessRegistry } from './tools/BackgroundProcessRegistry';
 import { storedReasoningEffortSetting } from './reasoningEffort';
-import { mainCheckoutOf } from './tools/shellTools';
 import type { PreparedImage } from './tools/types';
 import { desktopScreenCapturer } from './screen/desktopScreen';
 import { parsePaneInput, SimulatorLiveView } from './simulator/SimulatorLiveView';
@@ -157,6 +151,7 @@ import { registerClaudeImport } from '../claudeImport';
 import type { ClaudeImportService } from '../claudeImport/ClaudeImportService';
 import { HostRuntime, hostProtectedLocations, type HostEnvironment, type HostEventSink } from '../../host';
 import { HostEventRelay } from '../../host/server';
+import { createHostPermissionStack, permissionRulesPath } from '../../host/permissionStack';
 import type { LocalHost } from '../host/registerHostConnections';
 
 const editMessageRequestSchema = z.object({
@@ -375,27 +370,8 @@ export function registerChat(
   // App-wide like approval-mode.json; see SidebarSectionStore.
   const sidebarSections = new SidebarSectionStore(join(userData, 'sidebar-sections.json'));
   const spareWorktrees = new SpareWorktrees();
-  // The trust file is its own file beside tool-access.json, and for the same reason: both record
-  // a consent the user gave once and should not be asked for again on every launch.
-  const projectTrust = new ProjectTrustStore(join(userData, 'project-skill-trust.json'), directory =>
-    appWorktreeMainCheckout(directory, mainCheckoutOf)
-  );
-  const skills = new SkillCatalog(projectTrust, accountSkillsProvider(auth, userData), logger);
-  // App-wide like approval-mode.json. Claude Code's files are only ever read; the protected roots
-  // are folders no allow rule may cover, since a call writing there would grant itself more.
+  const { projectTrust, skills, permissions } = createHostPermissionStack({ environment, protection, auth, logger });
   const home = environment.homeDirectory;
-  const claudeCode = new ClaudeCodeSettings({ home, logger, onChange: () => permissions.invalidate() });
-  const permissions: PermissionService = new PermissionService({
-    store: new PermissionRuleStore(join(userData, 'permission-rules.json')),
-    claudeCode,
-    isTrusted: directory => projectTrust.isTrusted(directory),
-    home,
-    protectedRoots: () => protection.permission.paths(),
-    unresolvedProtected: () => protection.permission.unresolved(),
-    mainCheckoutOf,
-    logger,
-  });
-  void permissions.start().catch(error => logger.warn(`PERMISSIONS: could not load rules: ${String(error)}`));
   const attachmentsDir = join(userData, 'attachments');
   const attachments = new AttachmentStore(attachmentsDir, logger, shrinkImage);
   // App-wide like sidebar-sections.json: session ids are unique across scopes.
@@ -694,7 +670,7 @@ export function registerChat(
   const capabilitiesReady = Promise.all([
     access.list(),
     projectTrust.list(),
-    new PermissionRuleStore(join(userData, 'permission-rules.json')).read(),
+    new PermissionRuleStore(permissionRulesPath(userData)).read(),
   ])
     .then(async ([roots, trustedProjects, stored]) => {
       await retireSessionApprovals(capabilityLedger);
@@ -1013,9 +989,12 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatRenameSession, (_event, sessionId: string, title: string) =>
     runtime.renameSession(sessionId, title)
   );
-  ipcMain.handle(IPC_CHANNELS.chatInspectWorktreeRemoval, (_event, sessionId: unknown) => {
+  const isIdList = (value: unknown): value is string[] =>
+    Array.isArray(value) && value.every(id => typeof id === 'string');
+  ipcMain.handle(IPC_CHANNELS.chatInspectWorktreeRemoval, (_event, sessionId: unknown, alsoDeleting: unknown) => {
     if (typeof sessionId !== 'string') throw new Error('Invalid conversation id');
-    return service.inspectSessionWorktreeRemoval(sessionId);
+    if (alsoDeleting !== undefined && !isIdList(alsoDeleting)) throw new Error('Invalid conversation list');
+    return service.inspectSessionWorktreeRemoval(sessionId, alsoDeleting);
   });
   // Only a repository the user already has a conversation or recent folder for is ever touched.
   const knownRepository = async (directory: string) => {
@@ -1043,8 +1022,23 @@ export function registerChat(
     if (typeof sessionId !== 'string' || (removeWorktree !== undefined && typeof removeWorktree !== 'boolean')) {
       throw new Error('Invalid delete request');
     }
-    await runtime.deleteSession(sessionId, removeWorktree === true);
+    // The Electron dialog lists what cleanup discards before the user confirms.
+    await runtime.deleteSession(sessionId, removeWorktree === true, true);
   });
+  ipcMain.handle(
+    IPC_CHANNELS.chatDeleteSessionTree,
+    (_event, sessionId: unknown, nestedIds: unknown, removeWorktree: unknown, nestedWorktreeIds: unknown) => {
+      if (
+        typeof sessionId !== 'string' ||
+        !isIdList(nestedIds) ||
+        (removeWorktree !== undefined && typeof removeWorktree !== 'boolean') ||
+        (nestedWorktreeIds !== undefined && !isIdList(nestedWorktreeIds))
+      ) {
+        throw new Error('Invalid delete request');
+      }
+      return runtime.deleteSessionTree(sessionId, nestedIds, removeWorktree === true, nestedWorktreeIds ?? []);
+    }
+  );
   const isKnownSession = (sessionId: string) =>
     store.get(sessionId).then(
       session => session !== null,

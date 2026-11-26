@@ -107,7 +107,7 @@ import { openInSessionBrowser } from './prLinks';
 import { usePrSummaries, usePullRequest } from './usePullRequest';
 import { SessionList } from './SessionList';
 import { DeleteSessionDialog } from './DeleteSessionDialog';
-import { isUntouchedImport, projectForGroup, projectGroupDirectory } from './grouping';
+import { isUntouchedImport, nestedSessionsOf, projectForGroup, projectGroupDirectory } from './grouping';
 import { useImportedInline } from './importedInline';
 import { TerminalPanel } from './TerminalPanel';
 import {
@@ -299,6 +299,17 @@ export function ChatShell({
   onOpenImportSettings?: (focus: ClaudeImportKind) => void;
   studio?: StudioController;
 }) {
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [placeMemory] = useState(readPlaceMemory);
+  const [launch] = useState(() =>
+    resolveLaunch({ preference: launchPlace(), memory: placeMemory, lastSession: readLastSession() })
+  );
+  const remembered = launch.session;
+  // The session to restore and the open one are fetched even when no loaded page holds them.
+  const keepIds = useMemo(
+    () => [remembered?.id, isSessionDraft(activeId) ? null : activeId].filter((id): id is string => !!id),
+    [remembered, activeId]
+  );
   const {
     sessions,
     loading,
@@ -317,7 +328,16 @@ export function ChatShell({
     exportError,
     clearExportError,
     apply,
-  } = useSessions();
+    hasMore,
+    loadingMore,
+    loadMore,
+    total: sessionTotal,
+    searchSessions,
+  } = useSessions(keepIds);
+  const sessionPaging = useMemo(
+    () => ({ hasMore, loadingMore, onLoadMore: loadMore, total: sessionTotal }),
+    [hasMore, loadingMore, loadMore, sessionTotal]
+  );
   const {
     sections: userSections,
     actions: sectionActions,
@@ -326,12 +346,6 @@ export function ChatShell({
     error: sectionError,
     dismissError: dismissSectionError,
   } = useSidebarSections();
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [placeMemory] = useState(readPlaceMemory);
-  const [launch] = useState(() =>
-    resolveLaunch({ preference: launchPlace(), memory: placeMemory, lastSession: readLastSession() })
-  );
-  const remembered = launch.session;
   const [place, setPlace] = useState<Place>(launch.place);
   // The session mode the list filters by and New starts. A session place sets it; Studio leaves
   // it alone, so the conversation open underneath stays open for the return trip.
@@ -1613,12 +1627,34 @@ export function ChatShell({
   );
 
   const [deleteSessionId, setDeleteSessionId] = useState<string | null>(null);
+  const deleteTarget = useMemo(
+    () => (deleteSessionId ? sessions.find(session => session.id === deleteSessionId) : undefined),
+    [sessions, deleteSessionId]
+  );
+  const deleteNested = useMemo(
+    () => (deleteSessionId ? nestedSessionsOf(sessions, deleteSessionId) : []),
+    [sessions, deleteSessionId]
+  );
   const onDelete = useCallback(
-    async (sessionId: string, removeWorktree: boolean) => {
-      await remove(sessionId, removeWorktree);
-      clearAddFolderAlert(sessionId);
-      clearDefaultsReadFailure(sessionId);
-      setActiveId(current => (current === sessionId ? null : current));
+    async (
+      sessionId: string,
+      removeWorktree: boolean,
+      nestedIds: readonly string[] = [],
+      nestedWorktreeIds: readonly string[] = []
+    ) => {
+      const settle = (ids: readonly string[]) => {
+        for (const id of ids) {
+          clearAddFolderAlert(id);
+          clearDefaultsReadFailure(id);
+        }
+        setActiveId(current => (current && ids.includes(current) ? null : current));
+      };
+      try {
+        settle(await remove(sessionId, removeWorktree, nestedIds, nestedWorktreeIds));
+      } catch (err) {
+        settle((err as { deleted?: string[] }).deleted ?? []);
+        throw err;
+      }
     },
     [remove, clearAddFolderAlert, clearDefaultsReadFailure]
   );
@@ -1802,6 +1838,8 @@ export function ChatShell({
         <DeleteSessionDialog
           key={deleteSessionId}
           sessionId={deleteSessionId}
+          title={deleteTarget?.title ?? ''}
+          nested={deleteNested}
           onDelete={onDelete}
           onClose={() => setDeleteSessionId(null)}
         />
@@ -1884,6 +1922,8 @@ export function ChatShell({
             sessions={sessions}
             mode={mode}
             loading={loading}
+            paging={sessionPaging}
+            searchSessions={searchSessions}
             activeId={selectedRosterId ?? activeId}
             statuses={statuses}
             prSummaries={prSummaries}

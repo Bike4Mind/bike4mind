@@ -84,6 +84,29 @@ type CompositionOptions = {
   busyBlock?: BusyBlockInterval;
 };
 
+/** Publishes the compose event; a rejected publish discards the row so a retry starts clean. */
+async function publishOrDiscard(
+  brief: IAssistantBrief,
+  deps: Pick<Deps, 'briefs' | 'publishCompose'>,
+  event: { userId: string; scheduled?: boolean }
+): Promise<void> {
+  const briefId = brief._id.toString();
+  try {
+    await deps.publishCompose({ briefId, ...event });
+  } catch (err) {
+    let retrySafe = false;
+    if (err instanceof BriefComposeRejectedError) {
+      try {
+        retrySafe = await deps.briefs.discardComposing(briefId);
+      } catch (cleanupError) {
+        logger.error('Failed to discard a rejected brief composition', { briefId, cleanupError });
+      }
+      if (!retrySafe) logger.warn('Rejected brief retained because cleanup was not confirmed', { briefId });
+    }
+    throw new BriefComposeStartError(briefId, retrySafe, err);
+  }
+}
+
 async function beginComposition(
   userId: string,
   deps: Deps,
@@ -100,21 +123,7 @@ async function beginComposition(
     periodEnd,
     ...(options.busyBlock && { trigger: 'busy_block' as const, busyBlock: options.busyBlock }),
   });
-  const briefId = brief._id.toString();
-  try {
-    await deps.publishCompose({ briefId, userId, ...(options.scheduled ? { scheduled: true } : {}) });
-  } catch (err) {
-    let retrySafe = false;
-    if (err instanceof BriefComposeRejectedError) {
-      try {
-        retrySafe = await deps.briefs.discardComposing(briefId);
-      } catch (cleanupError) {
-        logger.error('Failed to discard a rejected brief composition', { briefId, cleanupError });
-      }
-      if (!retrySafe) logger.warn('Rejected brief retained because cleanup was not confirmed', { briefId });
-    }
-    throw new BriefComposeStartError(briefId, retrySafe, err);
-  }
+  await publishOrDiscard(brief, deps, { userId, ...(options.scheduled ? { scheduled: true } : {}) });
   return { brief, created: true };
 }
 
@@ -125,9 +134,30 @@ async function beginComposition(
 export async function startBriefComposition(
   userId: string,
   deps: Deps = defaultDeps,
-  options: { scheduled?: boolean } = {}
+  options: CompositionOptions = {}
 ): Promise<IAssistantBrief> {
   return (await beginComposition(userId, deps, options)).brief;
+}
+
+/**
+ * Starts a follow-up brief composed from a dictated memo. Never reuses an in-flight brief and never touches the
+ * activity window: the memo is stored on the owner's row (cleared on settle), never in the event payload.
+ */
+export async function startFollowUpComposition(
+  userId: string,
+  input: { transcript: string; timeZone?: string },
+  deps: Pick<Deps, 'briefs' | 'publishCompose' | 'now'> = defaultDeps
+): Promise<IAssistantBrief> {
+  const now = deps.now();
+  const brief = await deps.briefs.createComposing({
+    userId,
+    periodStart: now,
+    periodEnd: now,
+    origin: 'followUp',
+    followUpInput: { transcript: input.transcript, ...(input.timeZone && { timeZone: input.timeZone }) },
+  });
+  await publishOrDiscard(brief, deps, { userId });
+  return brief;
 }
 
 export type ScheduledBriefOutcome =
@@ -139,6 +169,8 @@ export type ScheduledBriefDeps = Deps & {
   hasRunsSince(userId: string, since: Date): Promise<boolean>;
   /** Whether the user has triaged email not yet briefed as of `end`; unwindowed, like the composer's load. */
   hasPendingEmails(userId: string, end: Date): Promise<boolean>;
+  /** Whether an approved reminder is due at `now` and no brief has listed it yet. */
+  hasDueReminders(userId: string, now: Date): Promise<boolean>;
 };
 
 const defaultScheduledDeps: ScheduledBriefDeps = {
@@ -154,12 +186,13 @@ const defaultScheduledDeps: ScheduledBriefDeps = {
     );
     return sections.some(items => items.length > 0);
   },
+  hasDueReminders: async (userId, now) => (await assistantBriefRepository.findDueReminders(userId, now, 1)).length > 0,
 };
 
 /**
  * The automatic path into the composer, shared by the schedule and agent-run completion: skips users whose
- * schedule is off, users who turned brief pushes off, and windows with no agent runs and no pending triaged
- * email (the worker derives approvals and questions from the runs' sessions, so those two are its only
+ * schedule is off, users who turned brief pushes off, and windows with no agent runs, no pending triaged
+ * email and no due reminder (the worker derives approvals and questions from the runs' sessions, so those two are its only
  * activity sources), so none of them costs a model call or leaves a row behind. Then claims the per-user
  * debounce, needing `claimGapMs` since the last claim of either path, so concurrent starts collapse into one brief.
  */
@@ -177,11 +210,12 @@ async function startGatedBrief(
   if (await deps.briefs.findActiveComposing(userId, now)) return 'in_flight';
 
   const { periodStart, periodEnd } = await activityWindow(userId, deps, now);
-  const [hasRuns, hasEmails] = await Promise.all([
+  const [hasRuns, hasEmails, hasReminders] = await Promise.all([
     deps.hasRunsSince(userId, periodStart),
     deps.hasPendingEmails(userId, periodEnd),
+    deps.hasDueReminders(userId, now),
   ]);
-  if (!hasRuns && !hasEmails) return 'no_activity';
+  if (!hasRuns && !hasEmails && !hasReminders) return 'no_activity';
 
   const claim = await deps.users.claimBriefStart(userId, now, claimGapMs);
   if (!claim) return 'debounced';

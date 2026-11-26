@@ -24,6 +24,7 @@ const token = (sessionId: string, text: string): ChatStreamEvent => ({
 function fakeRuntime(eventLog = new SessionEventLog({ epoch: 'epoch-1' })) {
   const runtime = {
     listSessions: vi.fn(async () => [summary('s1'), summary('s2')]),
+    listSessionPage: vi.fn(async () => ({ sessions: [summary('s1')], related: [], nextCursor: 'c1', total: 2 })),
     getSession: vi.fn(async (sessionId: string) =>
       sessionId === 'missing'
         ? null
@@ -93,10 +94,6 @@ describe('HostServer', () => {
       [
         'background/stop',
         'fs/browse',
-        'host/auth/start',
-        'host/auth/status',
-        'host/info',
-        'host/initialize',
         'project/recent',
         'request/respond',
         'session/create',
@@ -128,10 +125,15 @@ describe('HostServer', () => {
     ['queue/sendNow', { queuedId: 'q1' }],
     ['model/list', { force: 'remote' }],
     ['session/list', 'all'],
+    ['session/page', { limit: 'ten' }],
     ['session/statuses', 3],
     ['draft/defaults', []],
     ['project/forgetRecent', {}],
     ['project/inspect', { directory: 3 }],
+    ['host/initialize', { clientId: 'c1' }],
+    ['host/info', 'now'],
+    ['host/auth/start', 3],
+    ['host/auth/status', []],
   ];
   it.each(invalidParams)('rejects invalid params for %s without calling the runtime', async (method, params) => {
     const { client, runtime } = serve();
@@ -151,6 +153,18 @@ describe('HostServer', () => {
     const { call } = client();
     expect(resultOf(await call('session/list'))).toEqual({ sessions: [summary('s1'), summary('s2')] });
     expect(resultOf(await call('session/statuses', {}))).toEqual({ statuses: [status('s1')] });
+  });
+
+  it('serves session/page from the runtime with the validated request', async () => {
+    const { client, runtime } = serve();
+    const { call } = client();
+    expect(resultOf(await call('session/page', { limit: 1, cursor: null }))).toEqual({
+      sessions: [summary('s1')],
+      related: [],
+      nextCursor: 'c1',
+      total: 2,
+    });
+    expect(runtime.listSessionPage).toHaveBeenCalledWith({ limit: 1, cursor: null });
   });
 
   it('serves the project methods from the runtime in the protocol shapes', async () => {

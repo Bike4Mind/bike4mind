@@ -72,6 +72,16 @@ describe('IntegrationDetailPanel recent errors', () => {
     expect(rows[1]).toHaveTextContent('disconnect');
   });
 
+  it('sizes the Time column for the full locale timestamp', () => {
+    const occurredAt = new Date(2026, 11, 28, 12, 58, 58);
+    renderPanel([recentError({ occurredAt: occurredAt.toISOString() })]);
+    const table = screen.getByTestId('integration-recent-errors-table');
+    const width = within(table).getByRole('columnheader', { name: 'Time' }).style.width;
+    expect(width).toMatch(/^[\d.]+rem$/);
+    expect(parseFloat(width)).toBeGreaterThanOrEqual(13.5);
+    expect(within(table).getByText(occurredAt.toLocaleString())).toBeInTheDocument();
+  });
+
   it('says so when there are no recent errors, and keeps the override buttons working', () => {
     const onOverride = renderPanel([]);
     expect(screen.queryByTestId('integration-recent-errors-table')).not.toBeInTheDocument();

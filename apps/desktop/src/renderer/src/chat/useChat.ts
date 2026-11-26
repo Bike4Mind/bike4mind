@@ -29,6 +29,8 @@ import type { GenerationSettings } from '@shared/generation';
 import type { CreatedSession } from '@shared/ipc';
 import { LOCAL_HOST_ID } from '@shared/hostBridge';
 import { hostClient } from '../host/HostClient';
+import { SESSION_PAGE_MAX_LIMIT, SESSION_PAGE_SIZE, SESSION_SEARCH_LIMIT } from '@shared/sessionPage';
+import { keepRequest, NO_PAGING, sessionsFromPage, withRows, type SessionPaging } from './sessionPages';
 import type { ModelRuntimeStatus } from '@shared/models';
 import type { SidebarSectionsState } from '@shared/sidebarSections';
 import { appendArrived, OPTIMISTIC_ID_PREFIX } from './arrivedMessage';
@@ -66,7 +68,16 @@ export interface SessionsController {
   creatingCode: boolean;
   codeError: string | null;
   clearCodeError: () => void;
-  remove: (sessionId: string, removeWorktree?: boolean) => Promise<void>;
+  /**
+   * With `nestedIds`, deletes those nested sessions first. Resolves the ids deleted; a failure part
+   * way throws an error whose `deleted` lists the ones already gone.
+   */
+  remove: (
+    sessionId: string,
+    removeWorktree?: boolean,
+    nestedIds?: readonly string[],
+    nestedWorktreeIds?: readonly string[]
+  ) => Promise<string[]>;
   togglePin: (session: ChatSessionSummary) => Promise<void>;
   toggleArchived: (session: ChatSessionSummary) => Promise<void>;
   /** Rename any listed session, shown at once and rolled back (with `renameError`) if main refuses. */
@@ -79,6 +90,16 @@ export interface SessionsController {
   clearExportError: () => void;
   /** Apply a summary main just returned, so the sidebar reorders without a full reload. */
   apply: (summary: ChatSessionSummary) => void;
+  /** More sessions exist past the pages loaded so far. */
+  hasMore: boolean;
+  /** A next page is on its way. */
+  loadingMore: boolean;
+  /** Load the next page; does nothing while one is in flight or once there is no more. */
+  loadMore: () => void;
+  /** Sessions in the whole list, loaded or not. */
+  total: number;
+  /** Title matches across the whole list, loaded or not, newest first. */
+  searchSessions: (query: string) => Promise<{ sessions: ChatSessionSummary[]; total: number }>;
 }
 
 /** A user sidebar section to start a session in; see CreateSessionRequest. */
@@ -114,9 +135,22 @@ function addNotice(current: ContextNotice[] | undefined, next: ContextNotice): C
 const noticeText = (notices: ContextNotice[]): string | null =>
   notices.length > 0 ? notices.map(item => item.message).join('\n') : null;
 
-export function useSessions(): SessionsController {
+/**
+ * The session list, loaded a page at a time (see shared/sessionPage): `sessions` holds the pages
+ * loaded so far plus the rows main carries with them - pinned and live sessions, each row's spawn
+ * family - and `keepIds`, which the shell passes for the open session and the one it restores, so
+ * a lookup by id finds them wherever they sit in the list.
+ */
+export function useSessions(keepIds: readonly string[] = []): SessionsController {
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [paging, setPaging] = useState<SessionPaging>(NO_PAGING);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const pagingRef = useRef(paging);
+  pagingRef.current = paging;
+  const pageInFlight = useRef(false);
+  const keep = useRef(keepIds);
+  keep.current = keepIds;
   const [creatingCode, setCreatingCode] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -132,11 +166,23 @@ export function useSessions(): SessionsController {
   const reload = useCallback((): Promise<void> => {
     const ticket = ++latestReload.current;
     const editsBefore = localEdits.current;
+    // Re-reads every page loaded so far in one request, so scrolled-to rows stay put. Past the
+    // request cap the list is cut back to it, so a very deep scroll resets on the next reload.
+    const limit = Math.min(Math.max(SESSION_PAGE_SIZE, pagingRef.current.loaded), SESSION_PAGE_MAX_LIMIT);
     const listing = (async (): Promise<void> => {
-      const { sessions: next } = await hostClient.request(LOCAL_HOST_ID, 'session/list');
+      const page = await hostClient.request(LOCAL_HOST_ID, 'session/page', {
+        limit,
+        cursor: null,
+        include: keepRequest(keep.current),
+      });
       if (ticket !== latestReload.current) return latestListing.current;
       if (editsBefore !== localEdits.current) return reload();
-      setSessions(next);
+      setSessions(sessionsFromPage(page));
+      // The ref is written here too, not only on render: a page reply landing before the next
+      // render must already see the moved cursor.
+      const next = { loaded: page.sessions.length, nextCursor: page.nextCursor, total: page.total };
+      pagingRef.current = next;
+      setPaging(next);
       setLoading(false);
     })();
     latestListing.current = listing;
@@ -145,6 +191,68 @@ export function useSessions(): SessionsController {
   const editSessions = useCallback((update: (current: ChatSessionSummary[]) => ChatSessionSummary[]) => {
     localEdits.current++;
     setSessions(update);
+  }, []);
+
+  // One page in flight at most. A reload started meanwhile wins: it re-reads from the top, and
+  // this page's rows would be cut from a listing older than it.
+  const loadMore = useCallback(() => {
+    const cursor = pagingRef.current.nextCursor;
+    if (!cursor || pageInFlight.current) return;
+    pageInFlight.current = true;
+    setLoadingMore(true);
+    const ticket = latestReload.current;
+    void (async () => {
+      try {
+        const page = await hostClient.request(LOCAL_HOST_ID, 'session/page', { limit: SESSION_PAGE_SIZE, cursor });
+        // A reload that landed meanwhile moved the cursor; this page was cut from the old list.
+        if (ticket !== latestReload.current || pagingRef.current.nextCursor !== cursor) return;
+        setSessions(current => withRows(current, [...page.sessions, ...page.related]));
+        setPaging(current => ({
+          loaded: current.loaded + page.sessions.length,
+          nextCursor: page.nextCursor,
+          total: page.total,
+        }));
+      } catch (err) {
+        // Left for the next scroll to retry; the list it already shows stays.
+        console.warn('Loading more sessions failed', err);
+      } finally {
+        pageInFlight.current = false;
+        setLoadingMore(false);
+      }
+    })();
+  }, []);
+
+  // A kept id outside the loaded pages (a session restored at launch, or opened from a search
+  // hit) is fetched on its own. Each id is asked for once, and never once it has been listed: a
+  // listed row that leaves the list was deleted, and must not be fetched back.
+  const keepKey = keepIds.join('\n');
+  const askedFor = useRef(new Set<string>());
+  useEffect(() => {
+    if (loading) return;
+    const listed = new Set(sessions.map(session => session.id));
+    const missing: string[] = [];
+    for (const id of keepIds) {
+      if (!askedFor.current.has(id) && !listed.has(id)) missing.push(id);
+      askedFor.current.add(id);
+    }
+    if (missing.length === 0) return;
+    void (async () => {
+      const page = await hostClient.request(LOCAL_HOST_ID, 'session/page', {
+        limit: 0,
+        cursor: null,
+        include: keepRequest(missing),
+      });
+      setSessions(current => withRows(current, page.related));
+    })().catch(err => console.warn('Loading a session outside the loaded pages failed', err));
+  }, [keepKey, loading, sessions]);
+
+  const searchSessions = useCallback(async (query: string) => {
+    const page = await hostClient.request(LOCAL_HOST_ID, 'session/page', {
+      limit: SESSION_SEARCH_LIMIT,
+      cursor: null,
+      query,
+    });
+    return { sessions: page.sessions, total: page.total };
   }, []);
 
   useEffect(() => {
@@ -218,13 +326,36 @@ export function useSessions(): SessionsController {
     [list]
   );
 
-  const remove = useCallback(async (sessionId: string, removeWorktree = false) => {
-    await window.b4m.chat.deleteSession(sessionId, removeWorktree);
-    backgroundNotices.delete(sessionId);
-    backgroundReturned.delete(sessionId);
-    forgetSessionPrefs(sessionId);
-    editSessions(current => current.filter(session => session.id !== sessionId));
-  }, []);
+  const remove = useCallback(
+    async (
+      sessionId: string,
+      removeWorktree = false,
+      nestedIds: readonly string[] = [],
+      nestedWorktreeIds: readonly string[] = []
+    ) => {
+      const forget = (ids: readonly string[]) => {
+        for (const id of ids) {
+          backgroundNotices.delete(id);
+          backgroundReturned.delete(id);
+          forgetSessionPrefs(id);
+        }
+        const gone = new Set(ids);
+        editSessions(current => current.filter(session => !gone.has(session.id)));
+      };
+      if (nestedIds.length === 0) {
+        await window.b4m.chat.deleteSession(sessionId, removeWorktree);
+        forget([sessionId]);
+        return [sessionId];
+      }
+      const { deleted, error } = await window.b4m.chat.deleteSessionTree(sessionId, [...nestedIds], removeWorktree, [
+        ...nestedWorktreeIds,
+      ]);
+      forget(deleted);
+      if (error) throw Object.assign(new Error(error), { deleted });
+      return deleted;
+    },
+    []
+  );
 
   const apply = useCallback((summary: ChatSessionSummary) => {
     editSessions(current => [summary, ...current.filter(session => session.id !== summary.id)]);
@@ -306,6 +437,11 @@ export function useSessions(): SessionsController {
     exportError,
     clearExportError,
     apply,
+    hasMore: paging.nextCursor !== null,
+    loadingMore,
+    loadMore,
+    total: paging.total,
+    searchSessions,
   };
 }
 

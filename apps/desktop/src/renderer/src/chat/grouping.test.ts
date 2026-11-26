@@ -3,6 +3,7 @@ import type { ChatProject, ChatSessionSummary } from '@shared/chat';
 import { prAttentionRank } from '@shared/prAttention';
 import type { PrSummary } from '@shared/pullRequest';
 import {
+  nestedSessionsOf,
   descendantsOf,
   groupSessions,
   orderedSessions,
@@ -564,5 +565,24 @@ describe('group limits', () => {
 
   it('never hide a row the quick-switch shortcut can reach', () => {
     expect(GROUP_ROW_CAP).toBeGreaterThanOrEqual(QUICK_SWITCH_LIMIT);
+  });
+});
+
+describe('nestedSessionsOf', () => {
+  const origin = (parentSessionId: string) => ({ parentSessionId, depth: 1, seedPrompt: '' });
+  it('collects live descendants at any depth, skipping archived subtrees and unrelated sessions', () => {
+    const sessions = [
+      session({ id: 'parent' }),
+      session({ id: 'child', origin: origin('parent') }),
+      session({ id: 'grandchild', origin: origin('child') }),
+      session({ id: 'archived', origin: origin('parent'), archived: true }),
+      session({ id: 'under-archived', origin: origin('archived') }),
+      session({ id: 'other', origin: origin('elsewhere') }),
+    ];
+    expect(nestedSessionsOf(sessions, 'parent').map(found => found.id)).toEqual(['child', 'grandchild']);
+  });
+  it('terminates on a corrupt origin cycle', () => {
+    const sessions = [session({ id: 'a', origin: origin('b') }), session({ id: 'b', origin: origin('a') })];
+    expect(nestedSessionsOf(sessions, 'a').map(found => found.id)).toEqual(['b']);
   });
 });

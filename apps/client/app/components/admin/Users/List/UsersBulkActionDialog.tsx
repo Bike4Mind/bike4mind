@@ -19,6 +19,7 @@ import { SegmentedControl } from '../../shared/SegmentedControl';
 import { useUsersBulkResult } from './useUsersBulkResult';
 import { APPROVAL_SUBMITTED_MESSAGE, isApprovalPending } from '@client/app/hooks/data/adminApprovals';
 import { useAdminUsersBulkExecute, useAdminUsersBulkPreview } from './useAdminUsersBulk';
+import { randomUuid } from '@bike4mind/common';
 
 type CreditMode = 'set' | 'add' | 'subtract';
 
@@ -204,7 +205,7 @@ export function UsersBulkActionDialog({
   const [tag, setTag] = useState('');
   const [blockDomains, setBlockDomains] = useState(false);
   // One key per dialog: a double submit or a retried request replays instead of acting twice.
-  const [idempotencyKey] = useState(() => crypto.randomUUID());
+  const [idempotencyKey] = useState(() => randomUuid());
   const showBulkResult = useUsersBulkResult();
 
   const action = useMemo(

@@ -8,3 +8,12 @@ export {
   type ServedHostMethod,
 } from './HostServer';
 export { createInProcessTransport } from './inProcessTransport';
+export {
+  accountOf,
+  createHostControl,
+  type HostAccount,
+  type HostControl,
+  type HostControlOptions,
+  type HostFacts,
+  type HostSignInStart,
+} from './hostControl';
