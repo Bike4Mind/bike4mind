@@ -1,11 +1,15 @@
 /**
  * Records which credential each AnthropicBackend/OpenAIBackend `complete()` call used,
  * so a workload identity federation rollout can be verified per stage and a fall back
- * to a static key is visible. It counts calls, not HTTP requests: SDK retries sit under
- * one datapoint, and the max-tool-call recursion counts twice.
+ * to a static key is visible. It counts `complete()` calls, not HTTP requests: every tool
+ * round re-enters `complete()`, so it is roughly one datapoint per provider request. SDK
+ * retries sit under one datapoint, and the max-tool-call wrap-up branch adds one without
+ * its own request.
  *
  * `static` covers every plain key string, including a user's own key: the backend
  * cannot tell a platform key from a user key, only a key from the federated sentinel.
+ * Because user keys stay `static`, that series will not reach zero after a cutover; verify
+ * a rollout by `federated` rising, not `static` disappearing.
  *
  * Keep the names below in sync with infra/alarms.ts (`providerCredentialFallback`); the
  * tests pin the literals.
