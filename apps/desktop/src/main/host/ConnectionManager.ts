@@ -13,6 +13,7 @@ import {
   DEFAULT_HOST_LINK_TUNING,
   HostLink,
   REACHABLE_STATUSES,
+  sameAccount,
   type HostConnector,
   type HostLinkTuning,
 } from './HostLink';
@@ -72,9 +73,6 @@ const asHostError = (error: unknown): HostError => {
   }
   return { code: HOST_ERROR_CODES.internalError, message: error instanceof Error ? error.message : String(error) };
 };
-
-const sameAccount = (a: HostAccount, b: HostAccount): boolean =>
-  a === b || (a !== null && b !== null && a.userId === b.userId && a.environmentUrl === b.environmentUrl);
 
 const ALWAYS_ONLINE: SystemSignals = {
   isOnline: () => true,

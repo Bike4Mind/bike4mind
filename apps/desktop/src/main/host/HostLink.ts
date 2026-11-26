@@ -44,7 +44,7 @@ export type HostLinkOptions = {
   log(message: string): void;
 };
 
-const sameAccount = (a: HostAccount, b: HostAccount): boolean =>
+export const sameAccount = (a: HostAccount, b: HostAccount): boolean =>
   a === b || (a !== null && b !== null && a.userId === b.userId && a.environmentUrl === b.environmentUrl);
 
 /** The states in which the control connection is up, so the `host/*` methods reach the host. */
