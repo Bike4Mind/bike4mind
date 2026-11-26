@@ -138,7 +138,9 @@ async function discardStaleLock(paths: DaemonPaths, stale: string): Promise<void
     try {
       await link(aside, paths.lock);
     } catch (err) {
-      // Yet another lock took its place; that one stands.
+      // A third starter linked its lock into the gap while this one was aside; that one stands.
+      // The fresh lock we moved is then lost, so its owner runs lockless until it exits. Needs
+      // three starters interleaving here, so it is accepted rather than locked against.
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
   } finally {
