@@ -10,13 +10,15 @@ const h = vi.hoisted(() => ({
 }));
 vi.mock('@client/app/hooks/data/studioImageJobs', () => ({
   useCreateStudioImageCutout: () => ({ mutateAsync: h.mutateAsync }),
+  describeStudioImageCutoutError: () => 'Remove background works on PNG or JPEG images',
+}));
+vi.mock('@client/app/hooks/data/generationJobs', () => ({
   // Stable per h.jobs, as React Query's data is per fetch, so the hook sees a new list only when the jobs change.
-  useStudioImageJobs: () => {
+  useGenerationJobs: () => {
     if (h.listFor !== h.jobs) h.list = { pages: [{ data: h.jobs, next_cursor: null }] };
     h.listFor = h.jobs;
     return { data: h.list };
   },
-  describeStudioImageCutoutError: () => 'Remove background works on PNG or JPEG images',
 }));
 
 import { useReferenceCutouts } from './useReferenceCutouts';

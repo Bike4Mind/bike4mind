@@ -11,7 +11,7 @@ const h = vi.hoisted(() => ({
   openStudioImageEdit: vi.fn(),
 }));
 
-vi.mock('@client/app/hooks/data/imageJobs', () => ({ useImageJob: () => h.query }));
+vi.mock('@client/app/hooks/data/generationJobs', () => ({ useGenerationJob: () => h.query }));
 vi.mock('@client/app/components/Studio/useStudioFeature', () => ({
   useStudioFeature: () => h.studioImageEnabled,
 }));
