@@ -20,7 +20,7 @@ const SidenavFooter = () => {
         backgroundColor: theme.palette.background.surface2,
       })}
     >
-      <PreviewSleepBanner />
+      <PreviewSleepBanner placement="sidenav" />
 
       {/* Network / service-worker / websocket status pills — localhost only */}
       {isLocalhost && (

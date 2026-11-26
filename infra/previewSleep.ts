@@ -65,6 +65,7 @@ export const previewSleepForWeb = previewSleepEnabled
       return {
         environment: {
           PREVIEW_SLEEP_ENABLED: 'true',
+          NEXT_PUBLIC_PREVIEW_SLEEP_ENABLED: 'true',
           PREVIEW_SLEEP_TARGETS: $jsonStringify(
             targets.map(({ label, awake, target }) => ({
               label,

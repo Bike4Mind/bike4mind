@@ -2,8 +2,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { baseApiOptions, send, stage } = vi.hoisted(() => ({
+const { baseApiOptions, logError, send, stage } = vi.hoisted(() => ({
   baseApiOptions: [] as unknown[],
+  logError: vi.fn(),
   send: vi.fn(),
   stage: { value: 'pr123' },
 }));
@@ -36,12 +37,14 @@ vi.mock('@aws-sdk/client-ecs', () => ({
     constructor(public input: unknown) {}
   },
 }));
-vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({ rateLimit: () => vi.fn() }));
+vi.mock('@bike4mind/server-utils/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: (options: unknown) => {
     baseApiOptions.push(options);
-    const chain: Record<string, unknown> = {};
-    chain.use = () => chain;
+    const chain: Record<string, unknown> = { middlewares: [] };
+    chain.use = (m: unknown) => ((chain.middlewares as unknown[]).push(m), chain);
     chain.get = (h: unknown) => ((chain.GET = h), chain);
     chain.post = (h: unknown) => ((chain.POST = h), chain);
     return chain;
@@ -49,14 +52,23 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
+type Middleware = (req: unknown, res: unknown, next: () => void) => unknown;
 const TARGETS = [
   { label: 'chat-completion', resourceId: 'service/cluster-a/chat', min: 1, max: 2 },
   { label: 'subscriber-fanout', resourceId: 'service/cluster-a/fanout', min: 1, max: 1 },
 ];
 
 const call = async (method: 'GET' | 'POST') => {
-  const route = (await import('../preview-sleep')).default as unknown as Record<string, Handler>;
+  const route = (await import('../preview-sleep')).default as unknown as Record<string, Handler> & {
+    middlewares: Middleware[];
+  };
   const { req, res } = createMocks({ method });
+  Object.assign(req, { logger: { error: logError } });
+  for (const middleware of route.middlewares) {
+    let passed = false;
+    await middleware(req, res, () => (passed = true));
+    if (!passed) return res;
+  }
   await route[method](req, res);
   return res;
 };
@@ -69,13 +81,14 @@ const commandsOf = (name: string) =>
 beforeEach(() => {
   vi.resetModules();
   send.mockReset();
+  logError.mockReset();
   stage.value = 'pr123';
   process.env.PREVIEW_SLEEP_ENABLED = 'true';
   process.env.PREVIEW_SLEEP_TARGETS = JSON.stringify(TARGETS);
 });
 
 describe('/api/preview-sleep', () => {
-  it('rejects API keys and serves only GET and POST', async () => {
+  it('requires a JWT (no API keys) and serves only GET and POST', async () => {
     await import('../preview-sleep');
     expect(baseApiOptions.at(-1)).toMatchObject({ auth: 'jwtOnly', allowedMethods: ['GET', 'POST'] });
   });
@@ -84,6 +97,31 @@ describe('/api/preview-sleep', () => {
     process.env.PREVIEW_SLEEP_ENABLED = '';
     expect((await call(method)).statusCode).toBe(404);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('runs the preview gate before the rate limiter', async () => {
+    const route = (await import('../preview-sleep')).default as unknown as { middlewares: Middleware[] };
+    process.env.PREVIEW_SLEEP_ENABLED = '';
+    const { req, res } = createMocks({ method: 'GET' });
+    const next = vi.fn();
+    await route.middlewares[0](req, res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(404);
+  });
+
+  it.each(['GET', 'POST'] as const)('hides the AWS error text on a failed %s', async method => {
+    send.mockRejectedValue(new Error('AccessDenied: arn:partition:iam::account-id:role/example'));
+    const res = await call(method);
+    expect(res.statusCode).toBe(502);
+    expect(JSON.stringify(res._getJSONData())).not.toContain('arn:');
+    expect(logError).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats malformed targets as none rather than failing', async () => {
+    process.env.PREVIEW_SLEEP_TARGETS = '{not json';
+    const res = await call('GET');
+    expect(res.statusCode).toBe(200);
+    expect(res._getJSONData()).toEqual({ asleep: false, waking: false, services: [] });
   });
 
   it('404s on production even with the flag set', async () => {

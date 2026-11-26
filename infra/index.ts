@@ -22,7 +22,6 @@ export * from './renderWorker';
 export * from './callableFunctionData';
 export * from './callableFunctionRuntime';
 export * from './chatCompletion';
-// previewSleep must come after subscriberFanout + chatCompletion (it schedules both)
 export * from './previewSleep';
 export * from './web';
 export * from './callableFunctionDataPolicy';

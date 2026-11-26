@@ -35,7 +35,12 @@ export const isPreviewSleepEnabled = (): boolean =>
 const readTargets = (): PreviewSleepTarget[] => {
   const raw = process.env.PREVIEW_SLEEP_TARGETS;
   if (!raw) return [];
-  const parsed: unknown = JSON.parse(raw);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
   if (!Array.isArray(parsed)) return [];
   return parsed.filter(
     (t): t is PreviewSleepTarget =>
