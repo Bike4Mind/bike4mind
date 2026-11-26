@@ -1022,14 +1022,22 @@ export function SceneStage({
   );
 }
 
+type SceneViewOptions = { pause?: ScenePauseOptions; answerFromBubble?: boolean };
+
+const SCENE_VIEWS = new WeakMap<object, { scene: SceneDefinition; options: SceneViewOptions }>();
+
 /** A registry entry for a scene: the view the stage mounts, built from data alone. */
-export function sceneView(
-  scene: SceneDefinition,
-  { pause, answerFromBubble }: { pause?: ScenePauseOptions; answerFromBubble?: boolean } = {}
-) {
+export function sceneView(scene: SceneDefinition, options: SceneViewOptions = {}) {
+  const { pause, answerFromBubble } = options;
   function SceneView(props: OrchestratorViewProps) {
     return <SceneStage {...props} scene={scene} pause={pause} answerFromBubble={answerFromBubble} />;
   }
   SceneView.displayName = `SceneView(${scene.id})`;
+  SCENE_VIEWS.set(SceneView, { scene, options });
   return SceneView;
+}
+
+/** The definition and options a view was built with by `sceneView`, or undefined for any other component. */
+export function sceneViewOf(view: unknown): { scene: SceneDefinition; options: SceneViewOptions } | undefined {
+  return typeof view === 'function' ? SCENE_VIEWS.get(view) : undefined;
 }
