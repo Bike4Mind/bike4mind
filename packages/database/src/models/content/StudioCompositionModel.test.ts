@@ -81,7 +81,16 @@ describe('StudioCompositionRepository', () => {
     const { brief: _brief, brandKit: _brandKit, shots: _shots, ...bare } = composition();
     const created = await StudioComposition.create(bare);
     const found = await studioCompositionRepository.findOwned(created.id, OWNER);
-    expect(found).toMatchObject({ brief: {}, brandKit: { colors: [], productFileIds: [] }, shots: [] });
+    expect(found).toMatchObject({ brief: {}, brandKit: { colors: [], productFileIds: [], characters: [] }, shots: [] });
+  });
+
+  it('round-trips brand kit characters with their own ids', async () => {
+    const characters = [{ id: 'maya', name: 'Maya', fileId: 'a'.repeat(24) }];
+    const created = await studioCompositionRepository.createOwned(
+      composition({ brandKit: { colors: [], productFileIds: [], characters } })
+    );
+    const found = await studioCompositionRepository.findOwned(created.id, OWNER);
+    expect(found?.brandKit.characters).toEqual(characters);
   });
 
   it('stores a short film brief tone and its sized timeline', async () => {

@@ -136,6 +136,12 @@ describe('settings/fetch sensitive value redaction', () => {
     expect(result.find(s => s.settingName === 'enforceMFA')?.settingValue).toBe('true');
   });
 
+  it('returns a non-sensitive value exactly as stored, never decrypting it', async () => {
+    stored = [{ settingName: 'enforceMFA', settingValue: 'enc:sk-ant-api03-real' }];
+    const result = await runHandler();
+    expect(result.find(s => s.settingName === 'enforceMFA')?.settingValue).toBe('enc:sk-ant-api03-real');
+  });
+
   it('reports an unconfigured sensitive setting as empty, not as a mask', async () => {
     stored = [{ settingName: 'anthropicDemoKey', settingValue: '' }];
     const result = await runHandler();

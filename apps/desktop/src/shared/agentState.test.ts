@@ -353,10 +353,10 @@ describe('agentPersona', () => {
       expect(personas.get('c')?.shortTitle).toBe('Standalone');
     });
 
-    it('gives a 12-agent roster 12 distinct names and labels', () => {
+    it('gives a 12-agent roster 12 distinct one-word names', () => {
       const personas = [...assignPersonas(roster(12)).values()];
       expect(new Set(personas.map(persona => persona.name)).size).toBe(12);
-      for (const persona of personas) expect(persona.label).toBe(`${persona.name} the ${persona.epithet}`);
+      for (const persona of personas) expect(persona.label).toBe(persona.name);
     });
 
     it('keeps existing names when a newer agent joins', () => {

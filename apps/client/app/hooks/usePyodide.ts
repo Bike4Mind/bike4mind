@@ -32,9 +32,14 @@ export function usePyodide() {
   }, []);
 
   const callFunction = useCallback(
-    async (code: string, params: Record<string, unknown> | null, packages?: string[]): Promise<PythonFunctionCall> => {
+    async (
+      code: string,
+      params: Record<string, unknown> | null,
+      packages?: string[],
+      files?: { name: string; bytes: ArrayBuffer }[]
+    ): Promise<PythonFunctionCall> => {
       const detectedPackages = packages || pyodideManager.detectPackages(code);
-      return await pyodideManager.callFunction(code, detectedPackages, params);
+      return await pyodideManager.callFunction(code, detectedPackages, params, undefined, files);
     },
     []
   );

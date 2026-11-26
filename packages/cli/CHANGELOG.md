@@ -1,5 +1,13 @@
 # @bike4mind/cli
 
+## 5.0.1
+
+### Patch Changes
+
+- [#8702](https://github.com/Bike4Mind/bike4mind/pull/8702) [`57cb747`](https://github.com/Bike4Mind/bike4mind/commit/57cb7473b476d4032b2b0f0540d7d56788264864) Thanks [@vinchi777](https://github.com/vinchi777)! - tighten shell command classification and session approvals
+
+- [#8750](https://github.com/Bike4Mind/bike4mind/pull/8750) [`2244e8c`](https://github.com/Bike4Mind/bike4mind/commit/2244e8cfa4a77790f8db454748f48c2bdd3a12e0) Thanks [@vinchi777](https://github.com/vinchi777)! - keep prompt text, summaries and credentials out of logs and analytics
+
 ## 5.0.0
 
 ### Major Changes

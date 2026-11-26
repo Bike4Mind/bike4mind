@@ -1,6 +1,12 @@
-import { getAbortAwareRetrySignal, reportUsageOnAbort, retryAbortAware } from './abortAwareRetry';
+import {
+  assertMeasuredProviderUsage,
+  getAbortAwareRetrySignal,
+  reportUsageOnAbort,
+  retryAbortAware,
+} from './abortAwareRetry';
 import {
   BadRequestError,
+  EmptyConversationError,
   ChatModels,
   IMessage,
   ImageModels,
@@ -17,6 +23,7 @@ import {
 } from '@bike4mind/common';
 import { stripToolDependentMessages } from './toolPairingUtils';
 import { assertEvaluationTextWire, assertEvaluationWireBound } from './evaluationTextWire';
+import { matchesOpenAIResponseModel } from './openaiModelIdentity';
 import { reconcileAfterDispatch } from './evaluationReconcile';
 import { appendCacheInclusiveTurn, cachedTokensFromUsage, splitCacheInclusiveInput } from './cacheInclusiveUsage';
 import { addReasoningTokens, reasoningTokensField, reasoningTokensFromUsage } from './reasoningTokens';
@@ -33,6 +40,7 @@ import type {
 } from 'openai/resources/responses/responses';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
+import { recordProviderCredentialUse } from './providerCredentialMetrics';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import { attachPreToolText } from './replayPreToolText';
 import { logToolRound, summarizeToolOutcomes } from './toolRoundTiming';
@@ -1112,10 +1120,11 @@ export class OpenAIBackend implements ICompletionBackend {
     toolsUsed: Array<RecordableToolUse> = []
   ): Promise<void> {
     const priorToolFailure = toolsUsed.some(t => t.success === false);
-    const retrySignal = getAbortAwareRetrySignal(options);
+    const retrySignal = getAbortAwareRetrySignal(options, true);
     if (retrySignal && this.usesFederatedCredentials) {
       throw new Error('Abort-aware completion retries do not support federated credentials');
     }
+    recordProviderCredentialUse('openai', this.usesFederatedCredentials ? 'federated' : 'static');
     this.currentModel = model;
     options = {
       temperature: 0.9,
@@ -1332,6 +1341,11 @@ export class OpenAIBackend implements ICompletionBackend {
       (parameters as any).response_format = { type: 'text' };
     }
 
+    if (options.retryMode === 'single-attempt') {
+      parameters.stream = false;
+      delete parameters.stream_options;
+    }
+
     const roundStart = Date.now();
     let firstChunkAt: number | null = null;
     const evaluation = options._internal?.evaluation;
@@ -1354,6 +1368,7 @@ export class OpenAIBackend implements ICompletionBackend {
             }),
           retrySignal,
           {
+            ...(options.retryMode === 'single-attempt' ? { maxAttempts: 1 } : {}),
             onRetry: ({ error, delayMs }) => {
               this.logger.warn('Retrying OpenAI completion', { model, delayMs });
               options._internal?.turnTelemetry?.onRetry({ error, delayMs, model });
@@ -1377,6 +1392,32 @@ export class OpenAIBackend implements ICompletionBackend {
             onRetry: ({ error, delayMs }) => options._internal?.turnTelemetry?.onRetry({ error, delayMs, model }),
           }
         ).then(r => r.result);
+    if (options.retryMode === 'single-attempt' && !(response instanceof Stream)) {
+      if (!matchesOpenAIResponseModel(parameters.model, response.model))
+        throw new Error('Provider response model identity is unverified');
+      const cached = response.usage?.prompt_tokens_details?.cached_tokens;
+      assertMeasuredProviderUsage({
+        inputTokens: response.usage?.prompt_tokens,
+        outputTokens: response.usage?.completion_tokens,
+        ...(cached !== undefined ? { cacheReadInputTokens: cached } : {}),
+      });
+      if ((cached ?? 0) > (response.usage?.prompt_tokens ?? 0))
+        throw new Error('Provider response contained invalid measured cache usage');
+      if (!retrySignal?.aborted && response.usage) {
+        const measured = splitCacheInclusiveInput(response.usage.prompt_tokens, cached ?? 0);
+        await callback([], {
+          ...measured,
+          outputTokens: response.usage.completion_tokens,
+          turnUsage: appendCacheInclusiveTurn(
+            undefined,
+            response.usage.prompt_tokens,
+            cached ?? 0,
+            response.usage.completion_tokens
+          ),
+        });
+      }
+    }
+
     if (retrySignal && response instanceof Stream) {
       // Reasoning models can use an internal stream even with stream:false.
       await consumeAbortAwareChatStream(response, retrySignal, callback);
@@ -2239,7 +2280,7 @@ export class OpenAIBackend implements ICompletionBackend {
             message.content.some(block => block.type !== 'text' || Boolean(block.text?.trim()))
     );
     if (!hasEffectiveMessage) {
-      throw new BadRequestError('request must contain at least one non-empty user or assistant message');
+      throw new EmptyConversationError();
     }
     const convertedMessages = convertMessagesToOpenAIFormat(nonSystemMessages);
     const formattedMessages = convertedMessages as OpenAI.ChatCompletionMessageParam[];

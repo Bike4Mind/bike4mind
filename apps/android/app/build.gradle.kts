@@ -121,6 +121,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.ktor.client.mock)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.androidx.work.testing)
     // Declares the empty activity Compose UI tests host their content in; debug builds only.
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

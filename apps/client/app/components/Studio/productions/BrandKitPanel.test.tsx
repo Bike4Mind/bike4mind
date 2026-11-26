@@ -42,7 +42,7 @@ const composition = (productFileIds: string[]): StudioCompositionResponse =>
     title: 'Ad',
     template: 'ad_campaign',
     brief: {},
-    brandKit: { colors: [], productFileIds },
+    brandKit: { colors: [], productFileIds, characters: [] },
     shots: [],
     timeline: defaultStudioTimeline('ad_campaign'),
   }) as unknown as StudioCompositionResponse;

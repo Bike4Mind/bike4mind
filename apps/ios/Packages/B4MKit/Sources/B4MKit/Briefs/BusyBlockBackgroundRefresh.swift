@@ -24,6 +24,9 @@ public final class BusyBlockBackgroundRefresh {
   /// Must match the `BGTaskSchedulerPermittedIdentifiers` entry in AppSupport/Info.plist, which is the bundle id
   /// plus this suffix (Tools/check-entitlements-parity.sh enforces it).
   public nonisolated static let identifierSuffix = ".busy-block-refresh"
+
+  /// The task identifier for an app with this bundle id.
+  public nonisolated static func identifier(bundleID: String) -> String { bundleID + identifierSuffix }
   /// The earliest begin date asked for; the system decides the real cadence.
   public nonisolated static let interval: TimeInterval = 3600
   /// The earliest begin date while the server opt-in is off: cheap on refresh budget, still picks up a remote opt-in.
@@ -81,14 +84,17 @@ public final class BusyBlockBackgroundRefresh {
     task.expirationHandler = { [weak self] in
       run.cancel()
       Task { @MainActor in
-        guard completion.complete(success: false) else { return }
+        guard !completion.isCompleted else { return }
         self?.scheduleNext()
+        completion.complete(success: false)
       }
     }
     Task {
       let outcome = await run.value
-      guard completion.complete(success: outcome != .failed) else { return }
+      guard !completion.isCompleted else { return }
+      // Submit before completing: the system may suspend the app as soon as the task is completed.
       scheduleNext(after: outcome)
+      completion.complete(success: outcome != .failed)
     }
   }
 
@@ -107,13 +113,14 @@ public final class BusyBlockBackgroundRefresh {
 
     init(task: any BackgroundRefreshTask) { self.task = task }
 
-    /// Returns false when the task was already completed.
-    func complete(success: Bool) -> Bool {
-      guard let task else { return false }
+    var isCompleted: Bool { task == nil }
+
+    /// A no-op once the task was already completed.
+    func complete(success: Bool) {
+      guard let task else { return }
       self.task = nil
       task.expirationHandler = nil
       task.setTaskCompleted(success: success)
-      return true
     }
   }
 }

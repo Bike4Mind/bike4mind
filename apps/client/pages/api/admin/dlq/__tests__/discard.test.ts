@@ -64,11 +64,18 @@ const request = (body: Record<string, unknown>) => {
   return { req, res };
 };
 const message = { messageId: 'm1', receiptHandle: 'receipt-1', body: '{"secret":"payload"}' };
+const acquireMessages = (...found: Array<typeof message>) =>
+  h.acquire.mockResolvedValue({
+    found: found.map(m => ({ MessageId: m.messageId, ReceiptHandle: m.receiptHandle, Body: m.body })),
+    notFound: [],
+  });
 
 beforeEach(() => {
   vi.clearAllMocks();
+  acquireMessages(message);
   h.logReplay.mockResolvedValue({ id: 'log-1' });
   h.deleteFromQueue.mockResolvedValue(undefined);
+  h.changeMessageVisibility.mockResolvedValue(undefined);
   h.finalizeDiscard.mockResolvedValue(undefined);
 });
 
@@ -147,31 +154,42 @@ describe('POST /api/admin/dlq/discard', () => {
   });
 
   it('rejects a missing reason before writing or deleting', async () => {
-    const { req, res } = request({ queueLabel: 'quest', messages: [message] });
+    const { req, res } = request({ queueLabel: 'quest', messageIds: ['m1'] });
     await expect(h.post!(req, res)).rejects.toThrow('Reason required');
     expect(h.logReplay).not.toHaveBeenCalled();
     expect(h.deleteFromQueue).not.toHaveBeenCalled();
   });
 
   it.each([
-    ['whitespace-only reason', { queueLabel: 'quest', messages: [message], reason: '     ' }],
-    ['unknown queue', { queueLabel: 'nope', messages: [message], reason: 'Job obsolete' }],
-    ['no messages', { queueLabel: 'quest', messages: [], reason: 'Job obsolete' }],
-    ['too many messages', { queueLabel: 'quest', messages: Array(101).fill(message), reason: 'Job obsolete' }],
-    ['empty body', { queueLabel: 'quest', messages: [{ ...message, body: '' }], reason: 'Job obsolete' }],
+    ['whitespace-only reason', { queueLabel: 'quest', messageIds: ['m1'], reason: '     ' }],
+    ['unknown queue', { queueLabel: 'nope', messageIds: ['m1'], reason: 'Job obsolete' }],
+    ['no messageIds', { queueLabel: 'quest', messageIds: [], reason: 'Job obsolete' }],
     [
-      'empty receipt handle',
-      { queueLabel: 'quest', messages: [{ ...message, receiptHandle: '' }], reason: 'Job obsolete' },
+      'too many messageIds',
+      { queueLabel: 'quest', messageIds: Array.from({ length: 101 }, (_, i) => `m${i}`), reason: 'Job obsolete' },
+    ],
+    ['missing messageIds', { queueLabel: 'quest', reason: 'Job obsolete' }],
+    [
+      'a client-supplied messages payload',
+      { queueLabel: 'quest', messageIds: ['m1'], messages: [message], reason: 'Job obsolete' },
     ],
   ])('rejects %s with a 400 before writing or deleting', async (_name, body) => {
     const { req, res } = request(body);
     await expect(h.post!(req, res)).rejects.toBeInstanceOf(BadRequestError);
+    expect(h.acquire).not.toHaveBeenCalled();
     expect(h.logReplay).not.toHaveBeenCalled();
     expect(h.deleteFromQueue).not.toHaveBeenCalled();
   });
 
+  it('retains the body received from SQS, not one supplied by the request', async () => {
+    acquireMessages({ ...message, body: '{"from":"sqs"}' });
+    const { req, res } = request({ queueLabel: 'quest', messageIds: ['m1'], reason: 'Job obsolete' });
+    await h.post!(req, res);
+    expect(h.logReplay).toHaveBeenCalledWith(expect.objectContaining({ messageBody: '{"from":"sqs"}' }));
+  });
+
   it('retains the body and reason before delete, and audits only metadata', async () => {
-    const { req, res } = request({ queueLabel: 'quest', messages: [message], reason: 'Job obsolete' });
+    const { req, res } = request({ queueLabel: 'quest', messageIds: ['m1'], reason: 'Job obsolete' });
     await h.post!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
@@ -207,8 +225,9 @@ describe('POST /api/admin/dlq/discard', () => {
         { messageId: 'first-message', receiptHandle: 'first-receipt', body: '{"work":"first"}' },
         { messageId: 'second-message', receiptHandle: 'second-receipt', body: '{"work":"second"}' },
       ];
+      acquireMessages(...messages);
       h.logReplay.mockResolvedValueOnce({ id: 'first-log' }).mockResolvedValueOnce({ id: 'second-log' });
-      const { req, res } = request({ queueLabel, messages, reason: 'Job obsolete' });
+      const { req, res } = request({ queueLabel, messageIds: messages.map(m => m.messageId), reason: 'Job obsolete' });
 
       await h.post!(req, res);
 
@@ -244,7 +263,7 @@ describe('POST /api/admin/dlq/discard', () => {
 
   it('never deletes when the body cannot be retained', async () => {
     h.logReplay.mockRejectedValue(new Error('database unavailable'));
-    const { req, res } = request({ queueLabel: 'quest', messages: [message], reason: 'Bad payload' });
+    const { req, res } = request({ queueLabel: 'quest', messageIds: ['m1'], reason: 'Bad payload' });
     await h.post!(req, res);
     expect(JSON.parse(res._getData())).toMatchObject({ discarded: 0, failed: 1 });
     expect(h.deleteFromQueue).not.toHaveBeenCalled();
@@ -252,7 +271,7 @@ describe('POST /api/admin/dlq/discard', () => {
 
   it('keeps an acknowledged deletion successful when terminal history cannot be confirmed', async () => {
     h.finalizeDiscard.mockRejectedValue(new Error('database unavailable'));
-    const { req, res } = request({ queueLabel: 'quest', messages: [message], reason: 'Bad payload' });
+    const { req, res } = request({ queueLabel: 'quest', messageIds: ['m1'], reason: 'Bad payload' });
     await h.post!(req, res);
     expect(JSON.parse(res._getData())).toMatchObject({
       discarded: 1,
@@ -270,7 +289,7 @@ describe('POST /api/admin/dlq/discard', () => {
   it('reports unconfirmed history when both deletion and failure finalization fail', async () => {
     h.deleteFromQueue.mockRejectedValue(new Error('expired receipt'));
     h.finalizeDiscard.mockRejectedValue(new Error('database unavailable'));
-    const { req, res } = request({ queueLabel: 'quest', messages: [message], reason: 'Bad payload' });
+    const { req, res } = request({ queueLabel: 'quest', messageIds: ['m1'], reason: 'Bad payload' });
     await h.post!(req, res);
     expect(JSON.parse(res._getData())).toMatchObject({
       discarded: 0,
@@ -287,10 +306,11 @@ describe('POST /api/admin/dlq/discard', () => {
       .mockResolvedValueOnce({ id: 'second' })
       .mockRejectedValueOnce(new Error('cannot retain'));
     h.deleteFromQueue.mockReset().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('expired receipt'));
+    acquireMessages(message, { ...message, messageId: 'm2' }, { ...message, messageId: 'm3' });
     const { req, res } = request({
       queueLabel: 'quest',
       reason: 'Bad payload',
-      messages: [message, { ...message, messageId: 'm2' }, { ...message, messageId: 'm3' }],
+      messageIds: ['m1', 'm2', 'm3'],
     });
     await h.post!(req, res);
     expect(JSON.parse(res._getData())).toMatchObject({ discarded: 1, failed: 2 });
@@ -301,7 +321,7 @@ describe('POST /api/admin/dlq/discard', () => {
 
   it('marks a failed delete as failed and does not audit it as discarded', async () => {
     h.deleteFromQueue.mockRejectedValue(new Error('expired receipt'));
-    const { req, res } = request({ queueLabel: 'quest', messages: [message], reason: 'Bad payload' });
+    const { req, res } = request({ queueLabel: 'quest', messageIds: ['m1'], reason: 'Bad payload' });
     await h.post!(req, res);
     expect(JSON.parse(res._getData())).toMatchObject({ discarded: 0, failed: 1 });
     expect(h.finalizeDiscard).toHaveBeenCalledWith('log-1', 'failed', 'expired receipt');
@@ -311,7 +331,7 @@ describe('POST /api/admin/dlq/discard', () => {
   it('still reports the failure and audits when marking the failed delete also fails', async () => {
     h.deleteFromQueue.mockRejectedValue(new Error('expired receipt'));
     h.finalizeDiscard.mockRejectedValue(new Error('database unavailable'));
-    const { req, res } = request({ queueLabel: 'quest', messages: [message], reason: 'Bad payload' });
+    const { req, res } = request({ queueLabel: 'quest', messageIds: ['m1'], reason: 'Bad payload' });
     await h.post!(req, res);
     expect(JSON.parse(res._getData())).toMatchObject({ discarded: 0, failed: 1 });
     expect(h.audit).toHaveBeenCalledTimes(1);
@@ -320,7 +340,8 @@ describe('POST /api/admin/dlq/discard', () => {
   it('reports each message on its own when only some deletes fail', async () => {
     h.deleteFromQueue.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('expired receipt'));
     const second = { ...message, messageId: 'm2', receiptHandle: 'receipt-2' };
-    const { req, res } = request({ queueLabel: 'quest', messages: [message, second], reason: 'Bad payload' });
+    acquireMessages(message, second);
+    const { req, res } = request({ queueLabel: 'quest', messageIds: ['m1', 'm2'], reason: 'Bad payload' });
     await h.post!(req, res);
     expect(JSON.parse(res._getData())).toMatchObject({
       discarded: 1,
@@ -381,14 +402,5 @@ describe('POST /api/admin/dlq/discard by message ID', () => {
     await expect(h.post!(req, res)).rejects.toThrow('throttled');
     expect(h.logReplay).not.toHaveBeenCalled();
     expect(h.deleteFromQueue).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['both messages and messageIds', { messages: [message], messageIds: ['m1'] }],
-    ['neither messages nor messageIds', {}],
-  ])('rejects %s', async (_name, body) => {
-    const { req, res } = request({ queueLabel: 'quest', reason: 'Job obsolete', ...body });
-    await expect(h.post!(req, res)).rejects.toThrow('Specify exactly one of messages or messageIds');
-    expect(h.acquire).not.toHaveBeenCalled();
   });
 });

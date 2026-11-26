@@ -1,4 +1,3 @@
-import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 /**
  * Global Shortcut Handlers
  *
@@ -9,7 +8,13 @@ import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import mongoose from 'mongoose';
 import { KnownBlock, WebClient } from '@slack/web-api';
 import { Logger } from '@bike4mind/observability';
-import { IChatHistoryItemDocument, ISessionDocument, IUserDocument, requireEnv } from '@bike4mind/common';
+import {
+  IChatHistoryItemDocument,
+  ISessionDocument,
+  IUserDocument,
+  requireEnv,
+  slackIdentityFilter,
+} from '@bike4mind/common';
 import { getSlackDeps, getSlackDb } from '../di/registry';
 import { NOTEBOOK_DM_BUDGET_MS, NOTEBOOK_DM_CLIENT_OPTIONS } from './notebookNotification';
 
@@ -79,7 +84,7 @@ export async function handleGlobalShortcut(
   }
 
   // Look up user if not prefetched
-  const dbUser = prefetchedUser ?? (await findUserBySlackId(user.id));
+  const dbUser = prefetchedUser ?? (await findUserBySlackId(user.id, payload.team?.id));
 
   switch (callback_id) {
     case SHORTCUT_CALLBACK_IDS.CREATE_NOTEBOOK:
@@ -100,17 +105,23 @@ export async function handleGlobalShortcut(
   }
 }
 
-/**
- * Find user by Slack ID
- */
-async function findUserBySlackId(slackUserId: string): Promise<IUserDocument | null> {
+async function findUserBySlackId(slackUserId: string, slackTeamId: string | undefined): Promise<IUserDocument | null> {
+  if (!slackTeamId) return null;
   // DI exposes models as unknown; the bound implementations are the database Mongoose models.
   const User = getSlackDb().User as mongoose.Model<IUserDocument>;
-  const user = await User.findOne({
-    'slackSettings.slackUserId': slackUserId,
-    ...VERIFIED_SLACK_IDENTITY_FILTER,
-  });
-  return user;
+  return User.findOne(slackIdentityFilter(slackUserId, slackTeamId));
+}
+
+/**
+ * True when the account named in a modal's private_metadata is the one linked to the submitting
+ * Slack member in the submitting workspace.
+ */
+function isLinkedSubmitter(dbUser: IUserDocument, slackUserId: string, slackTeamId: string | undefined): boolean {
+  return (
+    !!slackTeamId &&
+    dbUser.slackSettings?.slackUserId === slackUserId &&
+    dbUser.slackSettings?.slackTeamId === slackTeamId
+  );
 }
 
 /**
@@ -552,6 +563,7 @@ export interface ViewSubmissionPayload {
     id: string;
     name?: string;
   };
+  team?: { id?: string };
   view: {
     id?: string;
     callback_id: string;
@@ -621,7 +633,7 @@ export async function handleCreateNotebookSubmission(
 
     // SECURITY: Verify the userId from private_metadata matches the authenticated Slack user
     // This prevents attackers from modifying private_metadata to act as another user
-    if (dbUser.slackSettings?.slackUserId !== slackUser.id) {
+    if (!isLinkedSubmitter(dbUser, slackUser.id, payload.team?.id)) {
       logger.warn('[Slack Shortcut] User mismatch in create notebook submission', {
         claimedUserId: userId,
         authenticatedSlackUserId: slackUser.id,
@@ -822,6 +834,17 @@ export async function handleQuickAskSubmission(
       response_action: 'errors',
       errors: {
         question_block: 'Unable to identify workspace. Please try again.',
+      },
+    };
+  }
+
+  const dbUser = await (getSlackDb().User as mongoose.Model<IUserDocument>).findById(userId);
+  if (!dbUser || !isLinkedSubmitter(dbUser, user.id, payload.team?.id)) {
+    logger.warn('[Slack Shortcut] User mismatch in quick ask submission', { claimedUserId: userId });
+    return {
+      response_action: 'errors',
+      errors: {
+        question_block: 'Unauthorized access.',
       },
     };
   }

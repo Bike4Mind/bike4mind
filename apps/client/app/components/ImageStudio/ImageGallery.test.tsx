@@ -10,8 +10,8 @@ const h = vi.hoisted(() => ({
   files: {} as Record<string, { fileUrl?: string } | undefined>,
 }));
 
-vi.mock('@client/app/hooks/data/studioImageJobs', () => ({
-  useStudioImageJobs: () => ({
+vi.mock('@client/app/hooks/data/generationJobs', () => ({
+  useGenerationJobs: () => ({
     data: { pages: [{ data: h.jobs, next_cursor: null }] },
     isPending: false,
     isFetchNextPageError: false,

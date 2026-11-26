@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { configureSecretsAtRest } from '@bike4mind/utils/security';
+
+configureSecretsAtRest('a'.repeat(64));
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 

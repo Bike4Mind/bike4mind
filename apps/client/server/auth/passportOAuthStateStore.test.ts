@@ -24,6 +24,7 @@ import {
   PassportOAuthStateStore,
   OAUTH_NONCE_HASH_REQ_KEY,
   readOAuthInviteCode,
+  readOAuthRedirectTo,
   sanitizeOAuthInviteCode,
 } from './passportOAuthStateStore';
 import { recordTurnstileVerification, wasTurnstileVerified } from './signupChallenge';
@@ -188,6 +189,59 @@ describe('PassportOAuthStateStore', () => {
       const { token } = await callStore(store, mockReq);
       const decoded = jwt.decode(token!) as Record<string, unknown>;
       expect(decoded.redirectTo).toBeUndefined();
+    });
+  });
+
+  describe('redirectTo', () => {
+    const redirectTo = '/oauth/authorize?client_id=b4m_acme_0a1b2c3d';
+
+    it('exposes the verified redirectTo on the callback request, and clears it on a later failure', async () => {
+      const { token } = await callStore(store, nonceStoreReq({ query: { redirectTo } }));
+      const callback = { ...nonceVerifyReq };
+      expect((await callVerify(store, callback, token!)).ok).toBe(true);
+      expect(readOAuthRedirectTo(callback)).toBe(redirectTo);
+
+      const forged = jwt.sign({ ...(jwt.decode(token!) as object), redirectTo: '/other' }, 'not-the-secret');
+      expect((await callVerify(store, callback, forged)).ok).toBe(false);
+      expect(readOAuthRedirectTo(callback)).toBeNull();
+    });
+
+    it('reads null when the flow started without a redirectTo', async () => {
+      const { token } = await callStore(store, nonceStoreReq({ query: {} }));
+      const callback = { ...nonceVerifyReq };
+      expect((await callVerify(store, callback, token!)).ok).toBe(true);
+      expect(readOAuthRedirectTo(callback)).toBeNull();
+    });
+  });
+
+  it('wraps a non-Error throw from store() and verify() in an Error', async () => {
+    const throwing = (key: 'query' | 'headers') =>
+      Object.defineProperty({ headers: {} }, key, {
+        get() {
+          throw 'boom';
+        },
+      }) as unknown as Request;
+    const { token } = await callStore(store, nonceStoreReq());
+
+    const stored = await callStore(store, throwing('query'));
+    const verified = await callVerify(store, throwing('headers'), token!);
+
+    expect(stored.err).toEqual(new Error('boom'));
+    expect(verified.err).toEqual(new Error('boom'));
+    expect(verified.ok).toBe(false);
+  });
+
+  describe('callback-only overloads', () => {
+    it('stores and verifies without the metadata argument', async () => {
+      const token = await new Promise<string | undefined>(resolve =>
+        store.store(nonceStoreReq({ query: { redirectTo: '/x' } }), (_err, t) => resolve(t))
+      );
+      const callback = { ...nonceVerifyReq };
+      const ok = await new Promise<boolean | undefined>(resolve =>
+        store.verify(callback, token!, (_err, verified) => resolve(verified as boolean))
+      );
+      expect(ok).toBe(true);
+      expect(readOAuthRedirectTo(callback)).toBe('/x');
     });
   });
 

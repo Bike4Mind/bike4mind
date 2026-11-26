@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { encryptSecret, generateEncryptionKey } from '@bike4mind/utils/security';
+import { encryptSecret, generateEncryptionKey, configureSecretsAtRest } from '@bike4mind/utils/security';
 
 type Handler = (req: unknown, res: unknown) => Promise<unknown>;
 
@@ -86,6 +86,7 @@ describe.each([
     const previousKey = generateEncryptionKey();
     h.config.SECRET_ENCRYPTION_KEY = generateEncryptionKey();
     h.config.SECRET_ENCRYPTION_KEY_PREVIOUS = previousKey;
+    configureSecretsAtRest(h.config.SECRET_ENCRYPTION_KEY, h.config.SECRET_ENCRYPTION_KEY_PREVIOUS);
     h.connectionRepo.findByOrganizationIdAny.mockResolvedValue({ ...spec.connection });
     h.connectionRepo.findByOrganizationIdAnyWithCredentials.mockResolvedValue({
       ...spec.connection,

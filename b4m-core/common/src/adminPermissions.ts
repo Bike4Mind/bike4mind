@@ -136,6 +136,11 @@ export function isFullAdmin(user: AdminIdentity | null | undefined): boolean {
   return user?.isAdmin === true;
 }
 
+/** For actions no delegated permission covers. `action` completes "Only full administrators can <action>". */
+export function assertFullAdmin(actor: AdminIdentity | null | undefined, action: string): void {
+  if (!isFullAdmin(actor)) throw new ForbiddenError(`Only full administrators can ${action}`);
+}
+
 export function missingAdminPermissionMessage(requirement: AdminPermissionRequirement): string {
   return `Missing permission: ${typeof requirement === 'string' ? requirement : requirement.join(' or ')}`;
 }

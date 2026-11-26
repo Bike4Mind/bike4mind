@@ -7,7 +7,6 @@ vi.mock('@bike4mind/observability', () => ({
   Logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
-import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import { findUserBySlackId } from './user-lookup';
 
 beforeEach(() => {
@@ -16,12 +15,17 @@ beforeEach(() => {
 });
 
 describe('findUserBySlackId', () => {
-  it('only matches a link bound to a verified workspace', async () => {
-    await findUserBySlackId('U1');
+  it('only matches a link bound to the request workspace', async () => {
+    await findUserBySlackId('U1', 'T1');
 
     expect(mockFindOne).toHaveBeenCalledWith({
       'slackSettings.slackUserId': 'U1',
-      ...VERIFIED_SLACK_IDENTITY_FILTER,
+      'slackSettings.slackTeamId': 'T1',
     });
+  });
+
+  it('resolves nobody when the request carries no team', async () => {
+    expect(await findUserBySlackId('U1', undefined)).toBeNull();
+    expect(mockFindOne).not.toHaveBeenCalled();
   });
 });

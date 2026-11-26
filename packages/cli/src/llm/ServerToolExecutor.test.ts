@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ServerToolExecutor } from './ServerToolExecutor';
 import type { ApiClient } from '../auth/ApiClient';
+import { logger } from '../utils/Logger';
 
 vi.mock('../utils/Logger', () => ({
   logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
@@ -57,5 +58,24 @@ describe('ServerToolExecutor', () => {
     expect(await executorFor(post).executeTool('web_search', { query: 'q' })).toBe(
       'Error executing web_search: Validation failed'
     );
+  });
+
+  it('never writes the request credentials or input of a failed call to the log', async () => {
+    const post = vi.fn(async () => {
+      throw Object.assign(new Error('timeout of 30000ms exceeded'), {
+        code: 'ECONNABORTED',
+        config: { headers: { Authorization: 'Bearer secret-token', 'x-api-key': 'secret-key' }, data: '{"q":"x"}' },
+        toJSON() {
+          return { config: this.config };
+        },
+      });
+    });
+
+    await executorFor(post).executeTool('web_search', { query: 'q' });
+
+    const logged = JSON.stringify([vi.mocked(logger.debug).mock.calls, vi.mocked(logger.error).mock.calls]);
+    expect(logged).not.toContain('secret-token');
+    expect(logged).not.toContain('secret-key');
+    expect(logged).toContain('ECONNABORTED');
   });
 });

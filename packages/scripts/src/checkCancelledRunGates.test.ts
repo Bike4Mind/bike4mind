@@ -10,9 +10,9 @@ import { readJobCondition, readJobs } from './ciWorkflowText';
  * PR runs share a concurrency group, so a push plus a ready-for-review (or a re-run) on the same
  * SHA cancels one run with the other. `always()` is the one status-check function that stays true
  * through that cancellation, and both gates misreport there: the `test` aggregator asserts its
- * shards succeeded, sees `cancelled` and posts a false red "Run Tests"; `ci-complete` only reddens
- * on the literal `failure`, sees the unfinished legs `cancelled` and posts a false green "CI
- * Complete" - the required check - with nothing tested. `!cancelled()` still runs them in a live
+ * shards succeeded, sees `cancelled` and posts a false red "Run Tests"; `ci-complete` reports on
+ * the unfinished legs and posts a "CI Complete" result - the required check - for a run with
+ * nothing tested. `!cancelled()` still runs them in a live
  * run (so a failed shard keeps reddening both) and leaves them `cancelled` in a cancelled one.
  */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');

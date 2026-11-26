@@ -5,6 +5,7 @@ import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { setupSamlStrategy } from '@server/auth/auth';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { AuthenticateOptions } from '@node-saml/passport-saml/lib/types';
+import { issueSamlStateNonce } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 
 const ipGatedApi = baseApi({ auth: false }).use(checkBlockedIP());
 
@@ -43,7 +44,8 @@ const handler = ipGatedApi.get(async (req, res) => {
     // RelayState carries the IDP ID (to identify it in the callback) plus the
     // post-login redirect target, both round-tripped by the IdP. redirectTo is
     // sanitized client-side in /auth/success, so it rides through opaquely.
-    const relayState = new URLSearchParams({ idp: identityProvider.id });
+    // `nh` binds the response to this browser: the callback requires its nonce cookie to hash to it.
+    const relayState = new URLSearchParams({ idp: identityProvider.id, nh: issueSamlStateNonce(res) });
     if (typeof req.query.redirectTo === 'string') {
       relayState.set('redirectTo', req.query.redirectTo);
     }

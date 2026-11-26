@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { isEditable } from './ambient';
-import { inTavernDialogue } from './tavern/dialogue';
+import { inSceneDialogue } from './scene/dialogue';
 
 const OVERLAY = '[role="dialog"], [role="menu"], [role="listbox"]';
 
@@ -15,7 +15,7 @@ export type FillWindowKeyAction = 'enter' | 'exit';
 export function fillWindowKeyAction(event: KeyboardEvent, on: boolean): FillWindowKeyAction | null {
   if (event.defaultPrevented || event.repeat || event.isComposing || event.metaKey || event.ctrlKey || event.altKey)
     return null;
-  if (isEditable(event.target) || inTavernDialogue(event.target)) return null;
+  if (isEditable(event.target) || inSceneDialogue(event.target)) return null;
   const target = event.target instanceof Element ? event.target : null;
   if (target?.closest(OVERLAY)) return null;
   if (event.key === 'f' || event.key === 'F') return on ? 'exit' : 'enter';

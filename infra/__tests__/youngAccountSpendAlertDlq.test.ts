@@ -24,6 +24,24 @@ const SPEND_ALARMS = [
   { name: 'app-production-young-account-spend-rate-warn', arn: 'warn-arn' },
 ];
 
+const PROVIDER_ALARMS = {
+  openai: { name: 'app-production-provider-reported-spend-hourly-openai', arn: 'openai-arn' },
+  anthropic: { name: 'app-production-provider-reported-spend-hourly-anthropic', arn: 'anthropic-arn' },
+};
+
+const PROVIDER = {
+  environment: {
+    PROVIDER_SPEND_ALARM_NAME_OPENAI: 'app-production-provider-reported-spend-hourly-openai',
+    PROVIDER_SPEND_ALARM_NAME_ANTHROPIC: 'app-production-provider-reported-spend-hourly-anthropic',
+  },
+  permissions: [
+    {
+      actions: ['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm'],
+      resources: ['openai-arn', 'anthropic-arn'],
+    },
+  ],
+};
+
 /** Expected permissions and environment produced by that wiring. */
 const ALARMS = {
   environment: {
@@ -39,7 +57,12 @@ function output<T>(value: T) {
   return { value, apply: <Result>(callback: (input: T) => Result) => callback(value) };
 }
 
-function loadCron(source = declaration, runsScheduledJobs = true, youngAccountSpendAlarms = SPEND_ALARMS) {
+function loadCron(
+  source = declaration,
+  runsScheduledJobs = true,
+  youngAccountSpendAlarms = SPEND_ALARMS,
+  providerReportedSpendAlarms: Partial<typeof PROVIDER_ALARMS> = PROVIDER_ALARMS
+) {
   const policy = vi.fn(function (_name: string, _args: Record<string, unknown>) {});
   vi.stubGlobal('aws', { sqs: { QueuePolicy: policy } });
   vi.stubGlobal('$util', {
@@ -61,6 +84,7 @@ function loadCron(source = declaration, runsScheduledJobs = true, youngAccountSp
     youngAccountSpendAlertDeadLetter: deadLetter,
     youngAccountSpendAlertMention: MENTION,
     youngAccountSpendAlarms,
+    providerReportedSpendAlarms,
     sst: { aws: { Cron: cron } },
     lambdaVpc: {},
     allSecrets: [],
@@ -83,11 +107,16 @@ function verifyDeadLetters(source = declaration) {
       schedule: 'rate(1 hour)',
       transform: { target: { deadLetterConfig: { arn: 'spend-alert-dlq' }, input: undefined } },
       function: expect.objectContaining({
-        environment: expect.objectContaining({ ...MENTION.environment, ...ALARMS.environment }),
+        environment: expect.objectContaining({
+          ...MENTION.environment,
+          ...ALARMS.environment,
+          ...PROVIDER.environment,
+        }),
         permissions: [
           { actions: ['sqs:SendMessage'], resources: ['spend-alert-dlq'] },
           ...MENTION.permissions,
           ...ALARMS.permissions,
+          ...PROVIDER.permissions,
         ],
         transform: { function: { deadLetterConfig: { targetArn: 'spend-alert-dlq' } } },
       }),
@@ -152,16 +181,37 @@ describe('young-account spend alert failure recovery', () => {
           YOUNG_ACCOUNT_SPEND_ALARM_NAME: '',
           YOUNG_ACCOUNT_SPEND_WARN_ALARM_NAME: '',
         },
-        permissions: [{ actions: ['sqs:SendMessage'], resources: ['spend-alert-dlq'] }, ...MENTION.permissions],
+        permissions: [
+          { actions: ['sqs:SendMessage'], resources: ['spend-alert-dlq'] },
+          ...MENTION.permissions,
+          ...PROVIDER.permissions,
+        ],
       });
     }
   );
+
+  it('omits provider spend alarm management on a stage without those alarms', () => {
+    const { configuration } = loadCron(declaration, true, SPEND_ALARMS, {});
+    expect(configuration?.function).toMatchObject({
+      environment: { PROVIDER_SPEND_ALARM_NAME_OPENAI: '', PROVIDER_SPEND_ALARM_NAME_ANTHROPIC: '' },
+      permissions: [
+        { actions: ['sqs:SendMessage'], resources: ['spend-alert-dlq'] },
+        ...MENTION.permissions,
+        ...ALARMS.permissions,
+      ],
+    });
+  });
 
   it.each([
     ['youngAccountSpendPageAlarm.name', "''"],
     ['youngAccountSpendWarnAlarm.name', "''"],
     ['youngAccountSpendAlarms.map(alarm => alarm.arn)', "['unrelated-alarm-arn']"],
     ["['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm']", "['cloudwatch:DescribeAlarms']"],
+    ['providerReportedSpendAlarms.openai?.name', "''"],
+    ['providerReportedSpendAlarms.anthropic?.name', "''"],
+    ['providerSpendAlarmList.map(alarm => alarm.arn)', "['unrelated-alarm-arn']"],
+    ['...providerSpendAlarmArgs.environment,', ''],
+    ['...providerSpendAlarmArgs.permissions,', ''],
   ])('rejects broken threshold-override wiring: %s', (wiring, replacement) => {
     expect(declaration).toContain(wiring);
     expect(() => verifyDeadLetters(declaration.replace(wiring, replacement))).toThrow();

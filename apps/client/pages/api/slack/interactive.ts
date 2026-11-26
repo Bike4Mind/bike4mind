@@ -1,4 +1,4 @@
-import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
+import { slackIdentityFilter } from '@bike4mind/common';
 import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
@@ -10,12 +10,11 @@ import { cleanupConfluencePageContent } from '@server/integrations/atlassian/con
 import { WebClient, type Block, type KnownBlock } from '@slack/web-api';
 import { User, Quest, Session, connectDB, sessionRepository } from '@bike4mind/database';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
-import { SlackDevWorkspace } from '@bike4mind/database/infra';
 import { createSession } from '@bike4mind/server-utils/managers/sessionManager';
 import { Logger } from '@bike4mind/observability';
 import { withRequestLogger } from '@server/middlewares/requestLogger';
 import { NextApiRequest, NextApiResponse } from 'next';
-import { Config, isDevelopment } from '@bike4mind/server-utils/utils/config';
+import { Config } from '@bike4mind/server-utils/utils/config';
 import { invokeMcpHandler } from '@bike4mind/server-utils/utils/invokeMcpHandler';
 import { getMcpToolText, isMcpToolError } from '@server/utils/isMcpToolError';
 import {
@@ -61,7 +60,7 @@ import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import { McpServer } from '@bike4mind/database/ai';
-import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
+import { resolveSlackInstallation } from '@server/slack/resolveSlackInstallation';
 import { ImageModels, IUserDocument, McpServerName, SLACK_API_POST_EVENT_TYPE } from '@bike4mind/common';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
 import { buildSlackInteractiveActionRegistry } from '@bike4mind/server-utils/integrations/slack/interactiveActionRegistry';
@@ -154,11 +153,9 @@ type SlackViewStateValues = Record<
   Record<string, { value?: string; selected_option?: { value: string } } | undefined> | undefined
 >;
 
-async function findUserBySlackId(slackUserId: string) {
-  const user = await User.findOne({
-    'slackSettings.slackUserId': slackUserId,
-    ...VERIFIED_SLACK_IDENTITY_FILTER,
-  });
+async function findUserBySlackId(slackUserId: string, slackTeamId: string | undefined) {
+  if (!slackTeamId) return null;
+  const user = await User.findOne(slackIdentityFilter(slackUserId, slackTeamId));
   return user;
 }
 
@@ -583,7 +580,7 @@ async function handleInteractiveAction(
 
     if (action.action_id === 'app_home_settings') {
       // Use prefetched user (queried in parallel with workspace lookup) to save time
-      const dbUser = prefetchedUser ?? (await findUserBySlackId(user.id));
+      const dbUser = prefetchedUser ?? (await findUserBySlackId(user.id, payload.team?.id));
 
       if (trigger_id && botToken) {
         const settingsBlocks = dbUser
@@ -633,7 +630,7 @@ async function handleInteractiveAction(
 
     // Handle org defaults and channel config actions (admin-only, require trigger_id for modals)
     if (action.action_id === 'org_defaults_edit') {
-      return await handleOrgDefaultsEdit(user.id, trigger_id, botToken);
+      return await handleOrgDefaultsEdit(user.id, payload.team?.id, trigger_id, botToken);
     }
 
     if (action.action_id === 'channel_config_add') {
@@ -683,7 +680,7 @@ async function handleInteractiveAction(
   }
 
   // Find the user in our system (required for other actions)
-  const dbUser = await findUserBySlackId(user.id);
+  const dbUser = await findUserBySlackId(user.id, payload.team?.id);
   if (!dbUser) {
     Logger.error('[Slack Interactive] User not found', { slackUserId: user.id });
     return {
@@ -1997,42 +1994,35 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
   // Start user lookup early for app_home_settings (parallelize with workspace lookup)
   // This helps stay within trigger_id's 3-second expiration window
   const userLookupPromise =
-    actionId === 'app_home_settings' && slackUserId ? findUserBySlackId(slackUserId) : Promise.resolve(null);
+    actionId === 'app_home_settings' && slackUserId ? findUserBySlackId(slackUserId, teamId) : Promise.resolve(null);
 
-  // Find workspace with all credentials in a single query for speed (trigger_id expires in 3s)
-  let workspace = null;
-
-  if (apiAppId) {
-    workspace = await SlackDevWorkspace.findOne({ slackAppId: apiAppId, isActive: true }).select(
-      '+slackClientId +slackClientSecret +slackOAuthSigningSecret +slackBotToken slackBotName'
-    );
-  }
-
-  // Fallback: find by team_id
-  if (!workspace && teamId) {
-    workspace = await SlackDevWorkspace.findOne({ slackTeamId: teamId, isActive: true }).select(
-      '+slackClientId +slackClientSecret +slackOAuthSigningSecret +slackBotToken slackBotName'
-    );
-  }
-
-  // Fallback to first active workspace if not found (dev mode only for testing)
-  if (!workspace && isDevelopment()) {
-    workspace = await SlackDevWorkspace.findOne({ isActive: true }).select(
-      '+slackClientId +slackClientSecret +slackOAuthSigningSecret +slackBotToken slackBotName'
-    );
-  }
+  const resolved = await resolveSlackInstallation(apiAppId, teamId);
 
   // Await user lookup that was started in parallel
   const prefetchedUser = await userLookupPromise;
 
-  if (!workspace) {
-    Logger.error('[Slack Interactive] No Slack workspace found', { teamId, apiAppId });
-    return res.status(500).json({
+  if (!resolved.ok) {
+    Logger.error('[Slack Interactive] No Slack installation found', { teamId, apiAppId, reason: resolved.reason });
+    return res.status(resolved.reason === 'not_found' || resolved.reason === 'missing_ids' ? 404 : 500).json({
       error: 'Slack workspace not configured. Please create a Slack app via the admin panel.',
     });
   }
 
-  const signingSecret = workspace.slackOAuthSigningSecret;
+  const installation = resolved.installation;
+  const workspace =
+    installation.kind === 'dev'
+      ? {
+          id: installation.workspace.id,
+          name: installation.workspace.name,
+          slackBotName: installation.workspaceWithCreds.slackBotName,
+        }
+      : {
+          id: installation.orgWorkspace.id,
+          name: installation.orgWorkspace.slackTeamName || installation.appWorkspace.name,
+          slackBotName: installation.appWorkspace.slackBotName,
+        };
+
+  const signingSecret = installation.signingSecret;
   if (!signingSecret) {
     Logger.error('[Slack Interactive] Signing secret not configured for workspace', {
       workspaceId: workspace.id,
@@ -2105,7 +2095,7 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
     });
 
     const appName = workspace.slackBotName || workspace.name;
-    const botToken = decryptToken(workspace.slackBotToken) ?? '';
+    const botToken = installation.botToken;
     Logger.info('[Slack Interactive] Calling handler', {
       hasBotToken: !!botToken,
       hasPrefetchedUser: !!prefetchedUser,

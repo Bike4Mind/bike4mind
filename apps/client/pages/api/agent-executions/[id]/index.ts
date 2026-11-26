@@ -40,7 +40,7 @@ const handler = baseApi().get(async (req: Request<{ id: string }>, res) => {
   // payload would exceed the API Gateway frame budget. Background children are
   // filtered out by query: they surface via the header badge, not inline
   // nesting.
-  const children = await buildChildExecutionSnapshots(id);
+  const children = await buildChildExecutionSnapshots(id, { isOwner: trace.isOwner });
 
   return res.json({
     id,

@@ -104,6 +104,22 @@ describe('buildSystemPromptText', () => {
     expect(JSON.stringify(buildSystemPromptText(tagged))).not.toContain('proprietary');
   });
 
+  it('withholds the text of the data-lake prompts in play while still reporting the source', () => {
+    const tagged = buildTaggedContextMessages({
+      knowledgeRetrieval: [sys('[Data Lake - Handbook]\neditor-only lake instructions')],
+      dateContext: [sys('today')],
+    });
+
+    const disclosure = buildSystemPromptText(tagged);
+    expect(blockNamed(disclosure, 'knowledge_retrieval')).toEqual({
+      source: 'session',
+      name: 'knowledge_retrieval',
+      redacted: true,
+      placement: 'system',
+    });
+    expect(JSON.stringify(disclosure)).not.toContain('editor-only lake instructions');
+  });
+
   it('discloses caller-supplied extra context, which is the caller own content coming back', () => {
     const tagged = buildTaggedContextMessages({ extraContext: [sys('slack thread')] });
 

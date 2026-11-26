@@ -189,7 +189,7 @@ import {
   generatedMediaPurgeQueueSubscription,
 } from './queues';
 import { imageProcessor } from './functions';
-import { chatCompletion } from './chatCompletion';
+import { chatCompletion, chatCompletionSharedOriginUrl } from './chatCompletion';
 import { searxngUrl } from './searxng';
 import { router, routerDistributionId, cdnUrlForLambdaEnv, appUrlForLambdaEnv, originVerifySecret } from './router';
 import { allSecrets } from './secrets';
@@ -199,6 +199,7 @@ import { lambdaVpc } from './vpc';
 import { wafLabelForwarding, wafQueryWebAclArn, wafReadPermissions, wafWebAclArn } from './waf';
 import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
 import { callableFunctionDataForWeb } from './callableFunctionData';
+import { previewSleepForWeb } from './previewSleep';
 
 // Every queue this stage creates, by SST's physical-name prefix. SST keeps `${app}-${stage}-`
 // in front of a queue name only while app + stage + logical name + 2 fit in 71 characters (SQS's
@@ -608,10 +609,12 @@ export const web = new sst.aws.Nextjs(
       // The dispatcher for callable functions: it stores data files and signs the runtime's read links. The bucket
       // policy refuses these to every other principal (infra/callableFunctionDataPolicy.ts).
       ...callableFunctionDataForWeb.permissions,
+      ...previewSleepForWeb.permissions,
     ],
     environment: {
       ...mailBodyEnvironment(appFilesBucket),
       ...callableFunctionDataForWeb.environment,
+      ...previewSleepForWeb.environment,
       ...DEFAULT_LAMBDA_ENVIRONMENT,
       B4M_DEPLOYED_REVISION: process.env.B4M_DEPLOYED_REVISION || '',
       B4M_BUILD_FINGERPRINT: process.env.B4M_BUILD_FINGERPRINT || '',
@@ -666,6 +669,8 @@ export const web = new sst.aws.Nextjs(
       // block). Hosted deploys leave it empty (CloudFront routes the same-origin path);
       // self-host operators set CHAT_COMPLETION_PUBLIC_URL to the service's published origin.
       CHAT_COMPLETION_PUBLIC_URL: $dev ? 'http://localhost:8788' : process.env.CHAT_COMPLETION_PUBLIC_URL || '',
+      // Previews on the shared load balancer: the linked Resource.ChatCompletion.url is empty there.
+      ...(chatCompletionSharedOriginUrl ? { CHAT_COMPLETION_ORIGIN_URL: chatCompletionSharedOriginUrl } : {}),
       // Brand name + marketing URL inlined into the client bundle at build time; no brand
       // fallback (issue #9310). Empty == client renders without a product name / external links.
       NEXT_PUBLIC_APP_NAME: process.env.APP_NAME || '',

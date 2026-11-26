@@ -52,10 +52,11 @@ export type Pose = 'work' | 'call' | 'rest' | 'ko' | 'idle';
 export const TAVERN_BACKDROP: string = backdrop;
 
 /**
- * The cast, one entry per character sheet (see the assets README). `craft` is the kind of work the
- * character looks the part for, so an agent doing that work is given them first when they are free.
+ * The cast, one entry per character sheet (see the assets README), in `char-<n>-*` order. `craft` is the
+ * kind of work the character looks the part for, so an agent doing that work is given them first when
+ * they are free.
  */
-const CAST = [
+export const TAVERN_CAST = [
   {
     look: 'dwarf smith',
     craft: 'Tinkerer',
@@ -97,25 +98,6 @@ const CAST = [
     sprites: { work: char8Work, call: char8Call, rest: char8Rest, ko: char8Ko, idle: char8Idle },
   },
 ] as const satisfies readonly { look: string; craft: Epithet; sprites: Record<Pose, string> }[];
-
-/** 1-based, matching the `char-<id>-*` file names. */
-export type CharacterId = number;
-
-export const CHARACTER_COUNT = CAST.length;
-
-export function characterCraft(character: CharacterId): Epithet {
-  return castMember(character).craft;
-}
-
-export function characterSprite(character: CharacterId, pose: Pose): string {
-  return castMember(character).sprites[pose];
-}
-
-function castMember(character: CharacterId) {
-  const member = CAST[character - 1];
-  if (!member) throw new Error(`no tavern character ${character}`);
-  return member;
-}
 
 export type InnkeeperPose = 'idle' | 'writing' | 'reading' | 'walking' | 'cheering';
 

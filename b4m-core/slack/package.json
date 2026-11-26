@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/slack",
-  "version": "8.0.0",
+  "version": "8.0.5",
   "publishConfig": {
     "access": "restricted"
   },

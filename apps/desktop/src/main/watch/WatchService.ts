@@ -18,7 +18,7 @@ export type WatchSources = {
   /** Every session's current status: the snapshot `chat:get-session-statuses` serves. */
   sessionStatuses(): ChatSessionStatusEvent[];
   sessionMessages(sessionId: string): Promise<readonly ChatMessage[]>;
-  /** The approval gate's own resolve: the one `chat:respond-to-approval` calls. */
+  /** The approval gate's own resolve: the one the host server's request/respond calls. */
   resolveApproval(approvalId: string, answer: ChatApprovalAnswer): unknown;
   warn(message: string): void;
   now?(): number;

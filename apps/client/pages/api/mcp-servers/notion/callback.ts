@@ -13,15 +13,15 @@ import crypto from 'crypto';
 import { IntegrationAuditLogger } from '@bike4mind/server-utils/integrations/integrationAuditLogger';
 import { encryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { oauthProviderErrorCode } from '@server/utils/auth/oauthProviderErrorCode';
+import { clearStateNonce, NONCE_SLOT, readStateNonceHash } from '@bike4mind/server-utils/auth/oauthFlowCookie';
+import { appendSetCookie } from '@bike4mind/server-utils/auth/refreshCookie';
 
 const OAUTH_TIMEOUT = 30000;
 const NOTION_API_TIMEOUT = 10000;
 
 /** Redirect to the integrations page with a specific error message shown as a toast. */
 function redirectWithError(res: ExpressResponse, message: string) {
-  res.setHeader('Set-Cookie', [
-    `notion_error=${encodeURIComponent(message)}; Path=/; Max-Age=60; SameSite=Lax; Secure`,
-  ]);
+  appendSetCookie(res, `notion_error=${encodeURIComponent(message)}; Path=/; Max-Age=60; SameSite=Lax; Secure`);
   return res.redirect('/profile?tab=integrations&notion=error');
 }
 
@@ -77,6 +77,9 @@ interface NotionTokenResponse {
 const handler = baseApi({ auth: false }).get(async (req, res) => {
   const { code, state, error } = req.query;
 
+  // Burn the browser-binding nonce cookie on every exit path.
+  clearStateNonce(res, NONCE_SLOT.notionConnect);
+
   const auditLogger = IntegrationAuditLogger.create(
     {
       entityType: 'oauth',
@@ -118,6 +121,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   let csrfToken: string;
   let timestamp: number;
   let signature: string;
+  let nonceHash: string;
 
   try {
     const stateData = JSON.parse(decodeURIComponent(state));
@@ -125,8 +129,9 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     csrfToken = stateData.csrfToken;
     timestamp = stateData.timestamp;
     signature = stateData.signature;
+    nonceHash = stateData.nonceHash;
 
-    if (!userId || !csrfToken || !timestamp || !signature) {
+    if (!userId || !csrfToken || !timestamp || !signature || !nonceHash) {
       throw new Error('Missing required state parameters');
     }
   } catch (parseError) {
@@ -147,7 +152,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     return redirectWithError(res, 'Notion connection failed: server configuration error. Please contact support.');
   }
   const hmac = crypto.createHmac('sha256', secret);
-  hmac.update(`${userId}:${csrfToken}:${timestamp}`);
+  hmac.update(`${userId}:${csrfToken}:${timestamp}:${nonceHash}`);
   const expectedSignature = hmac.digest('hex');
 
   if (signature !== expectedSignature) {
@@ -156,6 +161,24 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     return redirectWithError(
       res,
       'Notion authorization failed: security validation error. Please try connecting again.'
+    );
+  }
+
+  // The nonce cookie set at connect time must match the signed hash in the state, so only the
+  // browser that started the flow can complete it. Fails closed on a missing cookie.
+  if (readStateNonceHash(req, NONCE_SLOT.notionConnect) !== nonceHash) {
+    // A refresh or Back after success arrives with the cookie already burned: restate the existing
+    // connection rather than report a failure. This exchanges and grants nothing.
+    const existingUser = await userRepository.findById(userId);
+    if (existingUser?.notionConnect?.status === 'connected') {
+      auditLogger.success({ isDuplicate: true });
+      return res.redirect('/profile?tab=integrations&notion=connected');
+    }
+    req.logger.error('Notion callback browser-binding nonce validation failed', { userId });
+    auditLogger.failure('session_mismatch');
+    return redirectWithError(
+      res,
+      'Notion authorization failed: please finish connecting in the same browser you started from.'
     );
   }
 
@@ -323,7 +346,7 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
   auditLogger.success({ workspaceName: tokenData.workspace_name });
 
   // Step 5: Set cookie and redirect to profile page with success status
-  res.setHeader('Set-Cookie', [`notion_connected=true; Path=/; Max-Age=60; SameSite=Lax; Secure`]);
+  appendSetCookie(res, `notion_connected=true; Path=/; Max-Age=60; SameSite=Lax; Secure`);
   return res.redirect('/profile?tab=integrations&notion=connected');
 });
 

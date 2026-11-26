@@ -35,6 +35,7 @@ export const ADMIN_REASON_PRESETS = {
   internalAccount: ['Team member', 'Contractor or partner', 'Marked in error'],
   apiKeyRevokeAll: ['Compromised or leaked keys', 'Abuse / automated signups', 'Customer request'],
   apiKeyRotate: ['Compromised or leaked key', 'Customer request', 'Routine rotation'],
+  sreTrackingDismiss: ['Known bug', 'Testing', 'Fixed outside the SRE pipeline'],
   apiKeyModerationException: [
     'Approved security research',
     'Violence-related content is core to the product',

@@ -657,4 +657,19 @@ describe('Spider - Edge Cases', () => {
     expect(deps.publishSummarize).not.toHaveBeenCalled();
     expect(deps.publishTag).not.toHaveBeenCalled();
   });
+
+  it('keeps notebook names out of the logs', async () => {
+    const config = createJobConfig();
+
+    await processSession(createMockSession({ name: 'Private Project Name' }), config, deps);
+    const nameless = createMockSession({ name: 'Private Project Name' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (nameless as any).id = null;
+    await processSession(nameless, config, deps);
+
+    expect(deps.publishCuration).toHaveBeenCalled();
+    const logger = vi.mocked(deps.logger);
+    const logged = JSON.stringify([logger.info, logger.warn, logger.error, logger.debug].map(fn => fn.mock.calls));
+    expect(logged).not.toContain('Private Project Name');
+  });
 });

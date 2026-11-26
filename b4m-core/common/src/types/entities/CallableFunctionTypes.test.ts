@@ -83,6 +83,7 @@ describe('toCallableFunctionPublic', () => {
       [
         'approval',
         'createdAt',
+        'dataPins',
         'description',
         'enabled',
         'examples',
@@ -197,6 +198,24 @@ describe('sharing', () => {
     expect(view).toMatchObject({ status: 'pending_review', sharedVia: 'project', trustLabel: 'verified' });
     expect(view.inputs).toEqual(contract.inputs);
     expect(JSON.stringify(view)).not.toMatch(/def run|artifact-1|user-2|secret case/);
+  });
+
+  it('names the pinned data files and nothing else about them', () => {
+    const dataPin = {
+      name: 'points.csv',
+      sha256: 'c'.repeat(64),
+      bytes: 12,
+      sourceFileId: 'file-1',
+      pinnedAt: new Date('2026-01-01T00:00:00Z'),
+    };
+    const view = toCallableFunctionShared(
+      doc({ state: 'live', pin: { ...doc().pin, dataPins: [dataPin] } }),
+      'project',
+      { ownerName: 'Owner Name', reviewHash: hash, review: null }
+    );
+    expect(view.dataPins).toEqual(['points.csv']);
+    expect(JSON.stringify(view)).not.toMatch(/c{64}|file-1/);
+    expect(shared(null).dataPins).toEqual([]);
   });
 
   it('reads reviewed only while the review names the current hash and is on', () => {

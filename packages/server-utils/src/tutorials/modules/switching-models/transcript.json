@@ -1,0 +1,10 @@
+[
+  {
+    "prompt": "Suggest three names for a neighborhood book club, one line each.",
+    "reply": "Here are three options:\n\n1. **Chapter & Verse** - a friendly nod to reading together, one chapter at a time.\n2. **The Spine Society** - playful, a little bookish, easy to say at the door.\n3. **Porchlight Pages** - evokes cozy neighborhood evenings and welcoming gatherings.\n\nWant me to tailor these toward a specific genre focus (mystery, nonfiction, etc.) or a more formal/informal tone?"
+  },
+  {
+    "prompt": "Which of those suits a group that mostly reads mysteries? Pick one and say why in two sentences.",
+    "reply": "**The Spine Society** suits a mystery-focused group best: it has a slightly secretive, clever feel without being too on-the-nose. It also works across cozy mysteries, thrillers, noir, and detective fiction."
+  }
+]

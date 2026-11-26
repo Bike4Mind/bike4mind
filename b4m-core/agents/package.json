@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/agents",
-  "version": "1.8.6",
+  "version": "1.8.11",
   "publishConfig": {
     "access": "restricted"
   },

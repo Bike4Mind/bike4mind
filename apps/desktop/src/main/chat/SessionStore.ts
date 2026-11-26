@@ -145,7 +145,7 @@ export interface CreateOptions {
  */
 const SUMMARY_INDEX = '.summary-index';
 // Bump whenever summarizeSession derives a field differently, or cached summaries keep the old value.
-const SUMMARY_INDEX_VERSION = 7;
+const SUMMARY_INDEX_VERSION = 8;
 /** Per-session write records (see tools/sessionScripts), in a folder `list` skips as it is not a `.json` name. */
 const SESSION_WRITES = '.session-writes';
 const LIST_READ_CONCURRENCY = 16;
@@ -1229,8 +1229,13 @@ export class SessionStore implements SessionWritesStore {
   /** Turn Orchestrate on or off. Leaves `updatedAt` alone, as pinning does. */
   async setOrchestrate(id: string, orchestrate: boolean): Promise<ChatSessionSummary | null> {
     return this.mutate(id, session => {
-      if (orchestrate) session.orchestrate = true;
-      else delete session.orchestrate;
+      if (orchestrate) {
+        session.orchestrate = true;
+        session.orchestrator = true;
+      } else {
+        delete session.orchestrate;
+        delete session.orchestrator;
+      }
       return true;
     });
   }
@@ -1763,6 +1768,8 @@ export class SessionStore implements SessionWritesStore {
       ...(parsed.orchestrate === true && (parsed as StoredSession).orchestrateLaunch === this.launchId
         ? { orchestrate: true }
         : {}),
+      // A file from before `orchestrator` existed still says it was orchestrating when it was last written.
+      ...(parsed.orchestrator === true || parsed.orchestrate === true ? { orchestrator: true } : {}),
       ...(parsed.archived ? { archived: true } : {}),
       ...(parsed.historyEnabled ? { historyEnabled: true } : {}),
       ...(orchestrationPolicy.success && !(orchestrateExpired && !origin)

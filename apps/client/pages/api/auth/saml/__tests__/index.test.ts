@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import { createHash } from 'crypto';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 type Handler = (req: NextApiRequest, res: NextApiResponse) => Promise<unknown>;
@@ -91,6 +92,22 @@ describe('GET /api/auth/saml', () => {
     await run({ idp: 'idp-1' }).done;
 
     expect(h.authenticate).toHaveBeenCalledWith('saml-idp-1', expect.anything());
+  });
+
+  it('binds the login to this browser: a nonce cookie whose hash rides RelayState', async () => {
+    h.findByIdWithSecrets.mockResolvedValue({ id: 'idp-1', isActive: true, type: 'saml', samlConfig: {} });
+
+    const { done, res } = run({ idp: 'idp-1' });
+    await done;
+
+    const cookie = String(res.getHeader('Set-Cookie'));
+    const nonce = /^b4m_saml_nonce=([0-9a-f]+);/.exec(cookie)?.[1];
+    expect(nonce).toBeDefined();
+    expect(cookie).toContain('HttpOnly');
+    expect(cookie).toContain('SameSite=None; Secure');
+    const relayState = new URLSearchParams(h.authenticate.mock.calls[0][1].additionalParams.RelayState);
+    expect(relayState.get('idp')).toBe('idp-1');
+    expect(relayState.get('nh')).toBe(createHash('sha256').update(nonce!).digest('hex'));
   });
 
   it('still logs an unexpected strategy setup failure at error and redirects to the login page', async () => {

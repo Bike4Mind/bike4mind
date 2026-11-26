@@ -1,7 +1,7 @@
 import { sessionService, dataLakeService } from '@bike4mind/services';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
-import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
+import { decodeCursor, decodeTimeIdCursor, encodeCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
 import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import {
   adminSettingsRepository,
@@ -296,14 +296,37 @@ export const createSessionRouter = nextRouteForContract(createSessionContract).p
 });
 
 const LIST_CURSOR_SCOPE = 'v1.sessions';
+/** A separate scope, so a cursor from one listing order can never page the other. */
+const CHANGES_CURSOR_SCOPE = 'v1.sessions.changes';
 
 // Lists only the caller's OWN sessions (userId match); shared sessions stay on the SPA's
 // GET /api/sessions/shared. Paged by _id rather than lastUpdated: lastUpdated moves on every edit,
-// which would skip or repeat rows across pages.
+// which would skip or repeat rows across pages. With `updated_since` it is a change feed instead:
+// (updatedAt, _id) ascending, tombstones included, so a row edited mid-walk moves ahead of the
+// cursor and is read again rather than skipped.
 const listSessionsRouter = nextRouteForContract(listSessionsContract, {
   exemptReadsFromDailyRateLimit: true,
 }).get(async (req, res) => {
-  const { limit, cursor, search, surface, origin } = req.validatedQuery;
+  const { limit, cursor, search, surface, origin, updated_since: updatedSince } = req.validatedQuery;
+  const filters = origin ? { origin } : undefined;
+  if (updatedSince !== undefined) {
+    const after = cursor === undefined ? undefined : decodeTimeIdCursor(cursor, CHANGES_CURSOR_SCOPE);
+    const rows = await sessionRepository.listChangesByUserId({
+      userId: req.user.id,
+      search,
+      surface,
+      filters,
+      since: new Date(updatedSince),
+      after,
+      limit: limit + 1,
+    });
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    const nextCursor =
+      rows.length > limit ? encodeTimeIdCursor(CHANGES_CURSOR_SCOPE, { at: last.updatedAt, id: last.id }) : null;
+    return res.json({ data: page.map(toPublicSession), next_cursor: nextCursor });
+  }
+
   const beforeId = cursor === undefined ? undefined : decodeCursor(cursor, LIST_CURSOR_SCOPE);
   // A decoded id is client-controlled; keep a malformed one away from Mongo.
   if (beforeId !== undefined && !isValidObjectId(beforeId)) {
@@ -314,7 +337,7 @@ const listSessionsRouter = nextRouteForContract(listSessionsContract, {
     userId: req.user.id,
     search,
     surface,
-    filters: origin ? { origin } : undefined,
+    filters,
     beforeId,
     limit: limit + 1,
   });

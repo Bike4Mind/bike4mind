@@ -15,6 +15,14 @@ describe('redactSessionForClient', () => {
     expect(JSON.stringify(out)).not.toContain('PROPRIETARY');
   });
 
+  it('strips conversationContext, the digest extracted from the owner tool results', () => {
+    const input = { ...base, conversationContext: { github: { repos: [{ owner: 'acme', name: 'app' }] } } };
+    const out = redactSessionForClient(input as never);
+    expect(out).not.toHaveProperty('conversationContext');
+    expect(JSON.stringify(out)).not.toContain('acme');
+    expect(input.conversationContext).toBeDefined();
+  });
+
   it('preserves all other fields', () => {
     const out = redactSessionForClient(base);
     expect(out).toMatchObject({ id: 'sess-1', name: 'My session', userId: 'user-1' });

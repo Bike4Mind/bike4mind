@@ -233,6 +233,29 @@ describe('POST /api/voice/v2/llm-proxy/chat/completions - turn auth', () => {
   type InvokeArg = { authOrigin?: string; apiKeyId?: string };
   type ProcessArg = { body: { authOrigin?: string; apiKeyId?: string } };
 
+  it.each([false, true, undefined])(
+    'forwards only verified file admission %s to both processing paths',
+    async allowed => {
+      mockVerifyVoiceSessionToken.mockReturnValue({
+        userId: 'user-1',
+        sessionId: 'session-1',
+        organizationId: '',
+        reasoningModelId: 'test-model',
+        authOrigin: 'apiKey',
+        apiKeyId: 'key-1',
+        voiceHoldStartedAt: recentHold(),
+        fileInputsAllowed: allowed,
+      });
+      await handler(makeReq() as never, makeRes() as never);
+      expect(mockInvoke.mock.calls[0][0]).toEqual(expect.objectContaining({ fileInputsAllowed: allowed }));
+      expect(mockProcess.mock.calls[0][0]).toEqual(
+        expect.objectContaining({
+          body: expect.objectContaining({ fileInputsAllowed: allowed }),
+        })
+      );
+    }
+  );
+
   // A session-only tool reads ToolContext.authOrigin, which process() takes from its body; invoke()
   // carries it (and the key id) for the quest record.
   it('forwards the key that minted the token to invoke() and the process() body', async () => {

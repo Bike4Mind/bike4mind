@@ -25,38 +25,36 @@ vi.mock('@client/app/components/Credits/AccountSelector', () => ({
 }));
 
 import { musicJob, musicOutput } from './__test__/musicGenerationFixtures';
-import { AWAITING_OUTPUT_MAX_POLL_AGE_MS, PENDING_SCAN_POLL_MS, SOCKET_DOWN_POLL_MS } from './generationJobPolling';
+import {
+  AWAITING_OUTPUT_MAX_POLL_AGE_MS,
+  PENDING_SCAN_POLL_MS,
+  SOCKET_DOWN_POLL_MS,
+  generationJobPollInterval,
+} from './generationJobPolling';
 import { CREDITS_BALANCE_KEY } from './credits';
 import { fabFileKeys } from './fabFileKeys';
 import type { MusicGenerationList } from './musicGenerationCache';
 import { musicGenerationKeys } from './musicGenerationKeys';
-import {
-  MUSIC_GALLERY_PAGE_SIZE,
-  musicGenerationPollInterval,
-  useCancelMusicGeneration,
-  useCreateMusicGeneration,
-  useMusicGeneration,
-  useMusicGenerations,
-  useMusicModels,
-} from './musicGenerations';
+import { GENERATION_GALLERY_PAGE_SIZE, useGenerationJob, useGenerationJobs } from './generationJobs';
+import { useCancelMusicGeneration, useCreateMusicGeneration, useMusicModels } from './musicGenerations';
 import { GENERATION_RATE_LIMITED_MESSAGE } from './generationErrors';
 
 const NOW = Date.parse('2026-10-07T00:00:10.000Z');
 
-describe('musicGenerationPollInterval', () => {
+describe('generationJobPollInterval', () => {
   it('does not poll without data', () => {
-    expect(musicGenerationPollInterval(undefined, true, NOW)).toBe(false);
+    expect(generationJobPollInterval(undefined, true, NOW)).toBe(false);
   });
 
   it('polls a live job only while the socket is down', () => {
-    expect(musicGenerationPollInterval(musicJob({ state: 'running' }), false, NOW)).toBe(SOCKET_DOWN_POLL_MS);
-    expect(musicGenerationPollInterval(musicJob({ state: 'running' }), true, NOW)).toBe(false);
+    expect(generationJobPollInterval(musicJob({ state: 'running' }), false, NOW)).toBe(SOCKET_DOWN_POLL_MS);
+    expect(generationJobPollInterval(musicJob({ state: 'running' }), true, NOW)).toBe(false);
   });
 
   it('keeps polling a succeeded job with no output yet, then gives up', () => {
     const job = musicJob({ state: 'succeeded', credits: { reserved: 10, settled: 10 }, output: null });
-    expect(musicGenerationPollInterval(job, true, NOW)).toBe(SOCKET_DOWN_POLL_MS);
-    expect(musicGenerationPollInterval(job, true, NOW + AWAITING_OUTPUT_MAX_POLL_AGE_MS)).toBe(false);
+    expect(generationJobPollInterval(job, true, NOW)).toBe(SOCKET_DOWN_POLL_MS);
+    expect(generationJobPollInterval(job, true, NOW + AWAITING_OUTPUT_MAX_POLL_AGE_MS)).toBe(false);
   });
 
   it('polls a scanning song and stops for an unavailable or failed one', () => {
@@ -65,25 +63,25 @@ describe('musicGenerationPollInterval', () => {
       credits: { reserved: 10, settled: 10 },
       output: musicOutput({ availability: 'pending_scan', url: null, expires_at: null }),
     });
-    expect(musicGenerationPollInterval(scanning, true, NOW)).toBe(PENDING_SCAN_POLL_MS);
+    expect(generationJobPollInterval(scanning, true, NOW)).toBe(PENDING_SCAN_POLL_MS);
     const gone = musicJob({
       state: 'succeeded',
       credits: { reserved: 10, settled: 10 },
       output: musicOutput({ availability: 'unavailable', url: null, expires_at: null }),
     });
-    expect(musicGenerationPollInterval(gone, true, NOW)).toBe(false);
+    expect(generationJobPollInterval(gone, true, NOW)).toBe(false);
     expect(
-      musicGenerationPollInterval(musicJob({ state: 'failed', credits: { reserved: 10, settled: 0 } }), true, NOW)
+      generationJobPollInterval(musicJob({ state: 'failed', credits: { reserved: 10, settled: 0 } }), true, NOW)
     ).toBe(false);
   });
 
   it('schedules a re-sign for a ready song', () => {
     const ready = musicJob({ state: 'succeeded', credits: { reserved: 10, settled: 10 }, output: musicOutput() });
-    expect(musicGenerationPollInterval(ready, true, NOW)).toBeGreaterThan(0);
+    expect(generationJobPollInterval(ready, true, NOW)).toBeGreaterThan(0);
   });
 });
 
-describe('useMusicGeneration file list refresh', () => {
+describe("useGenerationJob('music') file list refresh", () => {
   let queryClient: QueryClient;
   const wrapper = ({ children }: { children: ReactNode }) =>
     createElement(QueryClientProvider, { client: queryClient }, children);
@@ -99,7 +97,7 @@ describe('useMusicGeneration file list refresh', () => {
     queryClient.setQueryData(musicGenerationKeys.detail('music-1'), withoutFile);
     h.get.mockResolvedValue({ data: withFile });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
-    const { result } = renderHook(() => useMusicGeneration('music-1'), { wrapper });
+    const { result } = renderHook(() => useGenerationJob('music', 'music-1'), { wrapper });
     await result.current.refetch();
     expect(invalidate).toHaveBeenCalledWith({ queryKey: fabFileKeys.own });
   });
@@ -107,7 +105,7 @@ describe('useMusicGeneration file list refresh', () => {
   it('does not invalidate on the initial load', async () => {
     h.get.mockResolvedValue({ data: withFile });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
-    const { result } = renderHook(() => useMusicGeneration('music-1'), { wrapper });
+    const { result } = renderHook(() => useGenerationJob('music', 'music-1'), { wrapper });
     await waitFor(() => expect(result.current.data).toEqual(withFile));
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: fabFileKeys.own });
   });
@@ -116,7 +114,7 @@ describe('useMusicGeneration file list refresh', () => {
     queryClient.setQueryData(musicGenerationKeys.detail('music-1'), withFile);
     h.get.mockResolvedValue({ data: withFile });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
-    const { result } = renderHook(() => useMusicGeneration('music-1'), { wrapper });
+    const { result } = renderHook(() => useGenerationJob('music', 'music-1'), { wrapper });
     await result.current.refetch();
     expect(h.get).toHaveBeenCalled();
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: fabFileKeys.own });
@@ -125,14 +123,14 @@ describe('useMusicGeneration file list refresh', () => {
   it('keeps a finished job over a refetch that was read before it finished', async () => {
     queryClient.setQueryData(musicGenerationKeys.detail('music-1'), musicJob({ state: 'succeeded' }));
     h.get.mockResolvedValue({ data: musicJob({ state: 'running', updated_at: '2026-10-07T00:01:00.000Z' }) });
-    const { result } = renderHook(() => useMusicGeneration('music-1'), { wrapper });
+    const { result } = renderHook(() => useGenerationJob('music', 'music-1'), { wrapper });
     await result.current.refetch();
     expect(h.get).toHaveBeenCalled();
     expect(queryClient.getQueryData<MusicGeneration>(musicGenerationKeys.detail('music-1'))?.state).toBe('succeeded');
   });
 });
 
-describe('useMusicGeneration error handling', () => {
+describe("useGenerationJob('music') error handling", () => {
   let queryClient: QueryClient;
   const wrapper = ({ children }: { children: ReactNode }) =>
     createElement(QueryClientProvider, { client: queryClient }, children);
@@ -152,14 +150,14 @@ describe('useMusicGeneration error handling', () => {
 
   it('does not retry a missing (404) job', async () => {
     h.get.mockRejectedValue(httpError(404));
-    const { result } = renderHook(() => useMusicGeneration('music-1'), { wrapper });
+    const { result } = renderHook(() => useGenerationJob('music', 'music-1'), { wrapper });
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(h.get).toHaveBeenCalledTimes(1);
   });
 
   it('does not retry a rate-limited (429) read', async () => {
     h.get.mockRejectedValue(httpError(429));
-    const { result } = renderHook(() => useMusicGeneration('music-1'), { wrapper });
+    const { result } = renderHook(() => useGenerationJob('music', 'music-1'), { wrapper });
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(h.get).toHaveBeenCalledTimes(1);
   });
@@ -168,7 +166,7 @@ describe('useMusicGeneration error handling', () => {
     // retryDelay: 0 keeps the retry immediate so the assertion does not depend on the backoff wall clock.
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } });
     h.get.mockRejectedValueOnce(httpError(500)).mockResolvedValue({ data: musicJob({ id: 'music-1' }) });
-    const { result } = renderHook(() => useMusicGeneration('music-1'), { wrapper });
+    const { result } = renderHook(() => useGenerationJob('music', 'music-1'), { wrapper });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(h.get).toHaveBeenCalledTimes(2);
   });
@@ -279,12 +277,14 @@ describe('music Studio hooks', () => {
     expect(h.get).toHaveBeenCalledWith('/api/v1/music-models');
   });
 
-  it('useMusicGenerations reads a page and seeds every job into its detail entry', async () => {
+  it("useGenerationJobs('music') reads a page and seeds every job into its detail entry", async () => {
     const job = musicJob({ id: 'music-7' });
     h.get.mockResolvedValue({ data: { data: [job], next_cursor: 'c2' } });
-    const { result } = renderHook(() => useMusicGenerations(), { wrapper });
+    const { result } = renderHook(() => useGenerationJobs('music'), { wrapper });
     await waitFor(() => expect(result.current.data?.pages[0].data).toEqual([job]));
-    expect(h.get).toHaveBeenCalledWith('/api/v1/music-generations', { params: { limit: MUSIC_GALLERY_PAGE_SIZE } });
+    expect(h.get).toHaveBeenCalledWith('/api/v1/music-generations', {
+      params: { limit: GENERATION_GALLERY_PAGE_SIZE },
+    });
     expect(queryClient.getQueryData(musicGenerationKeys.detail('music-7'))).toEqual(job);
     expect(result.current.hasNextPage).toBe(true);
   });
@@ -391,7 +391,7 @@ describe('music generation balance settlement', () => {
         .mockResolvedValueOnce({ data: { ...job, credits: { reserved: 10, settled: null } } })
         .mockResolvedValue({ data: job });
       const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
-      const { result } = renderHook(() => useMusicGeneration(job.id), { wrapper });
+      const { result } = renderHook(() => useGenerationJob('music', job.id), { wrapper });
 
       await act(() => result.current.refetch());
       expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ['organizations', 'user'], refetchType: 'all' });
@@ -425,7 +425,7 @@ describe('music generation balance settlement', () => {
     });
     h.get.mockResolvedValue({ data: { data: [finished], next_cursor: null } });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
-    const { result } = renderHook(() => useMusicGenerations(), { wrapper });
+    const { result } = renderHook(() => useGenerationJobs('music'), { wrapper });
     await waitFor(() => expect(result.current.data?.pages[0].data[0].state).toBe('failed'));
 
     await act(() => result.current.refetch());
@@ -446,7 +446,7 @@ describe('music generation balance settlement', () => {
       }),
     });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
-    const { result } = renderHook(() => useMusicGeneration(previous.id), { wrapper });
+    const { result } = renderHook(() => useGenerationJob('music', previous.id), { wrapper });
 
     await act(() => result.current.refetch());
 

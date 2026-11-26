@@ -34,6 +34,7 @@ import {
   type DeletionGateUser,
 } from '@bike4mind/server-utils/auth/deletionPendingGate';
 import { emailMatchesIdpDomain, IDP_EMAIL_DOMAIN_MISMATCH } from '@server/utils/auth/idpEmailDomain';
+import { samlRelayRedirectTo } from '@server/utils/auth/signupClientId';
 import { IDP_ISSUER_MISMATCH } from './samlResponseIssuer';
 
 passport.use(
@@ -366,6 +367,8 @@ export const setupSamlStrategy = (idp: {
     // legitimately carries no InResponseTo and must not be rejected outright.
     validateInResponseTo: ValidateInResponseTo.ifPresent,
     cacheProvider: samlRequestCache,
+    // The verify reads the RelayState redirectTo, so a new account can record its OAuth client.
+    passReqToCallback: true,
   };
 
   Logger.debug('Creating SAML strategy', { idpId: idp._id });
@@ -376,6 +379,7 @@ export const setupSamlStrategy = (idp: {
       new SamlStrategy(
         samlOptions,
         async (
+          req: Request,
           profile: SamlProfile | null,
           done: (err: Error | null, user?: Record<string, unknown>, info?: Record<string, unknown>) => void
         ) => {
@@ -464,13 +468,14 @@ export const setupSamlStrategy = (idp: {
             // Use the same verification logic as other OAuth providers
             const samlVerifyCallback = verifyCallback(AuthStrategy.SAML);
 
-            await samlVerifyCallback('null', 'null', standardProfile, done, authProvider);
+            await samlVerifyCallback('null', 'null', standardProfile, done, authProvider, samlRelayRedirectTo(req));
           } catch (error) {
             Logger.error('Error in SAML strategy:', error);
             done(error as Error);
           }
         },
         (
+          _req: Request,
           profile: SamlProfile | null,
           done: (err: Error | null, user?: Record<string, unknown>, info?: Record<string, unknown>) => void
         ) => {

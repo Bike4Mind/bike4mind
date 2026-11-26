@@ -13,6 +13,8 @@ actor FakeBusyBlocksAPI: BusyBlocksAPI {
   private var holdsState = false
   private var holdsSave = false
   private(set) var saveAttempts = 0
+  /// When set, `state()` throws once the calling task was cancelled, like a real network request would.
+  private var throwsWhenCancelled = false
 
   init(enabled: Bool) { stored = BusyBlocksState(enabled: enabled, blocks: []) }
 
@@ -20,6 +22,7 @@ actor FakeBusyBlocksAPI: BusyBlocksAPI {
   func failSave(with error: (any Error)?) { saveError = error }
   func holdState() { holdsState = true }
   func holdSave() { holdsSave = true }
+  func throwWhenCancelled() { throwsWhenCancelled = true }
   func stopHolding() { holdsState = false }
   func setEnabled(_ enabled: Bool) { stored = BusyBlocksState(enabled: enabled, blocks: stored.blocks) }
   func release() {
@@ -35,6 +38,7 @@ actor FakeBusyBlocksAPI: BusyBlocksAPI {
     reads += 1
     let read = stored
     if holdsState { await withCheckedContinuation { gates.append($0) } }
+    if throwsWhenCancelled { try Task.checkCancellation() }
     if let stateError { throw stateError }
     return read
   }
@@ -82,6 +86,15 @@ final class BusyBlockSyncerTests: XCTestCase {
       CalendarEventSample(start: now, end: now.addingTimeInterval(86400), isAllDay: true, availability: .busy),
       CalendarEventSample(start: now, end: now.addingTimeInterval(600), isAllDay: false, availability: .free),
     ]
+  }
+
+  /// Yields until `condition` holds, failing the test instead of hanging when it never does.
+  private func waitUntil(_ what: String, _ condition: () async -> Bool) async {
+    for _ in 0..<10_000 {
+      if await condition() { return }
+      await Task.yield()
+    }
+    XCTFail("timed out waiting for \(what)")
   }
 
   func testSyncPutsOnlyBusyTimedEventsWhenEnabled() async {
@@ -253,7 +266,7 @@ final class BusyBlockSyncerTests: XCTestCase {
     await api.holdState()
 
     let first = Task { await syncer.sync(force: true) }
-    while await api.reads == 0 { await Task.yield() }
+    await waitUntil("the state read") { await api.reads > 0 }
     let second = await syncer.sync(force: true)
     await api.release()
 
@@ -326,9 +339,9 @@ final class BusyBlockSyncerTests: XCTestCase {
       await api.holdState()
 
       let first = Task { await syncer.sync(force: true) }
-      while await api.reads == 0 { await Task.yield() }
+      await waitUntil("the state read") { await api.reads > 0 }
       let joined = Task { await syncer.syncJoiningInFlight() }
-      await Task.yield()
+      for _ in 0..<5 { await Task.yield() }
       await api.release()
 
       let joinedOutcome = await joined.value
@@ -376,7 +389,7 @@ final class BusyBlockSyncerTests: XCTestCase {
     XCTAssertEqual(syncer.lastOutcome, .skipped(.disabled))
     await api.holdState()
     let first = Task { await syncer.sync(force: true) }
-    while await api.reads < 2 { await Task.yield() }
+    await waitUntil("the second state read") { await api.reads > 1 }
     let inFlight = await syncer.sync(force: true)
     XCTAssertEqual(inFlight, .skipped(.inFlight))
     XCTAssertEqual(syncer.lastOutcome, .skipped(.disabled))
@@ -505,7 +518,7 @@ final class BusyBlockSyncerTests: XCTestCase {
     let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized), now: { [now] in now })
     await api.holdState()
     let stale = Task { await syncer.sync(force: true) }
-    while await api.reads == 0 { await Task.yield() }
+    await waitUntil("the state read") { await api.reads > 0 }
 
     syncer.sessionDidStart()
     await api.release()
@@ -523,7 +536,7 @@ final class BusyBlockSyncerTests: XCTestCase {
     let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized), now: { [now] in now })
     await api.holdState()
     let stale = Task { await syncer.sync(force: true) }
-    while await api.reads == 0 { await Task.yield() }
+    await waitUntil("the state read") { await api.reads > 0 }
 
     syncer.sessionDidStart()
     await api.stopHolding()
@@ -536,6 +549,23 @@ final class BusyBlockSyncerTests: XCTestCase {
     XCTAssertEqual(syncer.lastOutcome, .synced)
     let saves = await api.saves.count
     XCTAssertEqual(saves, 1)
+  }
+
+  func testCancellingTheCallerFailsTheSyncAndLetsTheNextOneRun() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized))
+    await api.throwWhenCancelled()
+    await api.holdState()
+    let first = Task { await syncer.sync(force: true) }
+    await waitUntil("the state read") { await api.reads > 0 }
+
+    first.cancel()
+    await api.release()
+    let cancelled = await first.value
+
+    XCTAssertEqual(cancelled, .failed)
+    let next = await syncer.sync(force: true)
+    XCTAssertEqual(next, .synced)
   }
 
   func testEnablingWithDeniedAccessRevertsTheToggleAndWritesNothing() async {

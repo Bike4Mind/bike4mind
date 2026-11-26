@@ -354,9 +354,12 @@ export class HostRuntime {
     sessionId: string,
     nestedIds: readonly string[],
     removeWorktree: boolean,
-    nestedWorktreeIds: readonly string[]
+    nestedWorktreeIds: readonly string[],
+    allowDiscard = false
   ) {
-    const result = await this.service.deleteSessionTree(sessionId, nestedIds, removeWorktree, nestedWorktreeIds);
+    const result = await this.service.deleteSessionTree(sessionId, nestedIds, removeWorktree, nestedWorktreeIds, {
+      allowDiscard,
+    });
     for (const id of result.deleted) await this.pullRequests?.().forget(id);
     return result;
   }

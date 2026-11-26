@@ -218,6 +218,23 @@ describe('GitHubService', () => {
       });
     });
 
+    describe('Octokit request log', () => {
+      it.each([
+        ['PAT', mockConnection],
+        ['GitHub App', mockAppConnection],
+      ])('%s client logs an access-loss 404 from Octokit at warn, not error', async (_, connection) => {
+        mockRepository.findByOrganizationIdWithCredentials.mockResolvedValue(connection);
+        const { Octokit } = await import('@octokit/rest');
+
+        await GitHubService.forOrganization('org-123', logger);
+        const { log } = vi.mocked(Octokit).mock.lastCall![0] as { log: { error: (msg: string) => void } };
+        log.error('GET /repos/owner/repo - 404 with id ABC in 12ms');
+
+        expect(mockLogger.warn).toHaveBeenCalled();
+        expect(mockLogger.error).not.toHaveBeenCalled();
+      });
+    });
+
     describe('forSystem', () => {
       it('should return null if no system default found', async () => {
         mockRepository.findSystemDefaultWithCredentials.mockResolvedValue(null);

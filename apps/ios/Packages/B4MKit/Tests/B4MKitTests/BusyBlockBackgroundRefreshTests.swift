@@ -27,11 +27,31 @@ private final class FakeScheduler: BackgroundRefreshScheduling, @unchecked Senda
 private final class FakeTask: BackgroundRefreshTask {
   var expirationHandler: (@Sendable () -> Void)?
   private(set) var completions: [Bool] = []
+  /// Submits already made at each completion: the system may suspend the app once a task completes.
+  private(set) var submitsAtCompletion: [Int] = []
   var onComplete: (() -> Void)?
+  private let scheduler: FakeScheduler?
+
+  init(scheduler: FakeScheduler? = nil) { self.scheduler = scheduler }
 
   func setTaskCompleted(success: Bool) {
     completions.append(success)
+    submitsAtCompletion.append(scheduler?.submits.count ?? 0)
     onComplete?()
+  }
+}
+
+/// Holds a fake sync open until `open()`, ignoring cancellation like a sync joined from another caller.
+@MainActor
+private final class SyncGate {
+  private var continuation: CheckedContinuation<Void, Never>?
+  var isWaiting: Bool { continuation != nil }
+
+  func wait() async { await withCheckedContinuation { continuation = $0 } }
+
+  func open() {
+    continuation?.resume()
+    continuation = nil
   }
 }
 
@@ -85,12 +105,13 @@ final class BusyBlockBackgroundRefreshTests: XCTestCase {
 
   func testSyncedRunCompletesSuccessfullyAndRearms() async {
     let scheduler = FakeScheduler()
-    let task = FakeTask()
+    let task = FakeTask(scheduler: scheduler)
 
     await run(refresh(scheduler) { .synced }, until: task)
 
     XCTAssertEqual(task.completions, [true])
     XCTAssertEqual(scheduler.submits.count, 1)
+    XCTAssertEqual(task.submitsAtCompletion, [1])
   }
 
   func testRunSkippedBehindAnInFlightSyncStillSucceeds() async {
@@ -155,7 +176,7 @@ final class BusyBlockBackgroundRefreshTests: XCTestCase {
 
   func testExpirationCancelsTheSyncAndCompletesOnceUnsuccessfully() async {
     let scheduler = FakeScheduler()
-    let task = FakeTask()
+    let task = FakeTask(scheduler: scheduler)
     let cancelled = expectation(description: "sync cancelled")
     let refresh = refresh(scheduler) {
       try? await Task.sleep(for: .seconds(30))
@@ -174,7 +195,50 @@ final class BusyBlockBackgroundRefreshTests: XCTestCase {
 
     XCTAssertEqual(task.completions, [false])
     XCTAssertEqual(scheduler.submits.count, 1)
+    XCTAssertEqual(task.submitsAtCompletion, [1])
     XCTAssertNil(task.expirationHandler)
+  }
+
+  func testExpirationCompletesOnceWhenTheSyncIgnoresCancelAndFinishesLater() async {
+    let scheduler = FakeScheduler()
+    let task = FakeTask(scheduler: scheduler)
+    let gate = SyncGate()
+    let refresh = refresh(scheduler) {
+      await gate.wait()
+      return .synced
+    }
+    let completed = expectation(description: "completed")
+    task.onComplete = { completed.fulfill() }
+
+    refresh.handle(task)
+    for _ in 0..<10_000 where !gate.isWaiting { await Task.yield() }
+    XCTAssertTrue(gate.isWaiting)
+    task.expirationHandler?()
+    await fulfillment(of: [completed], timeout: 2)
+    gate.open()
+    for _ in 0..<10 { await Task.yield() }
+
+    XCTAssertEqual(task.completions, [false])
+    XCTAssertEqual(scheduler.submits.count, 1)
+    XCTAssertEqual(task.submitsAtCompletion, [1])
+  }
+
+  func testExpirationAfterCompletionDoesNothing() async {
+    let scheduler = FakeScheduler()
+    let task = FakeTask()
+    let refresh = refresh(scheduler) { .synced }
+    let expire = { () -> (@Sendable () -> Void)? in
+      refresh.handle(task)
+      return task.expirationHandler
+    }()
+
+    for _ in 0..<10_000 where task.completions.isEmpty { await Task.yield() }
+    for _ in 0..<10 { await Task.yield() }
+    expire?()
+    for _ in 0..<10 { await Task.yield() }
+
+    XCTAssertEqual(task.completions, [true])
+    XCTAssertEqual(scheduler.submits.count, 1)
   }
 
   func testRunDuringAUserSaveJoinsItAndRearmsForItsOutcome() async {

@@ -50,7 +50,7 @@ export interface paths {
     };
     /**
      * Get an agent execution
-     * @description Returns the status, reasoning trace, and (once terminal) the final answer of a run started by `POST /api/v1/agent-executions`. `steps` grows while the run is in flight, so polling this endpoint is also how a REST caller follows the loop. Safe (GET) requests on this route are exempt from the per-day API-key quota: a poll consumes no daily slot, and only the per-minute burst limit applies.
+     * @description Returns the status, reasoning trace, and (once terminal) the final answer of a run started by `POST /api/v1/agent-executions`. `steps` grows while the run is in flight, so polling this endpoint is also how a REST caller follows the loop. Safe (GET) requests on this route are exempt from the per-day API-key quota: a poll consumes no daily slot, and only the per-minute burst limit applies. For a caller who only holds a share on the run's session, `observation` steps keep their place in the trace but their `content` is empty.
      */
     get: operations['getAgentExecution'];
     put?: never;
@@ -1301,7 +1301,7 @@ export interface paths {
     };
     /**
      * List sessions
-     * @description Lists the sessions you own (called "notebooks" in the product UI), newest first. Sessions shared with you are not included; read one of those by id with `GET /api/sessions/{id}`. Each item has the same shape `GET /api/sessions/{id}` returns. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`. Changing `search`, `surface` or `origin` starts a new listing, so drop the cursor when you do. An API key needs `notebooks:read` or `notebooks:write`.
+     * @description Lists the sessions you own (called "notebooks" in the product UI), newest first. Sessions shared with you are not included; read one of those by id with `GET /api/sessions/{id}`. Each item has the same shape `GET /api/sessions/{id}` returns. Cursor-paginated (see the pagination convention): pass `next_cursor` back as `cursor` until it is `null`. Changing `search`, `surface` or `origin` starts a new listing, so drop the cursor when you do. With `updated_since` it becomes a change feed for keeping a copy in sync: only sessions changed since then, oldest change first, deleted ones included with `deletedAt` set. An API key needs `notebooks:read` or `notebooks:write`.
      */
     get: operations['listSessions'];
     put?: never;
@@ -3258,7 +3258,15 @@ export interface components {
        * @enum {string}
        */
       outcome?:
-        'ok' | 'input_invalid' | 'output_invalid' | 'error' | 'timeout' | 'memory' | 'output_too_large' | 'refused';
+        | 'ok'
+        | 'input_invalid'
+        | 'output_invalid'
+        | 'error'
+        | 'timeout'
+        | 'memory'
+        | 'output_too_large'
+        | 'refused'
+        | 'data_mismatch';
       /** @description The outputs, checked against `output_schema`. */
       output?: {
         [key: string]: unknown;
@@ -3704,6 +3712,16 @@ export interface components {
       firstCreated: string;
       /** Format: date-time */
       lastUpdated: string;
+      /**
+       * Format: date-time
+       * @description When anything on the session last changed, including a rename or a delete. `lastUpdated` moves only with chat activity. Absent only on sessions older than this field.
+       */
+      updatedAt?: string;
+      /**
+       * Format: date-time
+       * @description Set only on a deleted session, which only `GET /api/v1/sessions` with `updated_since` returns.
+       */
+      deletedAt?: string;
     };
     updateSessionResponse200: {
       id: string;
@@ -3733,6 +3751,16 @@ export interface components {
       firstCreated: string;
       /** Format: date-time */
       lastUpdated: string;
+      /**
+       * Format: date-time
+       * @description When anything on the session last changed, including a rename or a delete. `lastUpdated` moves only with chat activity. Absent only on sessions older than this field.
+       */
+      updatedAt?: string;
+      /**
+       * Format: date-time
+       * @description Set only on a deleted session, which only `GET /api/v1/sessions` with `updated_since` returns.
+       */
+      deletedAt?: string;
     };
     /**
      * @example {
@@ -3797,6 +3825,16 @@ export interface components {
       firstCreated: string;
       /** Format: date-time */
       lastUpdated: string;
+      /**
+       * Format: date-time
+       * @description When anything on the session last changed, including a rename or a delete. `lastUpdated` moves only with chat activity. Absent only on sessions older than this field.
+       */
+      updatedAt?: string;
+      /**
+       * Format: date-time
+       * @description Set only on a deleted session, which only `GET /api/v1/sessions` with `updated_since` returns.
+       */
+      deletedAt?: string;
     };
     /**
      * @default {}
@@ -9970,6 +10008,16 @@ export interface components {
       firstCreated: string;
       /** Format: date-time */
       lastUpdated: string;
+      /**
+       * Format: date-time
+       * @description When anything on the session last changed, including a rename or a delete. `lastUpdated` moves only with chat activity. Absent only on sessions older than this field.
+       */
+      updatedAt?: string;
+      /**
+       * Format: date-time
+       * @description Set only on a deleted session, which only `GET /api/v1/sessions` with `updated_since` returns.
+       */
+      deletedAt?: string;
     };
     /**
      * @example {
@@ -10047,6 +10095,16 @@ export interface components {
         firstCreated: string;
         /** Format: date-time */
         lastUpdated: string;
+        /**
+         * Format: date-time
+         * @description When anything on the session last changed, including a rename or a delete. `lastUpdated` moves only with chat activity. Absent only on sessions older than this field.
+         */
+        updatedAt?: string;
+        /**
+         * Format: date-time
+         * @description Set only on a deleted session, which only `GET /api/v1/sessions` with `updated_since` returns.
+         */
+        deletedAt?: string;
       }[];
       next_cursor: string | null;
     };
@@ -10078,6 +10136,16 @@ export interface components {
       firstCreated: string;
       /** Format: date-time */
       lastUpdated: string;
+      /**
+       * Format: date-time
+       * @description When anything on the session last changed, including a rename or a delete. `lastUpdated` moves only with chat activity. Absent only on sessions older than this field.
+       */
+      updatedAt?: string;
+      /**
+       * Format: date-time
+       * @description Set only on a deleted session, which only `GET /api/v1/sessions` with `updated_since` returns.
+       */
+      deletedAt?: string;
     };
     listSessionQuestsResponse200: {
       data: {
@@ -14436,6 +14504,16 @@ export interface components {
         firstCreated: string;
         /** Format: date-time */
         lastUpdated: string;
+        /**
+         * Format: date-time
+         * @description When anything on the session last changed, including a rename or a delete. `lastUpdated` moves only with chat activity. Absent only on sessions older than this field.
+         */
+        updatedAt?: string;
+        /**
+         * Format: date-time
+         * @description Set only on a deleted session, which only `GET /api/v1/sessions` with `updated_since` returns.
+         */
+        deletedAt?: string;
       }[];
       next_cursor: string | null;
     };
@@ -16346,7 +16424,15 @@ export interface components {
        * @enum {string}
        */
       outcome:
-        'ok' | 'input_invalid' | 'output_invalid' | 'error' | 'timeout' | 'memory' | 'output_too_large' | 'refused';
+        | 'ok'
+        | 'input_invalid'
+        | 'output_invalid'
+        | 'error'
+        | 'timeout'
+        | 'memory'
+        | 'output_too_large'
+        | 'refused'
+        | 'data_mismatch';
       /** @description What the call ran on: the code, inputs, runtime, and packages, by hash and version. */
       stamp?: {
         function_id: string;
@@ -16464,7 +16550,15 @@ export interface components {
        * @enum {string}
        */
       outcome?:
-        'ok' | 'input_invalid' | 'output_invalid' | 'error' | 'timeout' | 'memory' | 'output_too_large' | 'refused';
+        | 'ok'
+        | 'input_invalid'
+        | 'output_invalid'
+        | 'error'
+        | 'timeout'
+        | 'memory'
+        | 'output_too_large'
+        | 'refused'
+        | 'data_mismatch';
       /** @description The outputs, checked against `output_schema`. */
       output?: {
         [key: string]: unknown;
@@ -16837,7 +16931,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key holds neither the `ai:chat` nor the `ai:generate` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`), or a non-admin caller sent `confidence_overrides`, or an API-key caller named built-in `tools` the billed organization does not allow (`errorCode: org_tool_not_allowed`). */
+      /** @description The API key holds neither the `ai:chat` nor the `ai:generate` scope, or it sent `file_ids` or `session_file_ids` without the `files:read` scope, or an organization-billed API key names any organization but its own (`errorCode: billing_organization_mismatch`), or a non-admin caller sent `confidence_overrides`, or an API-key caller named built-in `tools` the billed organization does not allow (`errorCode: org_tool_not_allowed`). */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -24922,7 +25016,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The request cannot run: a malformed body (`invalid_request`), something the model does not honour (`errorCode` names the first, e.g. `unsupported_size` or `missing_input`; `message` lists them all), an unknown or unavailable model (`model_unavailable`), an input file that is not yours or not found (`input_image_not_found`) or not a usable image (`unsupported_input_image`), too few credits (`insufficient_credits`), a `run` budget with too little left for every job (`run_budget_exhausted`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). */
+      /** @description The request cannot run: a malformed body (`invalid_request`), something the model does not honour (`errorCode` names the first, e.g. `unsupported_size` or `missing_input`; `message` lists them all), an unknown or unavailable model (`model_unavailable`), an input file that is not yours or not found (`input_image_not_found`) or not a usable image (`unsupported_input_image`), too few credits (`insufficient_credits`), a `run` budget with too little left for every job (`run_budget_exhausted`), or an Idempotency-Key problem (`invalid_idempotency_key`, `idempotency_key_reused`). An API key without `files:read` may only name generated images and images staged by an `ai:generate` key without `files:write`; any other file is `input_image_not_found`. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -28419,6 +28513,8 @@ export interface operations {
         surface?: string;
         /** @description Lists only sessions created through this channel. `web` also matches sessions with no recorded origin. */
         origin?: 'web' | 'api' | 'slack' | 'cli' | 'desktop' | 'agent';
+        /** @description Lists only sessions changed at or after this time, oldest change first, including deleted sessions (with `deletedAt` set) so a sync can drop its copy. Pass the latest `updatedAt` you have read, ideally minus a few minutes to absorb clock skew between servers; rows you already have come back and can be skipped. */
+        updated_since?: string;
       };
       header?: never;
       path?: never;
@@ -28426,7 +28522,7 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description One page of sessions, newest first by `id`. */
+      /** @description One page of sessions, newest first by `id`; with `updated_since`, oldest change first by `updatedAt`. */
       200: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -28496,7 +28592,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description `limit` is out of range, a filter is malformed, or `cursor` is malformed or was issued by a different endpoint. A cursor is opaque: pass back exactly the `next_cursor` you were given. */
+      /** @description `limit` is out of range, a filter is malformed, or `cursor` is malformed or was issued by a different endpoint or listing order. A cursor is opaque: pass back exactly the `next_cursor` you were given. */
       422: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -34102,7 +34198,7 @@ export interface operations {
           'application/json': components['schemas']['createVideoGenerationResponse403'];
         };
       };
-      /** @description An `inputs` file (or `input_image_file_id`) does not name an image you own (`errorCode: input_image_not_found`), or the `run` does not exist or another user or billing owner minted it (`errorCode: run_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. */
+      /** @description An `inputs` file (or `input_image_file_id`) does not name an image you own (`errorCode: input_image_not_found`), or the `run` does not exist or another user or billing owner minted it (`errorCode: run_not_found`). A nonexistent `organization_id` is `404` only for an admin caller; for anyone else it is `403`. An API key without `files:read` may only name generated images and images staged by an `ai:generate` key without `files:write`; any other file is `input_image_not_found`. */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -35812,7 +35908,7 @@ export interface operations {
           'application/json': components['schemas']['ScopeForbiddenResponse'];
         };
       };
-      /** @description An input file id is not one of your files, is deleted, or is still being scanned (`errorCode: input_file_not_found`). */
+      /** @description An input file id is not one of your files, is deleted, or is still being scanned (`errorCode: input_file_not_found`). An API key without `files:read` may only name generated files and images staged by an `ai:generate` key without `files:write`; any other file is reported the same way. */
       404: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */

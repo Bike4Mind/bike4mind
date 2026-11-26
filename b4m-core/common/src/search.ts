@@ -29,6 +29,8 @@ export const searchSchema = z.object({
  * strings a query string carries.
  */
 export const sessionSearchSchema = searchSchema.extend({
+  /** Opaque keyset cursor (a previous page's `nextCursor`); when set, `pagination.page` is ignored. */
+  cursor: z.string().min(1).max(512).optional(),
   origin: z.enum(SESSION_ORIGIN_CHANNELS).optional(),
   excludeOrigin: z.enum(SESSION_ORIGIN_CHANNELS).optional(),
   hasImages: z.union([z.boolean(), z.enum(['true', 'false']).transform(value => value === 'true')]).optional(),

@@ -5,7 +5,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 
 const h = vi.hoisted(() => ({ query: {} as Record<string, unknown>, fetchNextPage: vi.fn() }));
 
-vi.mock('@client/app/hooks/data/videoGenerations', () => ({ useVideoGenerations: () => h.query }));
+vi.mock('@client/app/hooks/data/generationJobs', () => ({ useGenerationJobs: () => h.query }));
 vi.mock('./VideoJobCard', () => ({
   default: ({ jobId }: { jobId: string }) => <div data-testid="gallery-card">{jobId}</div>,
 }));

@@ -1,10 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import type { ReferenceCutout } from '@client/app/components/Studio/capabilityFields';
-import {
-  describeStudioImageCutoutError,
-  useCreateStudioImageCutout,
-  useStudioImageJobs,
-} from '@client/app/hooks/data/studioImageJobs';
+import { useGenerationJobs } from '@client/app/hooks/data/generationJobs';
+import { describeStudioImageCutoutError, useCreateStudioImageCutout } from '@client/app/hooks/data/studioImageJobs';
 import { latchSettledCutouts, resolveCutout, type CutoutRequest } from './referenceCutouts';
 
 /**
@@ -18,7 +15,7 @@ export function useReferenceCutouts() {
   const [enabled, setEnabled] = useState<ReadonlySet<string>>(() => new Set());
   const attempts = useRef(0);
   const createCutout = useCreateStudioImageCutout();
-  const jobs = useStudioImageJobs();
+  const jobs = useGenerationJobs('image');
 
   const jobsById = useMemo(
     () => new Map((jobs.data?.pages ?? []).flatMap(page => page.data).map(job => [job.id, job])),

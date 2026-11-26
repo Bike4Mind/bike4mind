@@ -5,7 +5,7 @@ import {
   chatMessageResponseSchema,
   deleteSessionMessageContract,
   getSessionMessageContract,
-  redactPromptMetaForViewer,
+  redactChatMessageForViewer,
   updateChatMessageResponseSchema,
   updateSessionMessageContract,
   type IChatHistoryItem,
@@ -37,13 +37,8 @@ const getHandler = nextRouteForContract(getSessionMessageContract, { exemptReads
     if (!message) throw new NotFoundError('Message not found');
 
     // A share grant authorizes reading the conversation, not re-reading whatever the owner's tools
-    // touched on the owner's behalf - see redactPromptMetaForViewer.
-    const isOwner = session.userId === userId;
-    return respond(res, chatMessageResponseSchema, {
-      ...message,
-      pendingAction: isOwner ? message.pendingAction : undefined,
-      promptMeta: redactPromptMetaForViewer(message.promptMeta, isOwner),
-    });
+    // touched on the owner's behalf - see redactChatMessageForViewer.
+    return respond(res, chatMessageResponseSchema, redactChatMessageForViewer(message, session.userId === userId));
   }
 );
 
@@ -104,15 +99,10 @@ const putHandler = nextRouteForContract(updateSessionMessageContract).put(async 
   // Only reachable if the quest was deleted between the read above and this write.
   if (!updatedMessage) throw new NotFoundError('Message not found');
 
-  const isOwner = session.userId === userId;
   return respond(res, updateChatMessageResponseSchema, {
     success: true,
     message: 'Message updated successfully',
-    data: {
-      ...updatedMessage,
-      pendingAction: isOwner ? updatedMessage.pendingAction : undefined,
-      promptMeta: redactPromptMetaForViewer(updatedMessage.promptMeta, isOwner),
-    },
+    data: redactChatMessageForViewer(updatedMessage, session.userId === userId),
   });
 });
 

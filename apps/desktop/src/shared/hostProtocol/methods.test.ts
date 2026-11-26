@@ -53,7 +53,16 @@ const methodSamples: Record<HostMethod, { params: unknown; badParams: unknown; r
     badParams: { sessionId: 's1', archived: true, archiveChildIds: 'c1' },
     result: { summary },
   },
-  'session/delete': { params: { sessionId: 's1', removeWorktree: false }, badParams: {}, result: {} },
+  'session/delete': {
+    params: { sessionId: 's1', removeWorktree: true, allowDiscard: true },
+    badParams: { sessionId: 's1', allowDiscard: 'yes' },
+    result: {},
+  },
+  'session/deleteTree': {
+    params: { sessionId: 's1', nestedIds: ['c1'], removeWorktree: true, nestedWorktreeIds: ['c1'] },
+    badParams: { sessionId: 's1', nestedIds: 'c1' },
+    result: { deleted: ['c1'], error: 'checkout busy' },
+  },
   'session/subscribe': {
     params: { sessionId: 's1', after: cursor },
     badParams: { sessionId: 's1', after: { epoch: '' } },
@@ -134,6 +143,7 @@ describe('hostMethods', () => {
   it('lets no-argument methods omit params, and session/create start a plain chat', () => {
     expect(hostMethods['host/info'].params.safeParse(undefined).success).toBe(true);
     expect(hostMethods['session/create'].params.safeParse(undefined).success).toBe(true);
+    expect(hostMethods['fs/browse'].params.safeParse(undefined).success).toBe(true);
   });
 
   it('carries the archive question when a parent needs confirming, and rejects a malformed one', () => {
@@ -150,6 +160,16 @@ describe('hostMethods', () => {
   it('accepts the fs/browse result of a 1.0 host, which has no flags or truncation', () => {
     const legacy = { path: '/a', parent: '/', entries: [{ name: 'b', path: '/a/b', isGitRepository: false }] };
     expect(hostMethods['fs/browse'].result.safeParse(legacy).success).toBe(true);
+  });
+
+  it('accepts the session/delete params of a 1.1 client, which has no allowDiscard', () => {
+    expect(hostMethods['session/delete'].params.safeParse({ sessionId: 's1', removeWorktree: true }).success).toBe(
+      true
+    );
+  });
+
+  it('rejects a session/deleteTree result without the list of what was deleted', () => {
+    expect(hostMethods['session/deleteTree'].result.safeParse({ error: null }).success).toBe(false);
   });
 
   it('rejects a background/stop result whose process is not one', () => {

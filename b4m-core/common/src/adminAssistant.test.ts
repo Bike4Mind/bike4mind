@@ -8,15 +8,38 @@ import {
 import { getWorkspaceSurface } from './surfaces';
 
 describe('isAdminAssistantGateOpen', () => {
-  it('opens for an admin on the admin-assistant surface', () => {
-    expect(isAdminAssistantGateOpen({ surface: 'admin-assistant' }, { isAdmin: true })).toBe(true);
+  it('opens for an admin on the admin-assistant surface in their own session', () => {
+    expect(
+      isAdminAssistantGateOpen({ surface: 'admin-assistant', userId: 'admin1' }, { isAdmin: true, id: 'admin1' })
+    ).toBe(true);
   });
   it.each([
-    [{ surface: 'admin-assistant' }, { isAdmin: false }],
-    [{ surface: 'admin-assistant' }, { isAdmin: undefined }],
-    [{ surface: null }, { isAdmin: true }],
-    [{ surface: 'opti' }, { isAdmin: true }],
-    [{ surface: 'Admin-Assistant' }, { isAdmin: true }],
+    [
+      { surface: 'admin-assistant', userId: 'u1' },
+      { isAdmin: false, id: 'u1' },
+    ],
+    [
+      { surface: 'admin-assistant', userId: 'u1' },
+      { isAdmin: undefined, id: 'u1' },
+    ],
+    [
+      { surface: null, userId: 'u1' },
+      { isAdmin: true, id: 'u1' },
+    ],
+    [
+      { surface: 'opti', userId: 'u1' },
+      { isAdmin: true, id: 'u1' },
+    ],
+    [
+      { surface: 'Admin-Assistant', userId: 'u1' },
+      { isAdmin: true, id: 'u1' },
+    ],
+    [
+      { surface: 'admin-assistant', userId: 'someone-else' },
+      { isAdmin: true, id: 'admin1' },
+    ],
+    [{ surface: 'admin-assistant' }, { isAdmin: true, id: 'admin1' }],
+    [{ surface: 'admin-assistant', userId: 'admin1' }, { isAdmin: true }],
   ])('stays closed for %o / %o', (session, user) => {
     expect(isAdminAssistantGateOpen(session, user)).toBe(false);
   });

@@ -149,7 +149,7 @@ function buildResponse(
   return response;
 }
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   // rate limits all connection operations (GET/POST/PUT/DELETE) against brute-force and abuse
   .use(
     rateLimit({
