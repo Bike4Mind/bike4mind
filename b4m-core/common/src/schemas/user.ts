@@ -226,6 +226,7 @@ export const SELF_VIEW_PASSTHROUGH_FIELDS = {
   showCreditsUsed: true,
   platformEmailAddress: true,
   authorizedEmailAddresses: true,
+  releasedPlatformEmailAddresses: true,
   preferredVoice: true,
   voiceOverrideId: true,
   voiceSystemPromptOverride: true,
