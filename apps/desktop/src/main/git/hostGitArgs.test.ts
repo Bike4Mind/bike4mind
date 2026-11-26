@@ -9,6 +9,7 @@ import {
   hostGitArgs,
   hostNetworkGitArgs,
   hostWorkTreeGitArgs,
+  RepositoryFilterError,
   type ScopedConfigReader,
 } from './hostGitArgs';
 
@@ -98,6 +99,32 @@ describe('hostGitArgs', () => {
         read([['global', 'filter.lfs.clean', 'git-lfs clean']])
       );
       expect(args).toEqual(hostGitArgs(['status'], '/repo'));
+    });
+
+    it('refuses a call that writes work-tree files while a filter only the repository sets is emptied', async () => {
+      const repoOnly = read([['local', 'filter.crypt.smudge', 'git-crypt smudge']]);
+      for (const args of [
+        ['switch', 'main'],
+        ['checkout', 'main'],
+        ['worktree', 'add', '../wt', 'main'],
+        ['stash', 'pop'],
+      ]) {
+        await expect(hostWorkTreeGitArgs(args, '/repo', repoOnly)).rejects.toThrow(RepositoryFilterError);
+      }
+      // Reads, a worktree removal, and a filter the user's own config also sets still run.
+      await expect(hostWorkTreeGitArgs(['status'], '/repo', repoOnly)).resolves.toContain('filter.crypt.smudge=');
+      await expect(hostWorkTreeGitArgs(['worktree', 'remove', '../wt'], '/repo', repoOnly)).resolves.toBeDefined();
+      await expect(
+        hostWorkTreeGitArgs(
+          ['switch', 'main'],
+          '/repo',
+          read([
+            ['global', 'filter.lfs.smudge', 'git-lfs smudge -- %f'],
+            ['local', 'filter.lfs.smudge', 'touch marker'],
+            ['local', 'diff.x.textconv', 'touch marker'],
+          ])
+        )
+      ).resolves.toContain('filter.lfs.smudge=git-lfs smudge -- %f');
     });
 
     it('refuses when the settings cannot be read or a name cannot be pinned', async () => {

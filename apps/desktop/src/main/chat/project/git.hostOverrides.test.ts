@@ -42,6 +42,16 @@ describe('git host overrides', () => {
     ]);
   });
 
+  it('refuses a branch switch, without running it, while a filter only the repository sets is emptied', async () => {
+    execFile.mockImplementation((_cmd, args, _opts, cb) =>
+      args[0] === 'config' ? cb(null, 'local\0filter.x.smudge\ntouch marker\0') : cb(null, { stdout: '', stderr: '' })
+    );
+    await expect(git('/repo-filter', ['switch', '--quiet', 'main'])).rejects.toThrow(
+      expect.objectContaining({ name: 'GitError', message: expect.stringContaining('file filter') })
+    );
+    expect(execFile.mock.calls.map(([, args]) => args[0])).toEqual(['config']);
+  });
+
   it('adds the network overrides to fetch', async () => {
     execFile.mockImplementation((_cmd, args, _opts, cb) =>
       args[0] === 'config' ? cb(null, 'local\0core.sshcommand\ntouch marker\0') : cb(null, { stdout: '', stderr: '' })

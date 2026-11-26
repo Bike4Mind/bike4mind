@@ -173,12 +173,27 @@ export class UnpinnableGitConfigError extends Error {
   }
 }
 
+/** Thrown before a call that would write work-tree files while a filter only the repository config sets is emptied. */
+export class RepositoryFilterError extends Error {
+  constructor() {
+    super(
+      'This repository sets a file filter (such as git-crypt or Git LFS) only in its own git config. The app does not run it, so it will not check out files here. Use a terminal, or set the filter in your global git config.'
+    );
+    this.name = 'RepositoryFilterError';
+  }
+}
+
+/** Subcommands that write work-tree files: with an emptied filter they would write the stored bytes, not the real file. */
+const WRITES_FILES = new Set(['switch', 'checkout', 'reset', 'stash', 'merge', 'restore']);
+const FILTER_PROGRAM = /^filter\..+\.(clean|smudge|process)$/;
+
 const programReads = new Map<string, Promise<ConfigEntry[] | null>>();
 
 /**
  * hostGitArgs for a call that may read or write work-tree files: every filter, diff and merge driver setting the
  * repository's own config makes is pinned to the user's system/global value, or emptied, which git treats as no
- * program. Throws when git cannot list the settings or one cannot be pinned.
+ * program. Throws when git cannot list the settings or one cannot be pinned, and refuses a call that writes
+ * work-tree files while a filter program only the repository sets is emptied.
  */
 export async function hostWorkTreeGitArgs(
   args: readonly string[],
@@ -198,10 +213,12 @@ export async function hostWorkTreeGitArgs(
   }
   const entries = await read;
   if (entries === null) throw new UnpinnableGitConfigError();
+  const writesFiles = args[0] === 'worktree' ? args[1] === 'add' : WRITES_FILES.has(args[0] ?? '');
   const pins: string[] = [];
   for (const key of new Set(entries.filter(entry => !TRUSTED_SCOPES.has(entry.scope)).map(entry => entry.key))) {
     if (key.includes('=') || key.includes('\n')) throw new UnpinnableGitConfigError();
     const trusted = entries.filter(entry => entry.key === key && TRUSTED_SCOPES.has(entry.scope)).at(-1)?.value;
+    if (trusted === undefined && writesFiles && FILTER_PROGRAM.test(key)) throw new RepositoryFilterError();
     pins.push('-c', `${key}=${trusted ?? (key.endsWith('.required') ? 'false' : '')}`);
   }
   return [...configArgsFor(cwd, platform), ...pins, ...args];
