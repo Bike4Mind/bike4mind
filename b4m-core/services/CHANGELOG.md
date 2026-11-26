@@ -1,5 +1,19 @@
 # @bike4mind/services
 
+## 31.3.1
+
+### Patch Changes
+
+- Updated dependencies [[`4dcc1f9`](https://github.com/Bike4Mind/bike4mind/commit/4dcc1f9cee9fdddb842c844617152106f11cd001)]:
+  - @bike4mind/common@31.3.1
+  - @bike4mind/agents@1.8.10
+  - @bike4mind/auth@1.5.6
+  - @bike4mind/db-core@0.10.1
+  - @bike4mind/fab-pipeline@3.3.3
+  - @bike4mind/llm-adapters@2.10.1
+  - @bike4mind/mcp@2.2.13
+  - @bike4mind/utils@13.1.3
+
 ## 31.3.0
 
 ### Minor Changes

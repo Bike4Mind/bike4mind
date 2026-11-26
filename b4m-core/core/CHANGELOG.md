@@ -1,5 +1,12 @@
 # @bike4mind/core
 
+## 0.4.55
+
+### Patch Changes
+
+- Updated dependencies [[`4dcc1f9`](https://github.com/Bike4Mind/bike4mind/commit/4dcc1f9cee9fdddb842c844617152106f11cd001)]:
+  - @bike4mind/common@31.3.1
+
 ## 0.4.54
 
 ### Patch Changes
