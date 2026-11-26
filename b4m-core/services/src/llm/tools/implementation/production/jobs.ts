@@ -222,7 +222,7 @@ export async function submitShotImages(
       const created = shot.referencesChecking ? await untilInputReady(context, config, createAll) : await createAll();
       if (created === 'dead') return { ok: false, message: DEAD_REPLAY_MESSAGE };
       if (shot.referencesChecking && isInputNotReady(created)) {
-        return { ok: false, notReady: true, message: 'the product reference is not ready yet (its safety check)' };
+        return { ok: false, notReady: true, message: 'a reference image is not ready yet (its safety check)' };
       }
       result = created;
     } catch (error) {

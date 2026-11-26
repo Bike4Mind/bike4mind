@@ -62,7 +62,7 @@ const ShotArg = z.object({
     .optional()
     .describe(
       "The brand kit's saved characters (names or ids) who appear in this shot, most important first; their images " +
-        "become references. Defaults to the kept shot's; [] removes them."
+        "become references for new takes. Defaults to the kept shot's; [] removes them."
     ),
 });
 
