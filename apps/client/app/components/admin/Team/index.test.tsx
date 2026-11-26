@@ -23,12 +23,12 @@ vi.mock('@client/app/hooks/data/admin', () => ({
 import Team from './index';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const renderTeam = () =>
-  render(
-    <CssVarsProvider theme={appTheme}>
-      <Team />
-    </CssVarsProvider>
-  );
+const themed = () => (
+  <CssVarsProvider theme={appTheme}>
+    <Team />
+  </CssVarsProvider>
+);
+const renderTeam = () => render(themed());
 
 const members = [
   { id: 'm2', name: 'Zed Example', phone: '+1 555 000 0002' },
@@ -71,7 +71,7 @@ describe('Team', () => {
     renderTeam();
 
     expect(screen.getByTestId('admin-page-header')).toBeInTheDocument();
-    expect(screen.getByTestId('team-loading')).toHaveTextContent('Loading team members');
+    expect(screen.getByTestId('team-members-table')).toHaveAttribute('aria-busy', 'true');
   });
 
   it('shows an error state whose retry refetches the members', () => {
@@ -161,14 +161,45 @@ describe('Team', () => {
     confirmSpy.mockRestore();
   });
 
-  it('shows the page error when removal fails', async () => {
+  it('keeps the dialog open with the error when removal fails, and clears it on close', async () => {
     mocks.mutation.mutateAsync.mockRejectedValue(new Error('remove failed'));
     renderTeam();
 
     openRowAction('m2', 'delete');
     fireEvent.click(screen.getByTestId('team-member-delete-confirm-btn'));
 
-    expect(await screen.findByTestId('team-member-delete-error')).toHaveTextContent('remove failed');
+    const dialog = screen.getByTestId('team-member-delete-dialog');
+    expect(await within(dialog).findByTestId('team-member-delete-error')).toHaveTextContent('remove failed');
+
+    fireEvent.click(screen.getByTestId('team-member-delete-dialog-cancel-btn'));
     await waitFor(() => expect(screen.queryByTestId('team-member-delete-dialog')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('team-member-delete-error')).not.toBeInTheDocument();
+  });
+
+  it('moves focus to the next row after a removal', async () => {
+    mocks.mutation.mutateAsync.mockResolvedValue(undefined);
+    const { rerender } = renderTeam();
+
+    openRowAction('m1', 'delete');
+    fireEvent.click(screen.getByTestId('team-member-delete-confirm-btn'));
+    await waitFor(() => expect(screen.queryByTestId('team-member-delete-dialog')).not.toBeInTheDocument());
+
+    mocks.team.data = [members[0]];
+    rerender(themed());
+    await waitFor(() => expect(screen.getByTestId('team-member-row-m2')).toHaveFocus());
+  });
+
+  it('moves focus to the create action when the last member is removed', async () => {
+    mocks.team.data = [members[0]];
+    mocks.mutation.mutateAsync.mockResolvedValue(undefined);
+    const { rerender } = renderTeam();
+
+    openRowAction('m2', 'delete');
+    fireEvent.click(screen.getByTestId('team-member-delete-confirm-btn'));
+    await waitFor(() => expect(screen.queryByTestId('team-member-delete-dialog')).not.toBeInTheDocument());
+
+    mocks.team.data = [];
+    rerender(themed());
+    await waitFor(() => expect(screen.getByTestId('create-team-member-btn')).toHaveFocus());
   });
 });

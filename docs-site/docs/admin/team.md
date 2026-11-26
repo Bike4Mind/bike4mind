@@ -54,7 +54,7 @@ Click a team member's row, or choose **Edit** from its **...** menu, to open the
 
 ## Deleting a Team Member
 
-Choose **Remove** from a team member's **...** menu. A confirmation dialog names the member; click **Remove** to delete the entry, or **Cancel** to keep it. If the deletion fails, an error alert is displayed at the top of the team list.
+Choose **Remove** from a team member's **...** menu. A confirmation dialog names the member; click **Remove** to delete the entry, or **Cancel** to keep it. If the deletion fails, the dialog stays open with the error so you can retry or cancel.
 
 ## Best Practices
 

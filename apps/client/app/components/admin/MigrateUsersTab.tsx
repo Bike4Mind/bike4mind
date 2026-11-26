@@ -215,7 +215,7 @@ const MigrateUsersTab: React.FC = () => {
             getRowId={getUserRowId}
             onRetry={noop}
             minWidth="18rem"
-            maxHeight="none"
+            maxHeight="50vh"
             pagination={false}
           />
         </Stack>
