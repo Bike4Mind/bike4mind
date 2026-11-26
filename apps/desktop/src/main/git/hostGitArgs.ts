@@ -82,14 +82,20 @@ const PROGRAM_KEYS =
   '^(filter\\..+\\.(clean|smudge|process|required)|diff\\..+\\.(textconv|command)|merge\\..+\\.driver)$';
 
 /** `git config --show-scope --get-regexp pattern` in `directory`: [] when nothing matches, null when git could not answer. */
-async function scopedConfig(directory: string, pattern: string, keepValueless: boolean): Promise<ConfigEntry[] | null> {
+async function scopedConfig(
+  directory: string,
+  pattern: string,
+  keepValueless: boolean,
+  timeout?: number
+): Promise<ConfigEntry[] | null> {
   const env = await gitCommandEnv(directory);
   const command = await gitCommand(directory, ['config', '--show-scope', '-z', '--get-regexp', pattern]);
   return new Promise(resolve => {
     // With no git there is no call to protect; the caller's own lookup reports it.
     if (!command) return resolve([]);
     const { file, args, cwd } = command;
-    execFile(file, args, { cwd, env, timeout: quickGitTimeout(env), windowsHide: true }, (error, stdout, stderr) => {
+    const limit = timeout ?? quickGitTimeout(env);
+    execFile(file, args, { cwd, env, timeout: limit, windowsHide: true }, (error, stdout, stderr) => {
       if (error) return resolve(error.code === 1 && !error.killed && !stdout && !stderr ? [] : null);
       // `-z` output is `scope\0key\nvalue\0` per entry; a key written without `=` has no value line.
       const fields = stdout.split('\0');
@@ -113,7 +119,8 @@ const readScopedConfig: ScopedConfigReader = async directory =>
   (await scopedConfig(directory, NETWORK_KEYS, false)) ?? [];
 
 export type ProgramConfigReader = (cwd: string) => Promise<ConfigEntry[] | null>;
-const readProgramConfig: ProgramConfigReader = directory => scopedConfig(directory, PROGRAM_KEYS, true);
+// The call it guards fails without it, so it may take as long as that call would.
+const readProgramConfig: ProgramConfigReader = directory => scopedConfig(directory, PROGRAM_KEYS, true, 20_000);
 
 // Apple Git reports its bundled config (which sets the osxkeychain helper) as `unknown`.
 const TRUSTED_SCOPES = new Set(['system', 'global', 'unknown']);
