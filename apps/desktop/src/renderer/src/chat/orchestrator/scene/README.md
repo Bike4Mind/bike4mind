@@ -31,12 +31,36 @@ That is all. Do not branch on the scene id anywhere: the stage and shell read ca
 (`SceneStageInfo`), and a scene's differences live in its definition. If a scene needs something the
 schema cannot say, extend the schema and `SceneStage` so every scene can use it.
 
+## Skins: a `scenes.<id>` block per scene
+
+A skin (contract 2, `tokens.json`, shape in `sceneSkinSchema` in `src/shared/mods.ts`) restyles a scene
+the same way a scene is made: data only. Its `scenes` map holds one optional block per scene id, and each
+block may override part of that scene's definition:
+
+- `backdrop`: an image in the skin folder;
+- `cast`: sprite height, face line, the cast sheets (a list replaces the scene's), and some of the
+  host's sprites;
+- `map`: a zone's seats, overflow point and place, the door, host spot, board, reply anchor (replaces),
+  lights (replace), moon and embers;
+- `copy`: any of the scene's lines, including the stage lines and the finale title.
+
+States, aspect, occluders, ambience and look are not skinnable. `sceneSkin.ts` (`skinScene`,
+`useSkinnedScene`) is the only place a block meets a definition: objects merge key by key, lists replace,
+and the result is parsed with `sceneDefinitionSchema`. A block that breaks the scene is dropped whole,
+with one `SKINS:` warning, and the scene draws as it ships. So a skin, like a scene, can change how a
+feature looks and where it sits but never remove it. Stage copy and finale art follow the skin through
+`useSceneStageInfo` / `useSceneStageCopy` (`ViewSwitcher.tsx`). The sample skin is
+`src/shared/__fixtures__/skins/nightglass`.
+
 ## The parity guard
 
 These run against every view in group `scene`, read from the registry, so a new scene is checked
 without touching them:
 
-- `sceneParity.test.tsx`: the feature suite. Needs-you bubble and inline answers, dialogue queue, quest
+- `sceneParity.test.tsx`: the feature suite, run for each scene bare and under the nightglass skin, with
+  every expectation read off the definition as the skin draws it. Needs-you bubble and inline answers,
+  dialogue queue, opening a waiting agent from its "Needs you!" marker when the box has nothing to ask,
+  the ask bubble (the request, and its waiting, approved, denied and answered-elsewhere states), quest
   board, overflow and its keyboard menu, host and reply bubble, PR indicator, details on select, finale
   host and title, settled ambience, intro walk, pause (and `awakeUnfocused`), reduced motion, keyboard and
   `aria-pressed`, live region and summary, sticky seats, one-word names, and hundreds of agents.
