@@ -233,6 +233,37 @@ describe('PUT /api/admin/users/:userId/permissions', () => {
     expect(revoked._getJSONData()).toEqual({ adminPermissions: [], adminRoleIds: [] });
   });
 
+  it('lets a holder grant and revoke an explicit-only permission on a Super Admin who still stores other ids', async () => {
+    target({ isAdmin: true, adminPermissions: ['support:read'] });
+    const granted = await call(
+      { before: ['support:read'], adminPermissions: ['support:read', 'credits:self_grant'], reason: REASON },
+      { actor: HOLDER }
+    );
+    expect(granted._getJSONData()).toEqual({
+      adminPermissions: ['support:read', 'credits:self_grant'],
+      adminRoleIds: [],
+    });
+    expect(mocks.update.mock.calls[0][1].$set.adminPermissions).toEqual(['support:read', 'credits:self_grant']);
+
+    target({ isAdmin: true, adminPermissions: ['support:read', 'credits:self_grant'] });
+    const revoked = await call(
+      { before: ['support:read', 'credits:self_grant'], adminPermissions: ['support:read'], reason: REASON },
+      { actor: HOLDER }
+    );
+    expect(revoked._getJSONData()).toEqual({ adminPermissions: ['support:read'], adminRoleIds: [] });
+  });
+
+  it('still refuses adding a permission the flag implies to a Super Admin who stores other ids', async () => {
+    target({ isAdmin: true, adminPermissions: ['support:read'] });
+    await expect(
+      call(
+        { before: ['support:read'], adminPermissions: ['support:read', 'users:moderate'], reason: REASON },
+        { actor: HOLDER }
+      )
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
   it('refuses a full admin without credits:approve_self_grant granting it directly', async () => {
     target({ isAdmin: true, adminPermissions: [] });
     await expect(
@@ -368,6 +399,20 @@ describe('PUT /api/admin/users/:userId/permissions', () => {
         await expect(call(roles([], [APPROVERS]))).rejects.toMatchObject({ statusCode: 403 });
         expect(mocks.update).not.toHaveBeenCalled();
         await call(roles([], [APPROVERS]), { actor: HOLDER });
+        expect(mocks.update).toHaveBeenCalled();
+      } finally {
+        delete ROLES[APPROVERS];
+      }
+    });
+
+    it('refuses a non-holder removing a role that carries an explicit-only permission', async () => {
+      const APPROVERS = '660000000000000000000003';
+      ROLES[APPROVERS] = { name: 'Approvers', permissions: ['credits:approve_self_grant'] };
+      target({ isAdmin: false, adminPermissions: [], adminRoleIds: [APPROVERS] });
+      try {
+        await expect(call(roles([APPROVERS], []))).rejects.toMatchObject({ statusCode: 403 });
+        expect(mocks.update).not.toHaveBeenCalled();
+        await call(roles([APPROVERS], []), { actor: HOLDER });
         expect(mocks.update).toHaveBeenCalled();
       } finally {
         delete ROLES[APPROVERS];

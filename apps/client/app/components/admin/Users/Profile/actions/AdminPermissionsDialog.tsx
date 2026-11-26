@@ -15,7 +15,13 @@ import { useAdminRoleList, type AdminRoleListItem } from '../../useAdminRoleList
 import { useAdminUserPermissionsUpdate } from './useAdminUserPermissionsUpdate';
 import type { ProfileDialogProps } from './profileActions';
 import { ADMIN_PERMISSION_LABELS, displayName } from '../userProfileModel';
-import { describeProvenance, permissionProvenance, roleGrantBlockedReason } from '../adminAccessModel';
+import {
+  UNHELD_EXPLICIT_ONLY_HINT,
+  describeProvenance,
+  permissionProvenance,
+  roleGrantBlockedReason,
+  roleRemovalBlockedReason,
+} from '../adminAccessModel';
 
 const describeSet = (ids: readonly AdminPermissionId[]) =>
   ids.length ? ids.map(id => ADMIN_PERMISSION_LABELS[id].label).join(', ') : 'none';
@@ -138,8 +144,14 @@ export const AdminPermissionsDialog: React.FC<ProfileDialogProps> = ({ user, onC
             roles.map(role => {
               const id = role.id.toLowerCase();
               const checked = roleIds.includes(id);
-              // Removing a held role never grants anything, so only adding is gated.
-              const blocked = checked ? null : roleGrantBlockedReason(currentUser, role);
+              const blocked = checked
+                ? roleRemovalBlockedReason(currentUser, role, [
+                    ...selected,
+                    ...roles
+                      .filter(other => other.id.toLowerCase() !== id && roleIds.includes(other.id.toLowerCase()))
+                      .flatMap(other => other.permissions),
+                  ])
+                : roleGrantBlockedReason(currentUser, role);
               return (
                 <Checkbox
                   key={id}
@@ -197,7 +209,7 @@ export const AdminPermissionsDialog: React.FC<ProfileDialogProps> = ({ user, onC
                       sx={{ color: 'admin.inkMuted' }}
                       data-testid={`admin-permissions-dialog-${testIdOf(id)}-unheld`}
                     >
-                      Only an admin who holds this permission can grant or revoke it.
+                      {UNHELD_EXPLICIT_ONLY_HINT}
                     </Typography>
                   )}
                 </Stack>

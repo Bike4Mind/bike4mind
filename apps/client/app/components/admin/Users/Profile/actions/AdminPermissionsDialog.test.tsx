@@ -22,6 +22,14 @@ const BILLING = {
   memberCount: 0,
 };
 
+const APPROVERS = {
+  id: 'cccccccccccccccccccccccc',
+  name: 'Approvers',
+  description: '',
+  permissions: ['credits:approve_self_grant'],
+  memberCount: 1,
+};
+
 const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   currentUser: { id: 'admin-1', isAdmin: true } as Actor | null,
@@ -49,7 +57,7 @@ describe('AdminPermissionsDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.currentUser = { id: 'admin-1', isAdmin: true };
-    mocks.roles = { isSuccess: true, isLoading: false, isError: false, data: [SUPPORT_AGENT, BILLING] };
+    mocks.roles = { isSuccess: true, isLoading: false, isError: false, data: [SUPPORT_AGENT, BILLING, APPROVERS] };
     mocks.update.mockImplementation(async (input: { adminPermissions: string[]; adminRoleIds?: string[] }) => ({
       adminPermissions: input.adminPermissions,
       adminRoleIds: input.adminRoleIds ?? [],
@@ -121,6 +129,31 @@ describe('AdminPermissionsDialog', () => {
     );
   });
 
+  it('disables unticking a held role whose explicit-only permission the acting admin does not hold', () => {
+    renderDialog(buildProfile({ adminRoleIds: [APPROVERS.id] }));
+
+    expect(role(APPROVERS.id)).toBeChecked();
+    expect(role(APPROVERS.id)).toBeDisabled();
+    expect(screen.getByTestId(`${DIALOG}-role-${APPROVERS.id}-blocked`)).toHaveTextContent(
+      'Only an admin who holds this permission can grant or revoke it.'
+    );
+    expect(role(SUPPORT_AGENT.id)).not.toBeDisabled();
+  });
+
+  it('allows unticking such a role for a holder, or while another source keeps the permission', () => {
+    mocks.currentUser = { id: 'admin-1', isAdmin: true, adminPermissions: ['credits:approve_self_grant'] };
+    const { unmount } = render(
+      <AdminPermissionsDialog user={buildProfile({ adminRoleIds: [APPROVERS.id] })} onClose={vi.fn()} />,
+      { wrapper: ProfileTestWrapper }
+    );
+    expect(role(APPROVERS.id)).not.toBeDisabled();
+    unmount();
+
+    mocks.currentUser = { id: 'admin-1', isAdmin: true };
+    renderDialog(buildProfile({ adminRoleIds: [APPROVERS.id], adminPermissions: ['credits:approve_self_grant'] }));
+    expect(role(APPROVERS.id)).not.toBeDisabled();
+  });
+
   it('disables an explicit-only permission the acting admin does not hold, with a hint', () => {
     renderDialog(buildProfile());
 
@@ -152,6 +185,22 @@ describe('AdminPermissionsDialog', () => {
       before: [],
       adminPermissions: ['credits:adjust'],
       reason: 'Joined the support rotation',
+    });
+  });
+
+  it('sends the stored permissions a Super Admin still holds along with an explicit-only grant', async () => {
+    mocks.currentUser = { id: 'admin-1', isAdmin: true, adminPermissions: ['credits:self_grant'] };
+    const { onClose } = renderDialog(buildProfile({ isAdmin: true, adminPermissions: ['support:read'] }));
+
+    fireEvent.click(permission('credits:self_grant'));
+    pickReason();
+    fireEvent.click(confirmButton());
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(mocks.update).toHaveBeenCalledWith({
+      before: ['support:read'],
+      adminPermissions: ['support:read', 'credits:self_grant'],
+      reason: expect.any(String),
     });
   });
 

@@ -7,6 +7,7 @@ import {
   GrantSubscriptionSchema,
   grantSubscription,
   grantSubscriptionCredits,
+  grantSubscriptionTargetIds,
   validateGrantSubscription,
 } from '@server/admin/creditGrants/grantSubscription';
 import { assertDelegateCanCreditUser } from '@server/admin/creditGrants/delegateTargets';
@@ -33,7 +34,11 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
     const request = req as unknown as Request;
 
     const credits = grantSubscriptionCredits(params, teamPlan);
-    const heldSelfGrant = isHeldSelfGrant(req.user, isSelfOrImpersonator(req.user, userId));
+    const targetIds = await grantSubscriptionTargetIds(params);
+    const heldSelfGrant = isHeldSelfGrant(
+      req.user,
+      targetIds.some(id => isSelfOrImpersonator(req.user, id))
+    );
     const gate = await creditGrantNeedsApproval(credits, req.user.id, { heldSelfGrant });
     if (gate.policy) {
       const user = await validateGrantSubscription(params, teamPlan);

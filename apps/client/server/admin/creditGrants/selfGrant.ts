@@ -1,4 +1,5 @@
-import { hasAdminPermission, type AdminApproval } from '@bike4mind/common';
+import { ForbiddenError, hasAdminPermission, type AdminApproval } from '@bike4mind/common';
+import { isSelfOrImpersonator } from '@bike4mind/server-utils/utils/adminAudit';
 import type { CreditActor } from './delegateTargets';
 
 /**
@@ -19,3 +20,10 @@ export const SELF_GRANT_APPROVAL = {
 export const isApprovedSelfGrant = (approval: AdminApproval | undefined, targetIds: readonly string[]): boolean =>
   approval?.requiredPermission === SELF_GRANT_APPROVAL.requiredPermission &&
   targetIds.some(id => id === approval.requestedBy.id || approval.requestedBy.selfIds.includes(id));
+
+/** An approved self-grant skips the delegate target checks, so its approver must not be one of the accounts it credits. */
+export function assertApproverOutsideTargets(actor: CreditActor, targetIds: readonly string[]): void {
+  if (targetIds.some(id => isSelfOrImpersonator(actor, id))) {
+    throw new ForbiddenError('You cannot approve credits for an organization you belong to');
+  }
+}

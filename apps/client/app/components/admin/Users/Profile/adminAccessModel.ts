@@ -1,4 +1,10 @@
-import { ADMIN_PERMISSIONS, hasAdminPermission, sortAdminRoleIds, type AdminPermissionId } from '@bike4mind/common';
+import {
+  ADMIN_PERMISSIONS,
+  hasAdminPermission,
+  isExplicitOnlyAdminPermission,
+  sortAdminRoleIds,
+  type AdminPermissionId,
+} from '@bike4mind/common';
 import type { AdminRoleListItem } from '../useAdminRoleList';
 import { ADMIN_PERMISSION_LABELS } from './userProfileModel';
 
@@ -41,3 +47,24 @@ export const roleGrantBlockedReason = (actor: AdminIdentity, role: Pick<RoleRef,
     ? `You do not hold ${unheld.map(permission => ADMIN_PERMISSION_LABELS[permission].label).join(', ')}`
     : null;
 };
+
+export const UNHELD_EXPLICIT_ONLY_HINT = 'Only an admin who holds this permission can grant or revoke it.';
+
+/**
+ * Why the actor cannot remove this held role, or null. Mirrors assertCanChangeExplicitOnlyPermissions: dropping the
+ * role revokes its explicit-only permissions unless `remaining` (direct grants plus the other held roles'
+ * permissions) still carries them, and only a holder can revoke one.
+ */
+export const roleRemovalBlockedReason = (
+  actor: AdminIdentity,
+  role: Pick<RoleRef, 'permissions'>,
+  remaining: readonly string[]
+): string | null =>
+  role.permissions.some(
+    permission =>
+      isExplicitOnlyAdminPermission(permission) &&
+      !hasAdminPermission(actor, permission) &&
+      !remaining.includes(permission)
+  )
+    ? UNHELD_EXPLICIT_ONLY_HINT
+    : null;

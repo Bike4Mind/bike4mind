@@ -26,7 +26,9 @@ async function main(): Promise<number> {
     { email },
     { $addToSet: { adminPermissions: permission } },
     { new: true, runValidators: true, projection: { email: 1, isAdmin: 1, adminPermissions: 1 } }
-  ).lean();
+  )
+    .collation({ locale: 'en', strength: 2 })
+    .lean();
   if (!user) {
     console.error(`No user with email ${email}`);
     return 1;

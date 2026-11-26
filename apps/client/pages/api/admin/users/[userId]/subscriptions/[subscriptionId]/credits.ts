@@ -62,6 +62,9 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
     // Same owner rule as the comp route: the user, or the organization's billing owner.
     const ownerUserId =
       subscription.ownerType === SubscriptionOwnerType.Organization ? organization?.userId : subscription.ownerId;
+    const selfGrant = organization
+      ? belongsToOrganization(req.user, organization)
+      : isSelfOrImpersonator(req.user, subscription.ownerId);
     // Only a strict lowering of an existing override leaves an org's credits no higher.
     const isRaiseOrClear =
       creditsPerCycle === null ||
@@ -69,7 +72,7 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
       creditsPerCycle > subscription.customCreditsPerCycle;
     if (
       (ownerUserId && isSelfOrImpersonator(req.user, ownerUserId)) ||
-      (organization && isRaiseOrClear && isHeldSelfGrant(req.user, belongsToOrganization(req.user, organization)))
+      (organization && isRaiseOrClear && isHeldSelfGrant(req.user, selfGrant))
     ) {
       await denySelfAdminAction(req, {
         action: 'user.credits.denied',
@@ -111,6 +114,7 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
           subscriptionId,
           previousCreditsPerCycle,
           creditsPerCycle: effectiveCreditsPerCycle,
+          selfGrant,
         },
       });
     };

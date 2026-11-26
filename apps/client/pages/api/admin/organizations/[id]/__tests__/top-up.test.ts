@@ -42,8 +42,10 @@ let inTransaction = false;
 let insideTransactionAtAudit: boolean | undefined;
 const mockOrgFindById = vi.fn();
 const mockTxFindOne = vi.fn();
+const mockUserFindById = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
+  userRepository: { findById: (...a: unknown[]) => mockUserFindById(...a) },
   creditTransactionRepository: { findOne: (...a: unknown[]) => mockTxFindOne(...a) },
   organizationRepository: { findById: (...a: unknown[]) => mockOrgFindById(...a) },
   withTransaction: async (fn: (session: unknown) => Promise<unknown>) => {
@@ -459,8 +461,7 @@ describe('POST /api/admin/organizations/[id]/top-up - approval gate', () => {
     expect(await topUpOrg(approverReq, params)).toMatchObject({ idempotent: true });
   });
 
-  it('lets a delegate approver execute an approved self-grant without the delegate target check', async () => {
-    mockOrgFindById.mockResolvedValue({ id: 'org-1', userId: 'admin-2', users: [{ userId: 'admin-1' }], name: 'Acme' });
+  describe('approved self-grant', () => {
     const params = {
       organizationId: 'org-1',
       credits: 100,
@@ -468,18 +469,42 @@ describe('POST /api/admin/organizations/[id]/top-up - approval gate', () => {
       idempotencyKey: 'idem-key-12345',
       reason: 'r',
     };
-    const approverReq = {
-      user: { id: 'admin-2', isAdmin: false, adminPermissions: ['credits:approve_self_grant'] },
-      logger: { info: vi.fn() },
-    } as unknown as Request;
     const approval = {
       id: 'approval-1',
       requiredPermission: 'credits:approve_self_grant',
       requestedBy: { id: 'admin-1', name: 'Ada', selfIds: ['admin-1'] },
     } as unknown as AdminApproval;
+    const approverReq = (user: Record<string, unknown>) => ({ user, logger: { info: vi.fn() } }) as unknown as Request;
+    const delegateApprover = { id: 'admin-2', isAdmin: false, adminPermissions: ['credits:approve_self_grant'] };
 
-    await expect(topUpOrg(approverReq, params)).rejects.toThrow('You cannot top up an organization you belong to');
-    expect(await topUpOrg(approverReq, params, approval)).toEqual({ organizationId: 'org-1', creditsAdded: 100 });
+    it('lets a delegate approver outside the organization execute it without the delegate target check', async () => {
+      mockOrgFindById.mockResolvedValue({ id: 'org-1', userId: 'admin-1', name: 'Acme' });
+      mockUserFindById.mockResolvedValue({ id: 'admin-1', isAdmin: true });
+
+      await expect(topUpOrg(approverReq(delegateApprover), params)).rejects.toThrow('Only full administrators');
+      expect(await topUpOrg(approverReq(delegateApprover), params, approval)).toEqual({
+        organizationId: 'org-1',
+        creditsAdded: 100,
+      });
+    });
+
+    it.each([
+      ['a delegate', delegateApprover],
+      ['a full admin', { id: 'admin-2', isAdmin: true }],
+    ])('refuses %s approver who belongs to the organization and writes no ledger row', async (_label, approver) => {
+      mockOrgFindById.mockResolvedValue({
+        id: 'org-1',
+        userId: 'owner-1',
+        users: [{ userId: 'admin-1' }, { userId: 'admin-2' }],
+        name: 'Acme',
+      });
+
+      await expect(topUpOrg(approverReq(approver), params, approval)).rejects.toThrow(
+        'You cannot approve credits for an organization you belong to'
+      );
+      expect(mockAddCredits).not.toHaveBeenCalled();
+      expect(recordAdminActionFromRequest).not.toHaveBeenCalled();
+    });
   });
 });
 

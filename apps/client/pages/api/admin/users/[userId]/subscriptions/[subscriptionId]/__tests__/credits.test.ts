@@ -228,6 +228,20 @@ describe('PUT /api/admin/users/[userId]/subscriptions/[subscriptionId]/credits',
         }).run();
         expect(mockUpdateByStripeSubId).toHaveBeenCalledWith('sub_123', { customCreditsPerCycle: 9000 });
       });
+
+      it('flags a raise by a credits:self_grant holder as a self-grant in the audit entry', async () => {
+        await call({
+          adminPermissions: ['credits:self_grant'],
+          body: { creditsPerCycle: 9000, reason: 'Billing correction' },
+        }).run();
+        expect(mockRecordAdminAction).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            action: 'user.credits.adjusted',
+            details: expect.objectContaining({ selfGrant: true }),
+          })
+        );
+      });
     });
   });
 
@@ -285,6 +299,23 @@ describe('PUT /api/admin/users/[userId]/subscriptions/[subscriptionId]/credits',
           organizationId: 'org-1',
           details: expect.objectContaining({ credits: 2000, previousCreditsPerCycle: 3000 }),
         })
+      );
+    });
+
+    it('does not flag a rate change on an organization the admin does not belong to', async () => {
+      mockFindByStripeSubId.mockResolvedValue({
+        id: 'sub-1',
+        ownerType: 'Organization',
+        ownerId: 'org-1',
+        quantity: 3,
+      });
+      mockOrgFindById.mockResolvedValue({ id: 'org-1', name: 'Acme', userId: 'owner-1', users: [] });
+
+      await call({}).run();
+
+      expect(mockRecordAdminAction).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ details: expect.objectContaining({ selfGrant: false }) })
       );
     });
 
