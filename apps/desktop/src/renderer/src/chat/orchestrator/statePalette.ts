@@ -34,8 +34,6 @@ const stateVariable = (state: SkinnableState): string => `--b4m-skin-state-${sta
 const softVariable = (state: SkinnableState): string => `--b4m-skin-state-${state}-soft`;
 export const SKIN_STAGE_VARIABLE = '--b4m-skin-stage';
 export const SKIN_CARD_VARIABLE = '--b4m-skin-card';
-/** Read by name in aquarium/Aquarium.tsx, which builds on the snapshot contract alone. */
-export const SKIN_AQUARIUM_BACKDROP_VARIABLE = '--b4m-skin-aquarium-backdrop';
 
 export const stateJoyColor = (state: AgentState): ColorPaletteProp => STATE_PALETTE[state].joy;
 
@@ -124,8 +122,5 @@ export function skinCssVariables(theme: SkinTheme, mode: 'light' | 'dark'): Reco
   }
   if (theme.surfaces.stage && readable(theme.surfaces.stage)) variables[SKIN_STAGE_VARIABLE] = theme.surfaces.stage;
   if (theme.surfaces.card && readable(theme.surfaces.card)) variables[SKIN_CARD_VARIABLE] = theme.surfaces.card;
-  if (theme.sprites.aquariumBackdrop) {
-    variables[SKIN_AQUARIUM_BACKDROP_VARIABLE] = `url(${JSON.stringify(theme.sprites.aquariumBackdrop)})`;
-  }
   return variables;
 }

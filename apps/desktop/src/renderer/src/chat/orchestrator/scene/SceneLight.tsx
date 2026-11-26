@@ -1,7 +1,7 @@
 import Box from '@mui/joy/Box';
 import { keyframes } from '@mui/system';
 import type { CSSProperties } from 'react';
-import type { SceneDefinition } from './sceneDefinition';
+import type { LampTone, SceneDefinition } from './sceneDefinition';
 
 /**
  * The room's mood: `day` for the light theme, `night` for the dark one, and `last-call` while the
@@ -42,6 +42,29 @@ const flickerTiming = (index: number) => ({
 
 const layer = { position: 'absolute', inset: 0, pointerEvents: 'none' } as const;
 
+type Light = SceneDefinition['map']['lights'][number];
+
+const WARM_POOL = '255, 214, 160';
+const FLAME_GLOW = {
+  fire: 'radial-gradient(closest-side, rgba(255, 150, 60, 0.6), rgba(255, 110, 30, 0.22) 55%, rgba(255, 90, 20, 0) 100%)',
+  candle: 'radial-gradient(closest-side, rgba(255, 200, 120, 0.55), rgba(255, 170, 80, 0) 100%)',
+};
+// A blue lamp keeps its pool blue at night (a tank's hood light); a white one leaves the warm room pool.
+const LAMP: Record<LampTone, { glow: string; pool: string }> = {
+  white: {
+    glow: 'radial-gradient(closest-side, rgba(225, 240, 255, 0.5), rgba(200, 225, 255, 0) 100%)',
+    pool: WARM_POOL,
+  },
+  blue: {
+    glow: 'radial-gradient(closest-side, rgba(200, 238, 255, 0.5), rgba(150, 210, 255, 0) 100%)',
+    pool: '190, 230, 255',
+  },
+};
+
+const lampTone = (light: Light) => LAMP[light.tone ?? 'white'];
+const poolOf = (light: Light) => (light.kind === 'lamp' ? lampTone(light).pool : WARM_POOL);
+const glowOf = (light: Light) => (light.kind === 'lamp' ? lampTone(light).glow : FLAME_GLOW[light.kind]);
+
 /**
  * The light over the backdrop, under the sprites: a mood shade with warm pools where the lamps are,
  * flickering glows, and embers off the hearth. Purely decorative; under reduced motion the light holds still.
@@ -70,7 +93,7 @@ export function SceneLight({
           background: [
             ...lights.map(
               light =>
-                `radial-gradient(circle ${light.size * 1.6}cqw at ${light.x}% ${light.y}%, rgba(255, 214, 160, 1), rgba(255, 214, 160, 0) 70%)`
+                `radial-gradient(circle ${light.size * 1.6}cqw at ${light.x}% ${light.y}%, rgba(${poolOf(light)}, 1), rgba(${poolOf(light)}, 0) 70%)`
             ),
             'linear-gradient(rgba(70, 62, 120, 1), rgba(70, 62, 120, 1))',
           ].join(', '),
@@ -100,8 +123,6 @@ export function SceneLight({
       <Box sx={{ ...layer, opacity: level.glow, transition: MOOD_FADE, mixBlendMode: 'screen' }}>
         {lights.map((light, index) => {
           const timing = flickerTiming(index);
-          const fire = light.kind === 'fire';
-          const lamp = light.kind === 'lamp';
           return (
             <Box
               key={`${light.x}-${light.y}`}
@@ -112,14 +133,11 @@ export function SceneLight({
                 aspectRatio: '1',
                 transform: 'translate(-50%, -50%)',
                 borderRadius: '50%',
-                background: fire
-                  ? 'radial-gradient(closest-side, rgba(255, 150, 60, 0.6), rgba(255, 110, 30, 0.22) 55%, rgba(255, 90, 20, 0) 100%)'
-                  : lamp
-                    ? 'radial-gradient(closest-side, rgba(225, 240, 255, 0.5), rgba(200, 225, 255, 0) 100%)'
-                    : 'radial-gradient(closest-side, rgba(255, 200, 120, 0.55), rgba(255, 170, 80, 0) 100%)',
-                animation: lamp
-                  ? 'none'
-                  : `${flicker} ${fire ? '1.3s' : timing.duration} ease-in-out ${timing.delay} infinite`,
+                background: glowOf(light),
+                animation:
+                  light.kind === 'lamp'
+                    ? 'none'
+                    : `${flicker} ${light.kind === 'fire' ? '1.3s' : timing.duration} ease-in-out ${timing.delay} infinite`,
                 [NO_MOTION]: { animation: 'none' },
               }}
             />

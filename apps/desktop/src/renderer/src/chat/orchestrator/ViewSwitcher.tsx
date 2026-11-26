@@ -41,6 +41,7 @@ import type { FinaleHostArt, FinaleLook } from './FinaleBanner';
 import type { SceneDefinition } from './scene/sceneDefinition';
 import { OFFICE_SCENE } from './office/officeScene';
 import { TAVERN_SCENE } from './tavern/tavernScene';
+import { AQUARIUM_SCENE } from './aquarium/aquariumScene';
 
 type ViewGroup = 'scene' | 'layout';
 
@@ -104,8 +105,7 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
       light: { background: '#e7eff0', border: '#a9bec3' },
       dark: { background: '#1d2c31', border: '#49616a' },
     },
-    // Not on the scene framework yet: no host character or dialogue box, and the Tavern's lines.
-    scene: { host: false, inSceneDecisions: false, finale: 'tavern', copy: TAVERN_STAGE_COPY },
+    scene: frameworkScene(AQUARIUM_SCENE),
   },
   office: {
     label: 'Office',

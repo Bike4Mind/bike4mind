@@ -1,5 +1,4 @@
 import type { ComponentType, ReactNode } from 'react';
-import { Aquarium } from './aquarium/Aquarium';
 import { BoardView } from './BoardView';
 import { Constellation } from './Constellation';
 import { PlanView } from './PlanView';
@@ -11,6 +10,7 @@ import { snapshotView } from './snapshotView';
 import { Swimlanes } from './Swimlanes';
 import { TableView } from './TableView';
 import { TAVERN_SCENE } from './tavern/tavernScene';
+import { AQUARIUM_SCENE } from './aquarium/aquariumScene';
 import { TileWall } from './TileWall';
 import { Transit } from './Transit';
 
@@ -21,8 +21,7 @@ const SwimlanesView = snapshotView(Swimlanes, { displayName: 'SwimlanesView' });
 const ConstellationView = snapshotView(Constellation, { displayName: 'ConstellationView' });
 const PlanSnapshotView = snapshotView(PlanView, { displayName: 'PlanView' });
 const TransitView = snapshotView(Transit, { displayName: 'TransitView' });
-// Meant for a second monitor, so it keeps swimming while the window is unfocused; it still stops when hidden.
-const AquariumView = snapshotView(Aquarium, { displayName: 'AquariumView', pause: { awake: true } });
+const AquariumView = sceneView(AQUARIUM_SCENE);
 
 /**
  * Each view's component, keyed by id so a new id in ORCHESTRATOR_VIEWS fails to compile until it has one

@@ -2,6 +2,12 @@ import { byAge, hashOf, type Epithet } from '@shared/agentPersona';
 
 export type CastSubject = { id: string; createdAt: string; epithet?: Epithet };
 
+/** A sprite and the hue its sheet tints it by. */
+export type SceneArt = { src: string; hue?: number };
+
+export const hueFilter = (art: SceneArt | undefined): string | undefined =>
+  art?.hue ? `hue-rotate(${art.hue}deg)` : undefined;
+
 /**
  * Gives every agent a sheet index (0-based) into a scene's cast, a pure function of the roster so it survives
  * reloads. Oldest first, each agent takes a sheet nobody has yet, preferring one whose craft matches its

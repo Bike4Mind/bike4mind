@@ -66,8 +66,9 @@ const SKINNED: Partial<Record<OrchestratorViewId, () => void>> = {
     expect(colourUnderUses('orchestrator-tavern', '--b4m-skin-state-working')).toBe(true);
   },
   aquarium: () => {
-    expect(rootVariable('--b4m-skin-aquarium-backdrop')).toBe('url("b4m-skin://nightglass/sprites/tank.png")');
-    expect(styleOf('orchestrator-aquarium').backgroundImage).toContain('--b4m-skin-aquarium-backdrop');
+    const img = el('orchestrator-aquarium').querySelector('img');
+    expect(img?.getAttribute('src')).toBe('b4m-skin://nightglass/sprites/tank.png');
+    expect(colourUnderUses('orchestrator-aquarium', '--b4m-skin-state-working')).toBe(true);
   },
   board: () => {
     expect(colourUnderUses('orchestrator-board-column-working', '--b4m-skin-card')).toBe(true);
@@ -131,7 +132,7 @@ describe('the sample skin', () => {
     );
     await themed.render(<Skinned view="aquarium" />);
     expect(rootVariable('--b4m-skin-state-working')).toBe('');
-    expect(rootVariable('--b4m-skin-aquarium-backdrop')).toBe('');
+    expect(el('orchestrator-aquarium').querySelector('img')?.getAttribute('src')).not.toContain('b4m-skin:');
   });
 });
 

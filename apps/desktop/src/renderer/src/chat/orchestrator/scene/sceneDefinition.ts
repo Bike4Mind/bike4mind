@@ -35,6 +35,9 @@ const EPITHETS = ['Warden', 'Scribe', 'Tinkerer', 'Cartographer', 'Seeker', 'Wan
 /** The framework's light looks; SceneLight.tsx draws each. A `lamp` is electric: steady, with no flicker. */
 export const LIGHT_KINDS = ['fire', 'candle', 'lamp'] as const;
 export type LightKind = (typeof LIGHT_KINDS)[number];
+/** A lamp's colour: `white` (office tubes) or `blue` (a tank's hood light, whose pool stays blue at night). */
+export const LAMP_TONES = ['white', 'blue'] as const;
+export type LampTone = (typeof LAMP_TONES)[number];
 
 const SKIN_BACKDROPS = ['tavernBackdrop', 'aquariumBackdrop'] as const;
 
@@ -75,6 +78,8 @@ const mapSchema = z.object({
       /** Glow radius, in percent of the scene width. */
       size: z.number().positive(),
       kind: z.enum(LIGHT_KINDS),
+      /** A `lamp`'s colour; `white` if unset. Other kinds ignore it. */
+      tone: z.enum(LAMP_TONES).optional(),
     })
   ),
   /** Where moonlight falls at night, if the room has a window. */
@@ -97,10 +102,16 @@ const castSchema = z.object({
         look: z.string().min(1),
         /** The kind of work this character looks the part for; such agents get it first. */
         craft: z.enum(EPITHETS).optional(),
+        /** Degrees of hue rotation over the art, so one drawing can make several looks. */
+        hue: z.number().min(0).max(360).optional(),
         sprites: z.record(name, asset),
       })
     )
     .min(1),
+  /** Where a sprite's face sits on its canvas, percent from the top; the overflow token centres on it. */
+  faceY: percent.optional(),
+  /** Poses that swim back and forth `reach` percent of the scene width either side of the seat, facing the way they go. */
+  roam: z.object({ poses: z.array(name).min(1), reach: z.number().positive().max(50) }).optional(),
   host: z.object({
     sprites: z.object({ idle: asset, writing: asset, reading: asset, walking: asset, cheering: asset }),
   }),
@@ -127,6 +138,10 @@ export const sceneDefinitionSchema = z
       settledDrift: z.boolean(),
       /** The glow the settled picture throws into the letterbox around it. */
       settledShadow: z.string().min(1),
+      /** A wash over the backdrop, under the light and sprites, for a scene kept low in contrast. */
+      veil: z.string().min(1).optional(),
+      /** Keeps animating while the window is unfocused (never while hidden): a scene meant for a second monitor. */
+      awakeUnfocused: z.boolean().optional(),
     }),
     look: z.object({
       /** Name plates and the board's frame. */
@@ -182,6 +197,9 @@ export const sceneDefinitionSchema = z
     });
     scene.cast.animatedPoses.forEach((pose, index) => {
       if (!poses.has(pose)) issue(['cast', 'animatedPoses', index], `unknown pose "${pose}"`);
+    });
+    scene.cast.roam?.poses.forEach((pose, index) => {
+      if (!poses.has(pose)) issue(['cast', 'roam', 'poses', index], `unknown pose "${pose}"`);
     });
     scene.cast.sheets.forEach((sheet, index) => {
       for (const pose of poses) {
