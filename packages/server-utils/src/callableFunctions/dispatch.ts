@@ -22,7 +22,12 @@ import {
 } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { resolveCallableFunctionsEnabled } from './access';
-import { callableFunctionStampData, signCallableFunctionDataLinks, type CallableFunctionDataLink } from './dataPins';
+import {
+  callableFunctionDataReachable,
+  callableFunctionStampData,
+  signCallableFunctionDataLinks,
+  type CallableFunctionDataLink,
+} from './dataPins';
 import type { CallableFunctionRunData } from './runtimeData';
 import {
   CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS,
@@ -133,6 +138,8 @@ export interface CallableFunctionDispatchOptions {
   callId?: string;
   /** Signs the links for one call's data files; the function-data bucket's signer by default. */
   signData?: (fn: ICallableFunctionDocument) => Promise<CallableFunctionDataLink[]>;
+  /** Whether this process can sign data links (`callableFunctionDataReachable` by default). */
+  dataReachable?: boolean;
 }
 
 export type { CallableFunctionStamp };
@@ -511,6 +518,11 @@ export async function dispatchFunctionCall(
     row.dataHashes = pins.map(pin => pin.sha256);
     let data: CallableFunctionRunData[] | undefined;
     if (pins.length > 0) {
+      // Elsewhere the files bucket would be signed for keys that live in the data bucket: refuse loudly instead.
+      if (!(options.dataReachable ?? callableFunctionDataReachable())) {
+        Logger.error('[CALLABLE_FUNCTION_DATA_NOT_WIRED]', { functionId: fn.id });
+        return finish({ outcome: 'error', reason: 'data_unavailable' });
+      }
       // Links for exactly this function's pins, valid for minutes; the runtime gets links, never the bytes.
       try {
         const links = await (options.signData ?? signCallableFunctionDataLinks)(fn);

@@ -3749,11 +3749,12 @@ export const settingsMap = {
     name: 'Callable Functions: Largest Data File (MB)',
     defaultValue: 100,
     min: 1,
-    // The pin copies the file in the web function's memory.
-    max: 1024,
+    // The pin streams the file through the web API function in one request, which has 60 s; 512 MB leaves room at
+    // a conservative 20 MB/s for the pass and the server-side copy (packages/server-utils dataPins.ts).
+    max: 512,
     int: true,
     description:
-      'The largest file a person can pin to a saved function as data, in MB (at most 1024). Checked when the file is pinned. Can be overridden per organization; a member of several organizations gets the lowest.',
+      'The largest file a person can pin to a saved function as data, in MB (at most 512). Checked when the file is pinned. Can be overridden per organization; a member of several organizations gets the lowest.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 24.7,

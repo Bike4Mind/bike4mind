@@ -13,6 +13,12 @@ export function callableFunctionDataKey(prefix: string, sha256: string): string 
   return `${callableFunctionDataPrefix(prefix)}${sha256}`;
 }
 
+/** `data/<prefix>/staging/<id>`: one pin's upload before its hash is known; inside the prefix, so a prefix delete takes it. */
+export function callableFunctionDataStagingKey(prefix: string, id: string): string {
+  if (!PREFIX.test(id)) throw new Error('A staging id is 1 to 128 letters, digits, "_", or "-".');
+  return `${callableFunctionDataPrefix(prefix)}staging/${id}`;
+}
+
 /** `data/<prefix>/`: every object of one tenant or function, for a delete by prefix. */
 export function callableFunctionDataPrefix(prefix: string): string {
   if (!PREFIX.test(prefix)) throw new Error('A function-data prefix is 1 to 128 letters, digits, "_", or "-".');

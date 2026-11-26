@@ -330,7 +330,7 @@ describe('dispatchFunctionCall outcomes', () => {
     );
     const runner = runnerOf(ok());
 
-    const result = await dispatchFunctionCall(call(), { runner, signData });
+    const result = await dispatchFunctionCall(call(), { runner, signData, dataReachable: true });
 
     expect(signData).toHaveBeenCalledWith(expect.objectContaining({ id: FUNCTION_ID }));
     const payload = runner.mock.calls[0]![0] as CallableFunctionRunPayload & { data?: { prefix: string }[] };
@@ -360,8 +360,23 @@ describe('dispatchFunctionCall outcomes', () => {
     const signData = vi.fn(async () => {
       throw new Error('no credentials');
     });
-    const result = await dispatchFunctionCall(call(), { runner, signData });
+    const result = await dispatchFunctionCall(call(), { runner, signData, dataReachable: true });
     expect(result).toMatchObject({ outcome: 'error', reason: 'data_unavailable' });
+    expect(runner).not.toHaveBeenCalled();
+  });
+
+  it('refuses a data-pinned call where this process was not given the data bucket, before signing anything', async () => {
+    h.fn = record({
+      pin: {
+        ...(record().pin as object),
+        dataPins: [{ name: 'a.csv', sha256: 'a'.repeat(64), bytes: 1, sourceFileId: 'f', pinnedAt: new Date(0) }],
+      },
+    });
+    const runner = runnerOf(ok());
+    const signData = vi.fn(async () => []);
+    const result = await dispatchFunctionCall(call(), { runner, signData, dataReachable: false });
+    expect(result).toMatchObject({ outcome: 'error', reason: 'data_unavailable' });
+    expect(signData).not.toHaveBeenCalled();
     expect(runner).not.toHaveBeenCalled();
   });
 

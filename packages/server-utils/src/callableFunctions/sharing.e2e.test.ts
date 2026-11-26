@@ -51,6 +51,7 @@ import {
   setCallableFunctionExamples,
   summarizeCallableFunctionCalls,
 } from './registry';
+import type { CallableFunctionDataStorage } from './dataPins';
 import { promoteCallableFunction } from './promote';
 import {
   callableFunctionOffer,
@@ -737,7 +738,9 @@ describe('a recipient review', () => {
       /duplicate key/
     );
 
-    await deleteCallableFunction(OWNER, id);
+    await deleteCallableFunction(OWNER, id, {
+      deletePrefix: vi.fn(async () => 0),
+    } as unknown as CallableFunctionDataStorage);
     expect(await CallableFunctionReview.countDocuments({})).toBe(0);
   });
 

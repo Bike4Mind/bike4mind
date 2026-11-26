@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { Readable } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ICallableFunctionDataPin, IUserDocument } from '@bike4mind/common';
 
@@ -8,6 +9,7 @@ const h = vi.hoisted(() => ({
   listForOwner: vi.fn(),
   access: vi.fn(),
   sourceDownload: vi.fn(),
+  sourceHead: vi.fn(),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -28,10 +30,17 @@ vi.mock('@bike4mind/services', () => ({
   fabFilesService: { assertFabFileAccessById: h.access },
   scopedSettingsService: {},
 }));
-vi.mock('../utils/storage/index', () => ({ getFilesStorage: () => ({ download: h.sourceDownload }) }));
+vi.mock('../utils/storage/index', () => ({
+  getFilesStorage: () => ({
+    getMetadata: h.sourceHead,
+    getContent: async () => Readable.from([await h.sourceDownload()]),
+  }),
+}));
 vi.mock('@bike4mind/fab-pipeline', () => ({ S3Storage: class {} }));
+vi.mock('@bike4mind/observability', () => ({ Logger: { warn: vi.fn(), error: vi.fn() } }));
 
 import {
+  linkCallableFunctionDataForBrowser,
   pinCallableFunctionData,
   purgeCallableFunctionDataForUser,
   readCallableFunctionData,
@@ -58,10 +67,17 @@ const pinOf = (name: string, bytes = 10, hash = sha(Buffer.from(name))): ICallab
 function memoryStorage() {
   const objects = new Map<string, Buffer>();
   const storage = {
-    upload: vi.fn(async (input: string | Buffer, key: string) => {
-      objects.set(key, Buffer.from(input));
+    uploadStream: vi.fn(async (input: Readable, key: string) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of input) chunks.push(chunk as Buffer);
+      objects.set(key, Buffer.concat(chunks));
       return key;
     }),
+    copy: vi.fn(async (source: string, key: string) => {
+      objects.set(key, objects.get(source)!);
+      return key;
+    }),
+    browserSigningOrigin: vi.fn(async () => 'https://data.example.com'),
     download: vi.fn(async (key: string) => {
       const found = objects.get(key);
       if (!found) throw new Error('NoSuchKey');
@@ -84,7 +100,7 @@ function memoryStorage() {
 const withPins = (dataPins: ICallableFunctionDataPin[]) => {
   h.fn = { id: FN_ID, userId: OWNER.id, updatedAt: new Date(1), pin: { artifactId: 'art1', version: 1, dataPins } };
   h.setDataPins.mockImplementation(async (_id, _owner, _expected, pins: ICallableFunctionDataPin[]) => ({
-    ...h.fn,
+    ...(h.fn = { ...h.fn, pin: { ...(h.fn!.pin as object), dataPins: pins } }),
     slug: 'fn',
     description: '',
     state: 'draft',
@@ -99,11 +115,13 @@ beforeEach(() => {
   withPins([]);
   h.access.mockResolvedValue({
     id: 'file1',
+    userId: OWNER.id,
     filePath: 'files/u/points.csv',
     fileSize: CSV.length,
     moderationStatus: 'clean',
   });
   h.sourceDownload.mockResolvedValue(CSV);
+  h.sourceHead.mockImplementation(async () => ({ size: CSV.length }));
 });
 
 describe('pinCallableFunctionData', () => {
@@ -122,7 +140,7 @@ describe('pinCallableFunctionData', () => {
     await expect(
       pinCallableFunctionData(OWNER, FN_ID, { fileId: 'theirs', name: 'points.csv' }, { storage, limits: LIMITS })
     ).rejects.toMatchObject({ statusCode: 404 });
-    expect(storage.upload).not.toHaveBeenCalled();
+    expect(storage.uploadStream).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -136,7 +154,7 @@ describe('pinCallableFunctionData', () => {
       pinCallableFunctionData(OWNER, FN_ID, { fileId: 'file1', name: 'points.csv' }, { storage, limits: LIMITS })
     ).rejects.toMatchObject({ statusCode });
     expect(h.sourceDownload).not.toHaveBeenCalled();
-    expect(storage.upload).not.toHaveBeenCalled();
+    expect(storage.uploadStream).not.toHaveBeenCalled();
   });
 
   const UNSAFE_NAMES = ['../points.csv', '.hidden', 'a/b.csv', 'x'.repeat(65), 'has space.csv'];
@@ -154,12 +172,13 @@ describe('pinCallableFunctionData', () => {
     await expect(
       pinCallableFunctionData(OWNER, FN_ID, { fileId: 'file1', name: 'points.csv' }, { storage, limits: LIMITS })
     ).rejects.toMatchObject({ statusCode: 409, additionalInfo: { code: 'data_pin_limit' } });
-    expect(storage.upload).not.toHaveBeenCalled();
+    expect(storage.uploadStream).not.toHaveBeenCalled();
   });
 
   it('refuses a file over the per-file limit, by its recorded size before reading it', async () => {
     h.access.mockResolvedValue({
       id: 'file1',
+      userId: OWNER.id,
       filePath: 'files/u/big.csv',
       fileSize: 100 * MIB + 1,
       moderationStatus: 'clean',
@@ -171,16 +190,80 @@ describe('pinCallableFunctionData', () => {
     expect(h.sourceDownload).not.toHaveBeenCalled();
   });
 
-  it('refuses a file over the per-file limit by its bytes when the recorded size is lower', async () => {
+  it.each([
+    ['lower', 1],
+    ['missing', undefined],
+  ])(
+    "refuses a file over the per-file limit by the stored object's size when the recorded size is %s",
+    async (_label, fileSize) => {
+      h.access.mockResolvedValue({ id: 'file1', userId: OWNER.id, filePath: 'f', fileSize, moderationStatus: 'clean' });
+      const { storage } = memoryStorage();
+      await expect(
+        pinCallableFunctionData(
+          OWNER,
+          FN_ID,
+          { fileId: 'file1', name: 'points.csv' },
+          { storage, limits: { fileBytes: 4, totalBytes: LIMITS.totalBytes } }
+        )
+      ).rejects.toMatchObject({ additionalInfo: { code: 'data_file_too_large' } });
+      expect(h.sourceHead).toHaveBeenCalledWith('f');
+      expect(h.sourceDownload).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses a stored object of unknown size without reading it', async () => {
+    h.sourceHead.mockResolvedValue({ size: undefined });
     const { storage } = memoryStorage();
     await expect(
-      pinCallableFunctionData(
-        OWNER,
-        FN_ID,
-        { fileId: 'file1', name: 'points.csv' },
-        { storage, limits: { fileBytes: 4, totalBytes: LIMITS.totalBytes } }
-      )
-    ).rejects.toMatchObject({ additionalInfo: { code: 'data_file_too_large' } });
+      pinCallableFunctionData(OWNER, FN_ID, { fileId: 'file1', name: 'points.csv' }, { storage, limits: LIMITS })
+    ).rejects.toMatchObject({ statusCode: 400, additionalInfo: { code: 'data_file_empty' } });
+    expect(h.sourceDownload).not.toHaveBeenCalled();
+  });
+
+  it('refuses a file that someone else uploaded, even one shared with the actor', async () => {
+    h.access.mockResolvedValue({
+      id: 'file1',
+      userId: 'c'.repeat(24),
+      filePath: 'f',
+      fileSize: 8,
+      moderationStatus: 'clean',
+    });
+    const { storage } = memoryStorage();
+    await expect(
+      pinCallableFunctionData(OWNER, FN_ID, { fileId: 'file1', name: 'points.csv' }, { storage, limits: LIMITS })
+    ).rejects.toMatchObject({ statusCode: 400, additionalInfo: { code: 'data_file_not_owned' } });
+    expect(storage.uploadStream).not.toHaveBeenCalled();
+  });
+
+  it('streams the copy through a staging key that it always removes', async () => {
+    const { objects, storage } = memoryStorage();
+    await pinCallableFunctionData(OWNER, FN_ID, { fileId: 'file1', name: 'points.csv' }, { storage, limits: LIMITS });
+    const staging = storage.uploadStream.mock.calls[0]![1];
+    expect(staging).toMatch(new RegExp(`^data/${FN_ID}/staging/`));
+    expect(storage.uploadStream.mock.calls[0]![2]).toBe(CSV.length);
+    expect(storage.copy).toHaveBeenCalledWith(staging, `data/${FN_ID}/${sha(CSV)}`);
+    expect(objects.has(staging)).toBe(false);
+  });
+
+  it('refuses bytes that run past the stored size and keeps no copy of them', async () => {
+    h.sourceHead.mockResolvedValue({ size: 4 });
+    const { objects, storage } = memoryStorage();
+    await expect(
+      pinCallableFunctionData(OWNER, FN_ID, { fileId: 'file1', name: 'points.csv' }, { storage, limits: LIMITS })
+    ).rejects.toThrow();
+    expect(storage.copy).not.toHaveBeenCalled();
+    expect(h.setDataPins).not.toHaveBeenCalled();
+    expect(objects.size).toBe(0);
+  });
+
+  it('never deletes the content object when its write loses to another pin of the same bytes', async () => {
+    const { objects, storage } = memoryStorage();
+    h.setDataPins.mockResolvedValue(null);
+    await expect(
+      pinCallableFunctionData(OWNER, FN_ID, { fileId: 'file1', name: 'points.csv' }, { storage, limits: LIMITS })
+    ).rejects.toMatchObject({ statusCode: 409, additionalInfo: { code: 'version_changed' } });
+    expect([...objects.keys()]).toEqual([`data/${FN_ID}/${sha(CSV)}`]);
+    expect(storage.delete).not.toHaveBeenCalledWith(`data/${FN_ID}/${sha(CSV)}`);
   });
 
   it('refuses a file that would take the function over its total', async () => {
@@ -189,7 +272,7 @@ describe('pinCallableFunctionData', () => {
     await expect(
       pinCallableFunctionData(OWNER, FN_ID, { fileId: 'file1', name: 'points.csv' }, { storage, limits: LIMITS })
     ).rejects.toMatchObject({ statusCode: 400, additionalInfo: { code: 'data_total_too_large' } });
-    expect(storage.upload).not.toHaveBeenCalled();
+    expect(storage.uploadStream).not.toHaveBeenCalled();
   });
 
   it('keeps reading the pinned copy after the source file is replaced', async () => {
@@ -212,6 +295,62 @@ describe('pinCallableFunctionData', () => {
     withPins([pinOf('b.csv', 8, shared)]);
     await unpinCallableFunctionData(OWNER, FN_ID, 'b.csv', { storage });
     expect(objects.size).toBe(0);
+  });
+
+  it('keeps the copy when a pin of the same bytes committed between the unpin and its delete', async () => {
+    const { objects, storage } = memoryStorage();
+    const shared = sha(CSV);
+    objects.set(`data/${FN_ID}/${shared}`, CSV);
+    withPins([pinOf('a.csv', 8, shared)]);
+    h.setDataPins.mockImplementationOnce(async () => {
+      const after = { ...h.fn, pin: { ...(h.fn!.pin as object), dataPins: [pinOf('b.csv', 8, shared)] } };
+      h.fn = after;
+      return { ...after, slug: 'fn', description: '', state: 'draft', enabled: true, examples: [] };
+    });
+    await unpinCallableFunctionData(OWNER, FN_ID, 'a.csv', { storage });
+    expect(objects.size).toBe(1);
+  });
+
+  it('answers an unpin as done when the object delete fails afterwards', async () => {
+    const { storage } = memoryStorage();
+    storage.delete.mockRejectedValue(new Error('SlowDown'));
+    withPins([pinOf('a.csv', 8, sha(CSV))]);
+    const result = await unpinCallableFunctionData(OWNER, FN_ID, 'a.csv', { storage });
+    expect(result.dataPins).toEqual([]);
+    expect(storage.delete).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('linkCallableFunctionDataForBrowser', () => {
+  it("signs a one-minute browser link for the owner's pin and answers anyone else as if it did not exist", async () => {
+    const { storage } = memoryStorage();
+    withPins([pinOf('points.csv', CSV.length, sha(CSV))]);
+    const link = await linkCallableFunctionDataForBrowser(OWNER, FN_ID, 'points.csv', { storage });
+    expect(link).toEqual({
+      name: 'points.csv',
+      sha256: sha(CSV),
+      bytes: CSV.length,
+      url: `https://data.example.com/data/${FN_ID}/${sha(CSV)}?signed`,
+    });
+    expect(storage.getSignedUrl).toHaveBeenCalledWith(`data/${FN_ID}/${sha(CSV)}`, 'get', {
+      audience: 'browser',
+      expiresIn: 60,
+      ResponseContentType: 'application/octet-stream',
+      ResponseContentDisposition: 'attachment',
+      ResponseCacheControl: 'private, no-store',
+    });
+    await expect(
+      linkCallableFunctionDataForBrowser({ id: 'e'.repeat(24) }, FN_ID, 'points.csv', { storage })
+    ).rejects.toThrow('Tool not found');
+  });
+
+  it('points at the same-origin byte route where storage cannot sign a browser link', async () => {
+    const { storage } = memoryStorage();
+    storage.browserSigningOrigin.mockResolvedValue('');
+    withPins([pinOf('points.csv', CSV.length, sha(CSV))]);
+    const link = await linkCallableFunctionDataForBrowser(OWNER, FN_ID, 'points.csv', { storage });
+    expect(link.url).toBe(`/api/callable-functions/${FN_ID}/data/points.csv?bytes=1`);
+    expect(storage.getSignedUrl).not.toHaveBeenCalled();
   });
 });
 

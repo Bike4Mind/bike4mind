@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { Transform, type Readable } from 'node:stream';
 import {
   BadRequestError,
   CALLABLE_FUNCTION_DATA_LIMITS,
@@ -22,9 +23,10 @@ import {
   scopedSettingsRepository,
 } from '@bike4mind/database';
 import { S3Storage } from '@bike4mind/fab-pipeline';
+import { Logger } from '@bike4mind/observability';
 import { fabFilesService, scopedSettingsService } from '@bike4mind/services';
 import { getFilesStorage } from '../utils/storage/index';
-import { callableFunctionDataKey, callableFunctionDataPrefix } from './dataKeys';
+import { callableFunctionDataKey, callableFunctionDataPrefix, callableFunctionDataStagingKey } from './dataKeys';
 
 /**
  * Data files pinned to a saved function: copied once by hash under the function's own prefix in the function-data
@@ -39,12 +41,26 @@ export const CALLABLE_FUNCTION_DATA_LINK_SECONDS = 300;
 
 const MIB = 1024 * 1024;
 
+/** How long a browser read link stays valid; the browser fetches it at once and caches the bytes by hash. */
+export const CALLABLE_FUNCTION_DATA_BROWSER_LINK_SECONDS = 60;
+
 export type CallableFunctionDataStorage = Pick<
   S3Storage,
-  'upload' | 'download' | 'delete' | 'deletePrefix' | 'getSignedUrl'
+  'uploadStream' | 'copy' | 'download' | 'delete' | 'deletePrefix' | 'getSignedUrl' | 'browserSigningOrigin'
 >;
 
+/** The files bucket, read once per pin. */
+export type CallableFunctionDataSource = Pick<S3Storage, 'getMetadata' | 'getContent'>;
+
 let dataStorage: CallableFunctionDataStorage | undefined;
+
+/**
+ * Whether this process can sign links to pinned data: it was given the function-data bucket (infra grants it to the
+ * web API function only), or it is self-host, where pins live in the files bucket.
+ */
+export function callableFunctionDataReachable(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env[CALLABLE_FUNCTION_DATA_BUCKET_ENV]) || env.B4M_SELF_HOST === 'true';
+}
 
 /** The function-data bucket, or the files bucket on a stack without one (local development and self-host). */
 export function getCallableFunctionDataStorage(env: NodeJS.ProcessEnv = process.env): CallableFunctionDataStorage {
@@ -114,6 +130,7 @@ export interface CallableFunctionDataPinInput {
 
 export interface CallableFunctionDataDeps {
   storage?: CallableFunctionDataStorage;
+  source?: CallableFunctionDataSource;
   limits?: CallableFunctionDataLimits;
   now?: Date;
 }
@@ -159,6 +176,11 @@ export async function pinCallableFunctionData(
     throw new ConflictError('This file is still being scanned. Try again shortly.', { code: 'data_file_pending' });
   }
 
+  // The copy outlives the source, so only the actor's own file: a sharer's revoke or erasure must not leave one behind.
+  if (file.userId !== actor.id) {
+    throw new BadRequestError('Only a file you uploaded can be pinned.', { code: 'data_file_not_owned' });
+  }
+
   const limits = deps.limits ?? (await resolveCallableFunctionDataLimits(actor));
   const pinnedBytes = pins.reduce((sum, pin) => sum + pin.bytes, 0);
   const checkSize = (bytes: number) => {
@@ -175,28 +197,50 @@ export async function pinCallableFunctionData(
       });
     }
   };
-  // The recorded size first, so an oversize file is refused before any byte is read; then the bytes themselves.
+  // The recorded size first, then the stored object's own, so an oversize file is refused before any byte is read.
   if (Number.isFinite(file.fileSize)) checkSize(file.fileSize);
-  const bytes = await getFilesStorage().download(file.filePath);
-  checkSize(bytes.length);
+  const source = deps.source ?? getFilesStorage();
+  const { size } = await source.getMetadata(file.filePath);
+  if (size === undefined || !Number.isSafeInteger(size)) {
+    throw new BadRequestError('This file has no stored bytes to pin.', { code: 'data_file_empty' });
+  }
+  checkSize(size);
 
-  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  // One streamed pass: hashed on the way to a staging key, then copied server-side to its content key.
   const storage = deps.storage ?? getCallableFunctionDataStorage();
-  const key = callableFunctionDataKey(fn.id, sha256);
-  await storage.upload(bytes, key, { ContentType: 'application/octet-stream' });
+  const staging = callableFunctionDataStagingKey(fn.id, randomUUID());
+  const hash = createHash('sha256');
+  let seen = 0;
+  const counted = new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      seen += chunk.length;
+      if (seen > size) return done(new Error('The file grew while it was being pinned.'));
+      hash.update(chunk);
+      done(null, chunk);
+    },
+  });
+  let sha256: string;
+  try {
+    const body = (await source.getContent(file.filePath)) as Readable;
+    await storage.uploadStream(body.pipe(counted), staging, size, { ContentType: 'application/octet-stream' });
+    if (seen !== size) throw new Error('The file changed while it was being pinned.');
+    sha256 = hash.digest('hex');
+    await storage.copy(staging, callableFunctionDataKey(fn.id, sha256));
+  } finally {
+    await storage.delete(staging).catch(error => Logger.warn('[CALLABLE_FUNCTION_DATA_STAGING_LEFT]', String(error)));
+  }
 
   const pin: ICallableFunctionDataPin = {
     name: input.name,
     sha256,
-    bytes: bytes.length,
+    bytes: size,
     sourceFileId: file.id,
     pinnedAt: deps.now ?? new Date(),
   };
   const updated = await callableFunctionRepository.setDataPins(fn.id, userOwner(actor), fn, [...pins, pin]);
-  if (!updated) {
-    if (!pins.some(existing => existing.sha256 === sha256)) await storage.delete(key);
-    throw changed();
-  }
+  // Never delete on a lost write: another pin may have just committed the same content key. A copy no pin names is
+  // removed with the function's prefix (deleteCallableFunction, account purge).
+  if (!updated) throw changed();
   return toCallableFunctionPublic(updated, await readHead(actor, fn.pin.artifactId));
 }
 
@@ -215,13 +259,49 @@ export async function unpinCallableFunctionData(
   const kept = pins.filter(pin => pin !== removed);
   const updated = await callableFunctionRepository.setDataPins(fn.id, userOwner(actor), fn, kept);
   if (!updated) throw changed();
-  if (!kept.some(pin => pin.sha256 === removed.sha256)) {
-    await (deps.storage ?? getCallableFunctionDataStorage()).delete(callableFunctionDataKey(fn.id, removed.sha256));
+  // Read again: a pin of the same bytes may have committed since. A failed delete leaves an orphan for the prefix
+  // delete; the unpin itself has already happened.
+  const fresh = await callableFunctionRepository.findByIdForOwner(fn.id, userOwner(actor));
+  const stillNamed = (fresh?.pin.dataPins ?? kept).some(pin => pin.sha256 === removed.sha256);
+  if (!stillNamed) {
+    try {
+      await (deps.storage ?? getCallableFunctionDataStorage()).delete(callableFunctionDataKey(fn.id, removed.sha256));
+    } catch (error) {
+      Logger.warn('[CALLABLE_FUNCTION_DATA_UNPIN_DELETE_FAILED]', { functionId: fn.id, error: String(error) });
+    }
   }
   return toCallableFunctionPublic(updated, await readHead(actor, fn.pin.artifactId));
 }
 
-/** The pinned bytes of one of the owner's functions, for the browser's `/data/<name>`. */
+/**
+ * Where the owner's browser reads one pinned file for `/data/<name>`: a short-lived signed link to the data bucket,
+ * or, where storage cannot sign one a browser can reach (self-host without a browser endpoint), the read route's
+ * same-origin byte stream.
+ */
+export async function linkCallableFunctionDataForBrowser(
+  actor: { id: string },
+  functionId: string,
+  name: string,
+  deps: CallableFunctionDataDeps = {}
+): Promise<{ name: string; sha256: string; bytes: number; url: string }> {
+  const fn = await callableFunctionRepository.findByIdForOwner(functionId, userOwner(actor));
+  if (!fn) throw notFound();
+  const pin = fn.pin.dataPins?.find(entry => entry.name === name);
+  if (!pin) throw new NotFoundError('Data file not found');
+  const storage = deps.storage ?? getCallableFunctionDataStorage();
+  const url = (await storage.browserSigningOrigin())
+    ? await storage.getSignedUrl(callableFunctionDataKey(fn.id, pin.sha256), 'get', {
+        audience: 'browser',
+        expiresIn: CALLABLE_FUNCTION_DATA_BROWSER_LINK_SECONDS,
+        ResponseContentType: 'application/octet-stream',
+        ResponseContentDisposition: 'attachment',
+        ResponseCacheControl: 'private, no-store',
+      })
+    : `/api/callable-functions/${encodeURIComponent(fn.id)}/data/${encodeURIComponent(pin.name)}?bytes=1`;
+  return { name: pin.name, sha256: pin.sha256, bytes: pin.bytes, url };
+}
+
+/** The pinned bytes of one of the owner's functions, served by the read route where no browser link can be signed. */
 export async function readCallableFunctionData(
   actor: { id: string },
   functionId: string,

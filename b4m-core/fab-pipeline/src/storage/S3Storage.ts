@@ -1,6 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import {
   S3Client,
+  CopyObjectCommand,
   PutObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
@@ -132,6 +133,28 @@ export class S3Storage extends BaseStorage {
     } finally {
       content.destroy();
     }
+  }
+
+  /** Streams `content` of exactly `contentLength` bytes to storage without holding it in memory. */
+  async uploadStream(
+    content: Readable,
+    destination: string,
+    contentLength: number,
+    options?: Omit<PutObjectCommandInput, 'Bucket' | 'Key' | 'Body' | 'ContentLength'>
+  ): Promise<string> {
+    return this.put(content, destination, false, { ...options, ContentLength: contentLength });
+  }
+
+  /** Copies an object to another key in this bucket, server-side. */
+  async copy(source: string, destination: string): Promise<string> {
+    await this.s3.send(
+      new CopyObjectCommand({
+        Bucket: this.bucketName,
+        CopySource: `${this.bucketName}/${source.split('/').map(encodeURIComponent).join('/')}`,
+        Key: destination,
+      })
+    );
+    return destination;
   }
 
   private async put(
