@@ -49,6 +49,8 @@ public final class BusyBlockBriefViewModel {
     isEnabled = isOn
     do {
       isEnabled = try await syncer.save(enabled: isOn).enabled
+    } catch is CancellationError {
+      isEnabled = previous
     } catch {
       isEnabled = previous
       errorMessage = "Couldn't save your busy-block setting. Try again."
