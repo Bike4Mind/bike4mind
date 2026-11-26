@@ -267,6 +267,9 @@ export function DataTable<Row>({
     if (!event.currentTarget.contains(target) || target.closest(CELL_CONTROLS)) return;
     // A disabled checkbox input swallows the click, so it lands on the wrapper, which CELL_CONTROLS does not match.
     if (target.closest('[data-selection-cell]')) return;
+    // Drag-selecting cell text to copy it ends in a click; that must not open the row.
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && event.currentTarget.contains(selection.anchorNode)) return;
     onRowActivate?.(row);
   };
 

@@ -254,12 +254,12 @@ export const OPERATIONS_GUIDE: readonly AdminGuideEntry[] = [
     id: 'team-directory',
     title: 'Team',
     summary:
-      'An internal contact directory of team members with phone, email, role and department, shown as cards sorted by name.',
+      'An internal contact directory of team members with phone, email, role and department, shown as a table sorted by name.',
     views: ['admin.team'],
     settings: [],
     howTo: [
       'Open Team. Click Create team member and enter Name and Phone (required), plus optional Email, Role and Department.',
-      'Use the Edit member icon on a card to change details, or Remove member to delete the entry.',
+      'Click a row, or choose Edit from its ... menu, to change details. Choose Remove from the menu and confirm to delete the entry.',
     ],
     keywords: ['staff', 'contacts', 'directory', 'phone numbers', 'team members'],
   },
