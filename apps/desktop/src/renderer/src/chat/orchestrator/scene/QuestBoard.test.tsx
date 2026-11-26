@@ -5,8 +5,15 @@ import { assignPersonas } from '@shared/agentPersona';
 import type { AgentView } from '../roster';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
 import { QUEST_DONE_LINGER_MS } from './quests';
-import { QUEST_BOARD } from '../tavern/scene';
-import { TavernView } from '../tavern/TavernView';
+import type { ComponentProps } from 'react';
+import { SceneStage } from './SceneStage';
+import { TAVERN_SCENE } from '../tavern/tavernScene';
+
+const TavernView = (props: Omit<ComponentProps<typeof SceneStage>, 'scene'>) => (
+  <SceneStage {...props} scene={TAVERN_SCENE} />
+);
+
+const QUEST_BOARD = TAVERN_SCENE.map.board;
 
 const onSelect = vi.fn();
 const onOpenPr = vi.fn();

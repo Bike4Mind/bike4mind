@@ -5,10 +5,33 @@ import type { InnkeeperDesk, OrchestratorViewProps } from '../OrchestratorStage'
 import type { AgentView } from '../roster';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
 import { assignPersonas } from '@shared/agentPersona';
-import { ANNOUNCE_DEBOUNCE_MS } from '../scene/announcements';
-import { BAR_COUNTER, DOOR_POINT, INNKEEPER_POINT, OVERFLOW_POINTS, TAVERN_SLOTS, hiddenByCounter } from './scene';
-import { UNFOCUSED_PAUSE_MS } from '../scene/useScenePause';
-import { TavernView, bubbleText, waitingLabel } from './TavernView';
+import { ANNOUNCE_DEBOUNCE_MS } from './announcements';
+import { bubbleText, waitingLabel } from './bubbleText';
+import { hiddenBehind } from './stageGeometry';
+import type { ComponentProps } from 'react';
+import { SceneStage } from './SceneStage';
+import { TAVERN_SCENE } from '../tavern/tavernScene';
+
+import { UNFOCUSED_PAUSE_MS } from './useScenePause';
+
+// The Tavern is the reference scene: these are the framework's behaviours as the Tavern shows them.
+const { map } = TAVERN_SCENE;
+const zone = (name: string) => map.zones[name];
+const TAVERN_SLOTS = {
+  workbench: zone('workbench').slots,
+  bar: zone('bar').slots,
+  hearth: zone('hearth').slots,
+  benches: zone('benches').slots,
+};
+const OVERFLOW_POINTS = { workbench: zone('workbench').overflow };
+const DOOR_POINT = map.door;
+const INNKEEPER_POINT = map.host;
+const BAR_COUNTER = map.occluders[0];
+const hiddenByCounter = (point: { x: number; y: number }, height: number) => hiddenBehind(point, height, map.occluders);
+
+const TavernView = (props: Omit<ComponentProps<typeof SceneStage>, 'scene'>) => (
+  <SceneStage {...props} scene={TAVERN_SCENE} />
+);
 
 describe('bubbleText for settled and waiting agents', () => {
   it('names the one background job, or counts several', () => {
@@ -43,10 +66,10 @@ describe('bubbleText for settled and waiting agents', () => {
   });
 });
 
-type SceneModule = typeof import('../scene/stageGeometry');
+type SceneModule = typeof import('./stageGeometry');
 // Lets one test squeeze a label below the minimum, which no real seat pair does.
 const labelLayoutOverride = vi.hoisted(() => ({ current: null as SceneModule['nameLabelLayout'] | null }));
-vi.mock('../scene/stageGeometry', async importOriginal => {
+vi.mock('./stageGeometry', async importOriginal => {
   const actual = await importOriginal<SceneModule>();
   return {
     ...actual,
@@ -163,7 +186,7 @@ describe('TavernView', () => {
     expect(el('orchestrator-tavern-agent-d').getAttribute('aria-label')).toContain('Agent d: Failed');
     expect(el('orchestrator-tavern-name-b').getAttribute('data-state')).toBe('needs-you');
     expect(el('orchestrator-tavern-name-c').getAttribute('data-state')).toBe('done');
-    expect(el('orchestrator-tavern-innkeeper-name').hasAttribute('data-state')).toBe(false);
+    expect(el('orchestrator-tavern-host-name').hasAttribute('data-state')).toBe(false);
   });
 
   it('staggers crowded name labels and caps them through a CSS variable, keeping the full title', async () => {
@@ -219,7 +242,7 @@ describe('TavernView', () => {
   });
 
   it("moves the Innkeeper's plate aside while the bar's bubble is up, and brings it back after", async () => {
-    const plate = () => getComputedStyle(el('orchestrator-tavern-innkeeper-name')).display;
+    const plate = () => getComputedStyle(el('orchestrator-tavern-host-name')).display;
     await renderTavern([agentFixture('a', 'needs-you')], false, null, { parent: { status: 'done' } });
     expect(plate()).toBe('none');
     await renderTavern([agentFixture('a', 'done')], false, null, { parent: { status: 'done' } });
@@ -372,7 +395,7 @@ describe('TavernView', () => {
   });
 
   describe('the Innkeeper', () => {
-    const innkeeper = () => el('orchestrator-tavern-innkeeper');
+    const innkeeper = () => el('orchestrator-tavern-host');
     const sessionRead = (target: string): OrchestratorViewProps['parent'] => ({
       status: 'processing',
       activity: { kind: 'tool', tool: 'session_read', detail: '', target },
@@ -383,8 +406,8 @@ describe('TavernView', () => {
       expect(innkeeper().style.left).toBe(`${INNKEEPER_POINT.x}%`);
       expect(innkeeper().style.top).toBe(`${INNKEEPER_POINT.y}%`);
       expect(innkeeper().getAttribute('data-pose')).toBe('idle');
-      expect(el('orchestrator-tavern-innkeeper-name').textContent).toBe('Innkeeper');
-      expect(query('orchestrator-tavern-innkeeper-bubble')).toBeNull();
+      expect(el('orchestrator-tavern-host-name').textContent).toBe('Innkeeper');
+      expect(query('orchestrator-tavern-host-bubble')).toBeNull();
       expect(sprites()).toHaveLength(1);
       expect(sprites()[0].querySelector('[data-contact-shadow]'), 'agents get a contact shadow').not.toBeNull();
     });
@@ -392,9 +415,7 @@ describe('TavernView', () => {
     it('is cut off at the counter top behind the bar, with no shadow on floor it does not stand on', async () => {
       await renderTavern([], false, null, { parent: { status: 'done' } });
       expect(innkeeper().hasAttribute('data-behind-counter')).toBe(true);
-      expect(el('orchestrator-tavern-innkeeper-art').style.clipPath).toMatch(
-        /^inset\(0(px)? 0(px)? [1-9][\d.]*% 0(px)?\)$/
-      );
+      expect(el('orchestrator-tavern-host-art').style.clipPath).toMatch(/^inset\(0(px)? 0(px)? [1-9][\d.]*% 0(px)?\)$/);
       const shadow = innkeeper().querySelector<HTMLElement>('[data-contact-shadow]');
       expect(shadow).not.toBeNull();
       expect(getComputedStyle(shadow!).opacity).toBe('0');
@@ -404,7 +425,7 @@ describe('TavernView', () => {
       const onInnkeeperSelect = vi.fn();
       await renderTavern([], false, null, { parent: { status: 'done' }, onInnkeeperSelect });
       expect(getComputedStyle(innkeeper()).pointerEvents).toBe('none');
-      const art = el('orchestrator-tavern-innkeeper-art');
+      const art = el('orchestrator-tavern-host-art');
       const artStyle = getComputedStyle(art);
       expect(artStyle.pointerEvents).toBe('auto');
       expect(artStyle.cursor).toBe('pointer');
@@ -418,7 +439,7 @@ describe('TavernView', () => {
         parent: { status: 'processing', activity: { kind: 'tool', tool: 'session_spawn', detail: '' } },
       });
       expect(innkeeper().getAttribute('data-pose')).toBe('writing');
-      expect(el('orchestrator-tavern-innkeeper-bubble').textContent).toBe('session_spawn');
+      expect(el('orchestrator-tavern-host-bubble').textContent).toBe('session_spawn');
     });
 
     it('walks over to the agent it reads, and back once the read is over', async () => {
@@ -433,7 +454,7 @@ describe('TavernView', () => {
         expect(innkeeper().style.top).toBe(`${hearth.y}%`);
         // Out on the floor: whole, and grounded by its shadow.
         expect(innkeeper().hasAttribute('data-behind-counter')).toBe(false);
-        expect(el('orchestrator-tavern-innkeeper-art').style.clipPath).toMatch(
+        expect(el('orchestrator-tavern-host-art').style.clipPath).toMatch(
           /^inset\(0(px)?( 0(px)?)*\)$|^inset\(0(px)? 0(px)? 0% 0(px)?\)$/
         );
 
@@ -479,7 +500,7 @@ describe('TavernView', () => {
       });
 
       await renderTavern(agents, false, null, { parent: sessionRead('b') });
-      const art = () => el('orchestrator-tavern-innkeeper-art');
+      const art = () => el('orchestrator-tavern-host-art');
       const behind = hiddenByCounter(feet, 15);
       expect(behind).toBeGreaterThan(0);
       expect(art().style.clipPath).toBe(`inset(0 0 ${behind}% 0)`);
@@ -518,8 +539,8 @@ describe('TavernView', () => {
       await renderTavern(agents, false, null, { parent: sessionRead('b') });
       await renderTavern(agents, false, null, { parent: sessionRead('b') });
       expect(innkeeper().style.left).toBe(`${INNKEEPER_POINT.x}%`);
-      expect(el('orchestrator-tavern-agent-b').getAttribute('data-innkeeper-visit')).toBe('true');
-      expect(el('orchestrator-tavern-agent-a').getAttribute('data-innkeeper-visit')).toBeNull();
+      expect(el('orchestrator-tavern-agent-b').getAttribute('data-host-visit')).toBe('true');
+      expect(el('orchestrator-tavern-agent-a').getAttribute('data-host-visit')).toBeNull();
     });
 
     it('is not interactive when nothing handles its selection, and has no greeting without a desk', async () => {
@@ -527,7 +548,7 @@ describe('TavernView', () => {
       const button = innkeeper() as HTMLButtonElement;
       expect(button.disabled).toBe(true);
       expect(button.tabIndex).toBe(-1);
-      expect(query('orchestrator-tavern-innkeeper-greeting')).toBeNull();
+      expect(query('orchestrator-tavern-host-greeting')).toBeNull();
     });
   });
 
@@ -536,10 +557,10 @@ describe('TavernView', () => {
     await renderTavern(agents, false, null, { celebrating: true });
     expect(el('orchestrator-tavern-agent-a').getAttribute('data-cheering')).toBe('true');
     expect(el('orchestrator-tavern-agent-b').getAttribute('data-cheering')).toBe('true');
-    expect(el('orchestrator-tavern-innkeeper').getAttribute('data-pose')).toBe('cheering');
+    expect(el('orchestrator-tavern-host').getAttribute('data-pose')).toBe('cheering');
     await renderTavern(agents);
     expect(el('orchestrator-tavern-agent-a').getAttribute('data-cheering')).toBeNull();
-    expect(el('orchestrator-tavern-innkeeper').getAttribute('data-pose')).toBe('idle');
+    expect(el('orchestrator-tavern-host').getAttribute('data-pose')).toBe('idle');
   });
 
   describe('the conversation toggle and reply bubble', () => {
@@ -553,7 +574,7 @@ describe('TavernView', () => {
       const onInnkeeperSelect = vi.fn();
       const front = desk();
       await renderTavern([agentFixture('a')], false, null, { desk: front, onInnkeeperSelect });
-      act(() => el('orchestrator-tavern-innkeeper').click());
+      act(() => el('orchestrator-tavern-host').click());
       expect(onInnkeeperSelect).toHaveBeenCalledTimes(1);
     });
 
@@ -595,14 +616,14 @@ describe('TavernView', () => {
         parent: { status: 'needs-action' },
       });
       expect(query('orchestrator-tavern-reply-bubble')).toBeNull();
-      expect(el('orchestrator-tavern-innkeeper-bubble').textContent).toBe('Needs you!');
+      expect(el('orchestrator-tavern-host-bubble').textContent).toBe('Needs you!');
     });
 
     it('greets a first-timer outright and everyone else on hover', async () => {
       await renderTavern([], false, null, { desk: desk() });
-      expect(el('orchestrator-tavern-innkeeper-greeting').getAttribute('data-hover-bubble')).toBeNull();
+      expect(el('orchestrator-tavern-host-greeting').getAttribute('data-hover-bubble')).toBeNull();
       await renderTavern([agentFixture('a')], false, null, { desk: desk() });
-      expect(el('orchestrator-tavern-innkeeper-greeting').getAttribute('data-hover-bubble')).toBe('true');
+      expect(el('orchestrator-tavern-host-greeting').getAttribute('data-hover-bubble')).toBe('true');
     });
   });
 });

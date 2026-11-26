@@ -1,37 +1,69 @@
 import { describe, expect, it } from 'vitest';
 import type { Epithet } from '@shared/agentPersona';
 import type { AgentState, AgentView } from '../roster';
-import {
-  BAR_COUNTER,
-  DOOR_POINT,
-  INNKEEPER_POINT,
-  OVERFLOW_POINTS,
-  QUEST_BOARD,
-  TAVERN_SLOTS,
-  assignCharacters,
-  type CastSubject,
-  hiddenByCounter,
-  placeAgents,
-  poseFor,
-  zoneFor,
-  type Placement,
-  type SlotPoint,
-} from './scene';
 import { noteCapacity as fitNotes, pinNotes } from '../scene/boardFit';
+import { assignSheets, type CastSubject } from '../scene/cast';
+import { placeAgents as placeOnMap, placementMap, type Placement } from '../scene/placement';
+import { sceneDefinitionSchema, type ScenePoint as SlotPoint } from '../scene/sceneDefinition';
 import {
   LABEL_SPAN,
   NAME_LABEL_MAX_WIDTH,
   NAME_LABEL_MIN_WIDTH,
+  hiddenBehind,
   nameLabelLayout,
   needsYouGroups,
   type NameLabel,
 } from '../scene/stageGeometry';
-import { CHARACTER_COUNT, characterSprite } from './tavernArt';
+import { TAVERN_CAST } from './tavernArt';
 import { TAVERN_LAYOUT, tavernLayoutSchema } from './tavernLayout';
+import { TAVERN_SCENE } from './tavernScene';
 import layoutJson from '../../../assets/orchestrator/tavern/layout.json';
 
+// The Tavern's map and rules as read through the framework, under the names these tests grew up with.
+type TavernZone = 'workbench' | 'bar' | 'hearth' | 'benches';
+const { map, states } = TAVERN_SCENE;
+const zoneEntries = Object.entries(map.zones) as [TavernZone, (typeof map.zones)[string]][];
+const TAVERN_SLOTS: Record<string, readonly SlotPoint[]> = Object.fromEntries(
+  zoneEntries.map(([zone, { slots }]) => [zone, slots])
+);
+const OVERFLOW_POINTS: Record<string, SlotPoint> = Object.fromEntries(
+  zoneEntries.map(([zone, z]) => [zone, z.overflow])
+);
+const DOOR_POINT = map.door;
+const INNKEEPER_POINT = map.host;
+const QUEST_BOARD = map.board;
+const BAR_COUNTER = map.occluders[0];
+const CHARACTER_COUNT = TAVERN_CAST.length;
+const zoneFor = (state: AgentState) => states.zone[state];
+const poseFor = (state: AgentState) => states.pose[state];
+const hiddenByCounter = (point: SlotPoint, spriteHeight: number) => hiddenBehind(point, spriteHeight, map.occluders);
+const placeAgents = (agents: readonly AgentView[], previous: ReadonlyMap<string, Placement>) =>
+  placeOnMap(agents, previous, placementMap(TAVERN_SCENE));
+const characterSprite = (character: number, pose: string) => TAVERN_SCENE.cast.sheets[character - 1].sprites[pose];
+/** 1-based characters, as the `char-<n>-*` files are numbered. */
+function assignCharacters(
+  agents: readonly CastSubject[],
+  count: number = CHARACTER_COUNT,
+  craftOf: (character: number) => Epithet = character => TAVERN_CAST[character - 1].craft
+): Map<string, number> {
+  const crafts = Array.from({ length: count }, (_, index) => craftOf(index + 1));
+  return new Map([...assignSheets(agents, crafts)].map(([id, sheet]) => [id, sheet + 1]));
+}
 const noteCapacity = (height: number, total: number, max: number = QUEST_BOARD.notes) =>
   fitNotes(height, total, { height: QUEST_BOARD.height, notes: max });
+
+describe('TAVERN_SCENE', () => {
+  it('is a valid scene definition', () => {
+    expect(sceneDefinitionSchema.safeParse(TAVERN_SCENE).success).toBe(true);
+  });
+
+  it('reads its map from the layout file beside the backdrop', () => {
+    expect(TAVERN_SLOTS).toEqual(TAVERN_LAYOUT.slots);
+    expect(OVERFLOW_POINTS).toEqual(TAVERN_LAYOUT.overflow);
+    expect(QUEST_BOARD).toEqual(TAVERN_LAYOUT.questBoard);
+    expect(INNKEEPER_POINT).toEqual(TAVERN_LAYOUT.innkeeper);
+  });
+});
 
 // testUtils needs a DOM; placement only reads id and state.
 const agentFixture = (id: string, state: AgentState): AgentView => ({

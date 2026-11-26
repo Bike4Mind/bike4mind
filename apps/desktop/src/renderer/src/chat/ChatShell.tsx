@@ -934,7 +934,7 @@ export function ChatShell({
     !turnOpen &&
     conversation.messages.length === 0;
 
-  // Derived during render, not in an effect: TavernView only plays its intro if introPlaying is
+  // Derived during render, not in an effect: a scene only plays its intro if introPlaying is
   // already true when it mounts, which is the same commit that enters orchestrate mode.
   const orchestrateEntry = orchestrating ? activeId : null;
   const [introEntry, setIntroEntry] = useState<string | null>(null);

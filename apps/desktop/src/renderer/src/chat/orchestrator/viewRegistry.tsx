@@ -6,13 +6,15 @@ import { PlanView } from './PlanView';
 import { OfficeView } from './office/OfficeView';
 import type { OrchestratorViewProps } from './OrchestratorStage';
 import type { OrchestratorViewId } from './orchestratorPrefs';
+import { sceneView } from './scene/SceneStage';
 import { snapshotView } from './snapshotView';
 import { Swimlanes } from './Swimlanes';
 import { TableView } from './TableView';
-import { TavernView } from './tavern/TavernView';
+import { TAVERN_SCENE } from './tavern/tavernScene';
 import { TileWall } from './TileWall';
 import { Transit } from './Transit';
 
+const TavernView = sceneView(TAVERN_SCENE);
 const TileWallView = snapshotView(TileWall, { displayName: 'TileWallView' });
 const SwimlanesView = snapshotView(Swimlanes, { displayName: 'SwimlanesView' });
 const ConstellationView = snapshotView(Constellation, { displayName: 'ConstellationView' });

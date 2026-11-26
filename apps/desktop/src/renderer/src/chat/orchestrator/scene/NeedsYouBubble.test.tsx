@@ -6,7 +6,13 @@ import type { PendingDecision } from '@shared/orchestration';
 import type { AgentView } from '../roster';
 import { agentFixture, createThemedMount, el, query } from '../testUtils';
 import { assignPersonas } from '@shared/agentPersona';
-import { TavernView } from '../tavern/TavernView';
+import type { ComponentProps } from 'react';
+import { SceneStage } from './SceneStage';
+import { TAVERN_SCENE } from '../tavern/tavernScene';
+
+const TavernView = (props: Omit<ComponentProps<typeof SceneStage>, 'scene'>) => (
+  <SceneStage {...props} scene={TAVERN_SCENE} />
+);
 
 const themed = createThemedMount();
 const onSelect = vi.fn();

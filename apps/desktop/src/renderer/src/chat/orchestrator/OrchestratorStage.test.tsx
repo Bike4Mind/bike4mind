@@ -5,7 +5,10 @@ import { ambientHeld } from './ambient';
 import { OrchestratorStage, type OrchestratorViewProps } from './OrchestratorStage';
 import { singlePaneLayout } from './orchestratorLayout';
 import type { AgentView } from './roster';
-import { TavernView } from './tavern/TavernView';
+import { sceneView } from './scene/SceneStage';
+import { TAVERN_SCENE } from './tavern/tavernScene';
+
+const TavernView = sceneView(TAVERN_SCENE);
 import { Aquarium } from './aquarium/Aquarium';
 import { snapshotView } from './snapshotView';
 import { agentFixture, createThemedMount, el, query, typeInto } from './testUtils';
@@ -93,7 +96,7 @@ describe('OrchestratorStage', () => {
       await renderEmpty('tavern');
       const empty = el('orchestrator-empty-state');
       expect(empty.querySelector('[data-testid="orchestrator-tavern"]')).not.toBeNull();
-      expect(el('orchestrator-tavern-innkeeper').getAttribute('data-pose')).toBe('idle');
+      expect(el('orchestrator-tavern-host').getAttribute('data-pose')).toBe('idle');
       expect(empty.textContent).toContain(
         'No quests yet. Describe the work and the Innkeeper will split it across agents.'
       );

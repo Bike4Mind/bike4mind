@@ -38,6 +38,8 @@ import { SkinMenuSection } from './SkinMenuSection';
 import { SoundPackMenuSection } from './SoundPackMenuSection';
 import { PaneSessionMenu, type PaneSessionChoices } from './PaneSessionMenu';
 import type { FinaleLook } from './FinaleBanner';
+import type { SceneDefinition } from './scene/sceneDefinition';
+import { TAVERN_SCENE } from './tavern/tavernScene';
 
 type ViewGroup = 'scene' | 'layout';
 
@@ -52,12 +54,15 @@ export interface SceneStageInfo {
   copy: { host: string; quiet: string; talk: string; empty: string };
 }
 
-const TAVERN_STAGE_COPY: SceneStageInfo['copy'] = {
-  host: 'The Innkeeper',
-  quiet: 'The tavern is quiet',
-  talk: 'Type to talk to the Innkeeper',
-  empty: 'No quests yet. Describe the work and the Innkeeper will split it across agents.',
-};
+/** A scene on the framework (scene/SceneStage) has every feature, so its info is read off its definition. */
+const frameworkScene = (scene: SceneDefinition): SceneStageInfo => ({
+  host: true,
+  inSceneDecisions: true,
+  finale: scene.look.finale,
+  copy: scene.copy.stage,
+});
+
+const TAVERN_STAGE_COPY = TAVERN_SCENE.copy.stage;
 
 interface ViewInfo {
   label: string;
@@ -83,7 +88,7 @@ export const ORCHESTRATOR_VIEW_INFO: Record<OrchestratorViewId, ViewInfo> = {
       light: { background: '#f2ece1', border: '#c4b8a5' },
       dark: { background: '#29251f', border: '#5d5345' },
     },
-    scene: { host: true, inSceneDecisions: true, finale: 'tavern', copy: TAVERN_STAGE_COPY },
+    scene: frameworkScene(TAVERN_SCENE),
   },
   aquarium: {
     label: 'Aquarium',

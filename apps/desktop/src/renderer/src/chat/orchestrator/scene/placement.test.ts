@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentState } from '@shared/agentState';
-import { OVERFLOW_POINTS, TAVERN_SLOTS, placeAgents as placeTavernAgents, zoneFor } from '../tavern/scene';
 import type { AgentView } from '../roster';
-import { placeAgents, placementMap, type Placement, type PlacementMap } from './placement';
+import { placeAgents, placementMap, type Placement } from './placement';
 import { TEST_SCENE } from './testScene';
 
 const MAP = placementMap(TEST_SCENE);
@@ -138,43 +137,5 @@ describe('placeAgents', () => {
     // Every needs-you agent that could be seated is: all seats go to them first.
     const needySeated = seats.filter(seat => seat.kind === 'seat' && (seat.zone === 'porch' || seat.borrowed));
     expect(needySeated).toHaveLength(total);
-  });
-});
-
-describe('placeAgents matches the Tavern allocator on the Tavern map', () => {
-  const TAVERN_MAP: PlacementMap = {
-    zones: Object.fromEntries(
-      Object.entries(TAVERN_SLOTS).map(([zone, slots]) => [
-        zone,
-        { slots, overflow: OVERFLOW_POINTS[zone as keyof typeof OVERFLOW_POINTS] },
-      ])
-    ),
-    zoneOf: zoneFor,
-    borrowOrder: ['benches', 'workbench', 'hearth'],
-  };
-  const STATES: AgentState[] = ['working', 'waiting', 'needs-you', 'done', 'failed', 'paused', 'stopped', 'idle'];
-
-  it('gives the same placements over many random roster histories', () => {
-    let seed = 7;
-    const random = () => {
-      seed = (seed * 1103515245 + 12345) % 2 ** 31;
-      return seed / 2 ** 31;
-    };
-    for (let history = 0; history < 40; history++) {
-      let roster = Array.from({ length: Math.floor(random() * 30) }, (_, index) =>
-        agent(`h${history}-${index}`, STATES[Math.floor(random() * STATES.length)])
-      );
-      let ours: ReadonlyMap<string, Placement> = new Map();
-      let theirs: ReadonlyMap<string, Placement> = new Map();
-      for (let step = 0; step < 12; step++) {
-        roster = roster
-          .filter(() => random() > 0.1)
-          .map(each => (random() < 0.3 ? { ...each, state: STATES[Math.floor(random() * STATES.length)] } : each));
-        if (random() < 0.6) roster.push(agent(`h${history}-n${step}`, STATES[Math.floor(random() * STATES.length)]));
-        ours = placeAgents(roster, ours, TAVERN_MAP);
-        theirs = placeTavernAgents(roster, theirs as Parameters<typeof placeTavernAgents>[1]);
-        expect(ours).toEqual(theirs);
-      }
-    }
   });
 });
