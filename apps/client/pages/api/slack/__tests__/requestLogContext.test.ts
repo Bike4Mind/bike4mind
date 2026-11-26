@@ -6,6 +6,17 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { Logger } from '@bike4mind/observability';
 
 vi.mock('sst', () => ({ Resource: {} }));
+vi.mock('@server/slack/resolveSlackInstallation', () => ({ resolveSlackInstallation: vi.fn() }));
+const testSlackInstallation = {
+  ok: true as const,
+  installation: {
+    kind: 'dev' as const,
+    signingSecret: 'secret',
+    botToken: 'xoxb-test',
+    workspace: { id: 'workspace-1', name: 'Test workspace' } as never,
+    workspaceWithCreds: { id: 'workspace-1', name: 'Test workspace', slackBotName: 'test-bot' } as never,
+  },
+};
 vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://test', STAGE: 'test' },
@@ -30,7 +41,6 @@ vi.mock('@bike4mind/database/infra', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/database/infra')>('@bike4mind/database/infra');
   return {
     ...actual,
-    SlackDevWorkspace: { findOne: vi.fn() },
     slackDevWorkspaceRepository: {
       findAllActive: vi.fn().mockResolvedValue([{ id: 'workspace-1' }]),
       findByIdWithCredentials: vi.fn().mockResolvedValue({
@@ -59,7 +69,7 @@ vi.mock('@bike4mind/slack', async () => {
   };
 });
 
-import { SlackDevWorkspace } from '@bike4mind/database/infra';
+import { resolveSlackInstallation } from '@server/slack/resolveSlackInstallation';
 import commandsHandler from '../commands';
 import interactiveHandler from '../interactive';
 
@@ -136,9 +146,7 @@ describe('slack handlers log with their own request context', () => {
   });
 
   it('interactive: static logs carry the interactive request', async () => {
-    vi.mocked(SlackDevWorkspace.findOne).mockReturnValue({
-      select: () => Promise.resolve({ id: 'w', slackOAuthSigningSecret: 's', slackBotToken: 'e' }),
-    } as never);
+    vi.mocked(resolveSlackInstallation).mockResolvedValue(testSlackInstallation);
     const { res } = createMocks();
     await interactiveHandler(
       signedRequest('/api/slack/interactive', {

@@ -3652,6 +3652,7 @@ export class ChatCompletionProcess {
         modelInfo,
         logger,
         processStartTime,
+        excludeUserSystemFiles: Boolean(parsedBody.disableUserIntegrations),
       });
       const {
         urlMessages,
@@ -8909,6 +8910,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     modelInfo,
     logger,
     processStartTime,
+    excludeUserSystemFiles = false,
   }: {
     defaultAdminSettings: Record<string, string>;
     sessionFabFileIds: string[];
@@ -8925,6 +8927,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     modelInfo: ModelInfo;
     logger: Logger;
     processStartTime: number;
+    /** Set for a turn whose prompt the user did not author (request-level disableUserIntegrations). */
+    excludeUserSystemFiles?: boolean;
   }): Promise<{
     urlMessages: IMessage[];
     remainingUserPrompt: string;
@@ -9007,6 +9011,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       enabledSystemFileIds = (this.user.systemFiles ?? []).filter(file => file.enabled).map(file => file.fileId);
       this.systemFilesCache.set(systemFilesCacheKey, [globalSystemFileIds, enabledSystemFileIds]);
     }
+    if (excludeUserSystemFiles) enabledSystemFileIds = [];
 
     // Defer the retrievable-corpus subset out of the inline set (resolveCorpusInlinePlan); the
     // offered search_knowledge_base tool fetches those on demand. Only knowledge IDs are affected -

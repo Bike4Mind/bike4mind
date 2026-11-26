@@ -5,7 +5,7 @@ describe('processMarkdownForSlack', () => {
   it('should convert markdown links to Slack format', () => {
     const input = 'Check [this link](https://example.com) for details.';
     const { text } = processMarkdownForSlack(input);
-    expect(text).toContain('<https://example.com|this link>');
+    expect(text).toContain('<https://example.com|this link (example.com)>');
   });
 
   it('should preserve links in table cells after table-to-list conversion', () => {
@@ -18,8 +18,8 @@ describe('processMarkdownForSlack', () => {
 
     const { text } = processMarkdownForSlack(input);
 
-    expect(text).toContain('<https://github.com/org/repo/pull/360|#360>');
-    expect(text).toContain('<https://github.com/org/repo/pull/356|#356>');
+    expect(text).toContain('<https://github.com/org/repo/pull/360|#360 (github.com)>');
+    expect(text).toContain('<https://github.com/org/repo/pull/356|#356 (github.com)>');
     expect(text).not.toContain('[#360]');
   });
 
@@ -30,7 +30,7 @@ describe('processMarkdownForSlack', () => {
 
     const { text } = processMarkdownForSlack(input);
 
-    expect(text).toContain('<https://github.com/org/repo/pull/100|#100>');
+    expect(text).toContain('<https://github.com/org/repo/pull/100|#100 (github.com)>');
   });
 
   it('should pass through plain text unchanged', () => {
@@ -52,7 +52,27 @@ describe('processMarkdownForSlack', () => {
     const input = 'See [results](https://example.com/search?a=1&b=2) for details.';
     const { text } = processMarkdownForSlack(input);
     // remark-stringify escapes & as \& in URLs; Slack still resolves the link
-    expect(text).toContain('<https://example.com/search?a=1\\&b=2|results>');
+    expect(text).toContain('<https://example.com/search?a=1\\&b=2|results (example.com)>');
+  });
+
+  it('names the destination host of a model link that hides it behind a label', () => {
+    const { text } = processMarkdownForSlack('[Open the docs](https://collector.example/c?d=secret)');
+    expect(text).toContain('<https://collector.example/c?d=secret|Open the docs (collector.example)>');
+  });
+
+  it('keeps a cited link or one whose label names its host as a plain masked link', () => {
+    const cited = 'https://news.example/story';
+    const { text } = processMarkdownForSlack(`[Story](${cited}) and [github.com/org](https://github.com/org)`, [
+      { id: 'c1', type: 'web_url', title: 'Story', url: cited } as never,
+    ]);
+    expect(text).toContain(`<${cited}|Story>`);
+    expect(text).toContain('<https://github.com/org|github.com/org>');
+  });
+
+  it('drops the target of a non-http link', () => {
+    const { text } = processMarkdownForSlack('[click](slack://open?team=T1)');
+    expect(text).toContain('click');
+    expect(text).not.toContain('slack://');
   });
 
   it('should truncate URLs containing parentheses (known limitation)', () => {

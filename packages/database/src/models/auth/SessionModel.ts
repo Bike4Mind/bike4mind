@@ -55,6 +55,7 @@ const SessionOriginSchema = new Schema(
   {
     channel: { type: String, enum: [...SESSION_ORIGIN_CHANNELS], required: true },
     apiKeyId: { type: String, required: false },
+    slackWorkflow: { type: Boolean, required: false },
   },
   {
     _id: false,

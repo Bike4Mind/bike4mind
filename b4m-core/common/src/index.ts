@@ -252,7 +252,7 @@ export * from './adminPermissions';
 export * from './mfaEnforcement';
 export * from './adminRoles';
 
-export { VERIFIED_SLACK_IDENTITY_FILTER } from './slackIdentity';
+export { VERIFIED_SLACK_IDENTITY_FILTER, slackIdentityFilter } from './slackIdentity';
 
 export * from './preferenceArena';
 export * from './ipBlock';

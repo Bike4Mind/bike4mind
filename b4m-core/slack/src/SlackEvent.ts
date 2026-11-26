@@ -417,9 +417,9 @@ export class SlackEvent {
    * Get the internal user (from database) by Slack ID
    * Returns null if user is not linked
    */
-  async getInternalUser(): Promise<IUserDocument | null> {
+  async getInternalUser(slackTeamId: string | undefined): Promise<IUserDocument | null> {
     if (!this.user) return null;
-    return findUserBySlackId(this.user);
+    return findUserBySlackId(this.user, slackTeamId);
   }
 
   /**
