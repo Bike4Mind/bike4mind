@@ -2,11 +2,24 @@
 import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ findOne: vi.fn(), updateOne: vi.fn(), findListing: vi.fn() }));
+const h = vi.hoisted(() => ({
+  findOne: vi.fn(),
+  updateOne: vi.fn(),
+  findListing: vi.fn(),
+  marks: new Map<string, number>(),
+}));
 
 vi.mock('@bike4mind/database', () => ({
   SkillListingTemplate: { findOne: h.findOne, updateOne: h.updateOne },
+  cacheRepository: {
+    incrementCounter: async (key: string) => {
+      const count = (h.marks.get(key) ?? 0) + 1;
+      h.marks.set(key, count);
+      return count;
+    },
+  },
 }));
+vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: { JWT_SECRET: 'test-secret' } }));
 vi.mock('@bike4mind/server-utils/skillMarket/market', () => ({ findListing: h.findListing }));
 vi.mock('./template', () => ({
   isLive: (l: { status: string; currentApprovedVersionId?: string; hiddenByReports?: boolean }) =>
@@ -15,12 +28,14 @@ vi.mock('./template', () => ({
 
 import {
   MERMAID_SCRIPT_SRC,
+  compactCount,
   TEMPLATE_FREE_RUN_SCRIPT_HASH,
   TEMPLATE_LOADER_SCRIPT_HASH,
   findServableTemplate,
   recordTemplateTry,
   recordTemplateView,
   renderTemplateLoaderShell,
+  templateViewMarkKey,
   renderTemplatePage,
   type TemplatePageView,
 } from './templatePage';
@@ -60,10 +75,71 @@ describe('findServableTemplate', () => {
 });
 
 describe('recordTemplateView', () => {
-  it('increments the view count', async () => {
-    h.updateOne.mockResolvedValue({});
-    await recordTemplateView({ _id: 't1' } as never);
+  const visitor = { ip: '203.0.113.7', userAgent: 'Mozilla/5.0 Chrome/126.0' };
+  const noon = new Date('2026-11-26T12:00:00Z');
+
+  beforeEach(() => {
+    h.marks.clear();
+    h.updateOne.mockReset().mockResolvedValue({});
+  });
+
+  it('increments the view count on the first visit', async () => {
+    expect(await recordTemplateView({ _id: 't1' } as never, visitor, noon)).toBe(true);
     expect(h.updateOne).toHaveBeenCalledWith({ _id: 't1' }, { $inc: { viewCount: 1 } }, { runValidators: true });
+  });
+
+  it('counts a reload by the same visitor on the same UTC day once', async () => {
+    await recordTemplateView({ _id: 't1' } as never, visitor, noon);
+    expect(await recordTemplateView({ _id: 't1' } as never, visitor, new Date('2026-11-26T23:59:59Z'))).toBe(false);
+    expect(h.updateOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts the same visitor again on the next UTC day, and on another page', async () => {
+    await recordTemplateView({ _id: 't1' } as never, visitor, noon);
+    expect(await recordTemplateView({ _id: 't1' } as never, visitor, new Date('2026-11-27T00:00:01Z'))).toBe(true);
+    expect(await recordTemplateView({ _id: 't2' } as never, visitor, noon)).toBe(true);
+    expect(h.updateOne).toHaveBeenCalledTimes(3);
+  });
+
+  it('counts different visitors separately', async () => {
+    await recordTemplateView({ _id: 't1' } as never, visitor, noon);
+    expect(await recordTemplateView({ _id: 't1' } as never, { ...visitor, ip: '198.51.100.2' }, noon)).toBe(true);
+    expect(await recordTemplateView({ _id: 't1' } as never, { ...visitor, userAgent: 'Firefox/130.0' }, noon)).toBe(
+      true
+    );
+    expect(await recordTemplateView({ _id: 't1' } as never, { ...visitor, userId: 'u1' }, noon)).toBe(true);
+    expect(h.updateOne).toHaveBeenCalledTimes(4);
+  });
+
+  it('counts a signed-in visitor once a day across networks', async () => {
+    await recordTemplateView({ _id: 't1' } as never, { ...visitor, userId: 'u1' }, noon);
+    expect(await recordTemplateView({ _id: 't1' } as never, { ip: '198.51.100.2', userId: 'u1' }, noon)).toBe(false);
+  });
+
+  it('stores no raw IP, user agent or user id in the mark key', () => {
+    const key = templateViewMarkKey('t1', { ...visitor, userId: 'user-42' }, noon);
+    expect(key).toMatch(/^skill-template-view:[A-Za-z0-9_-]{43}$/);
+    expect(key).not.toContain('203.0.113.7');
+    expect(key).not.toContain('user-42');
+    expect(key).not.toContain('2026-11-26');
+  });
+});
+
+describe('compactCount', () => {
+  it.each([
+    [0, '0'],
+    [7, '7'],
+    [999, '999'],
+    [1000, '1k'],
+    [1234, '1.2k'],
+    [1299, '1.2k'],
+    [12_500, '12.5k'],
+    [999_999, '999.9k'],
+    [1_000_000, '1M'],
+    [3_456_789, '3.4M'],
+    [2_000_000_000, '2B'],
+  ])('formats %i as %s', (n, expected) => {
+    expect(compactCount(n)).toBe(expected);
   });
 });
 
@@ -89,6 +165,33 @@ describe('renderTemplatePage', () => {
     brandName: 'Acme',
     share: null,
   };
+
+  describe('metrics line', () => {
+    const metrics = (html: string) => /data-testid="template-page-metrics">([^<]*)</.exec(html)?.[1];
+
+    it('shows views and downloads under the byline, compactly', () => {
+      const html = renderTemplatePage({ ...view, metrics: { views: 1234, downloads: 87 } });
+      expect(metrics(html)).toBe('1.2k views \u00b7 87 downloads');
+      expect(html.indexOf('template-page-byline')).toBeLessThan(html.indexOf('template-page-metrics'));
+    });
+
+    it('leaves out a zero count', () => {
+      expect(metrics(renderTemplatePage({ ...view, metrics: { views: 5, downloads: 0 } }))).toBe('5 views');
+      expect(metrics(renderTemplatePage({ ...view, metrics: { views: 0, downloads: 2 } }))).toBe('2 downloads');
+    });
+
+    it('uses the singular for one', () => {
+      expect(metrics(renderTemplatePage({ ...view, metrics: { views: 1, downloads: 1 } }))).toBe(
+        '1 view \u00b7 1 download'
+      );
+    });
+
+    it('renders no line when both counts are zero or missing', () => {
+      for (const m of [{ views: 0, downloads: 0 }, null, undefined]) {
+        expect(renderTemplatePage({ ...view, metrics: m })).not.toContain('template-page-metrics');
+      }
+    });
+  });
 
   describe('free run', () => {
     const open = { state: 'open', siteKey: 'site-"key', inputMaxChars: 8000 } as const;

@@ -79,6 +79,7 @@ const template = (over: Partial<ServableTemplate> = {}): ServableTemplate => ({
   previewImage: { fabFileId: 'f1', source: 'upload', approved: true },
   takesFile: false,
   example: example(),
+  viewCount: 1234,
   ...over,
 });
 
@@ -91,6 +92,7 @@ const listing = (over: Record<string, unknown> = {}) =>
     authorName: 'Ada',
     ratingSum: 9,
     ratingCount: 2,
+    importCount: 87,
     ...over,
   }) as never;
 
@@ -289,6 +291,7 @@ describe('buildTemplatePageView', () => {
     expect(view).toMatchObject({
       authorName: 'Ada',
       rating: { sum: 9, count: 2 },
+      metrics: { views: 1234, downloads: 87 },
       connectors: ['GitHub'],
       takesFile: false,
       imageSrc: '/api/skills/template/image/launch-plan?v=f1',
@@ -314,6 +317,7 @@ describe('buildTemplatePageView', () => {
       preview: true,
     });
     expect(view.freeRun).toEqual({ state: 'preview' });
+    expect(view.metrics).toEqual({ views: 1234, downloads: 87 });
     expect(view.share).toBeNull();
     expect(view.imageSrc).toBe('https://files.example.com/f1.jpg?sig=1');
     expect(h.freeRun).not.toHaveBeenCalled();

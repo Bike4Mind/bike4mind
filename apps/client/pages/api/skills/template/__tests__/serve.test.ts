@@ -227,6 +227,14 @@ describe('GET /t/[slug]', () => {
     );
     await browser.run();
     expect(h.record).toHaveBeenCalledTimes(1);
+    expect(h.record).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: 'article-bullets' }),
+      expect.objectContaining({
+        userId: undefined,
+        ip: expect.any(String),
+        userAgent: 'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/126.0 Safari/537.36',
+      })
+    );
   });
 
   it('shows no starter-credit line when open registration grants nothing', async () => {
@@ -312,6 +320,7 @@ describe('GET /t/[slug]', () => {
       expect(html).not.toContain('template-page-starter-credits');
       expect(h.credits).not.toHaveBeenCalled();
       expect(h.record).toHaveBeenCalledTimes(1);
+      expect(h.record.mock.calls[0][1]).toMatchObject({ userId: expect.any(String) });
     });
 
     it('does not count a link-preview fetch on the member render', async () => {
