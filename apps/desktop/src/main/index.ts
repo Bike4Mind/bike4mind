@@ -238,7 +238,7 @@ void app.whenReady().then(async () => {
     catalogSampling: ({ name, modelBlob, parameters, hasAdapter }) =>
       models.catalogSampling(name, modelBlob, parameters, hasAdapter),
   });
-  registerHostConnections(host, {
+  const hostConnections = registerHostConnections(host, {
     control: localHostControl({
       auth,
       onAuthStateChanged,
@@ -413,6 +413,7 @@ void app.whenReady().then(async () => {
     fleet.dispose();
     models.dispose();
     chat.dispose();
+    hostConnections.dispose();
     stopModelServers();
     claudeImport.dispose();
     pullRequests.dispose();
