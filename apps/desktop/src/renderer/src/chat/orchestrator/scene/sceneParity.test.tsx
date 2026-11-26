@@ -146,7 +146,10 @@ describe.each(CASES)('the $view scene with $skin', ({ view, summary }) => {
   const render = (viewProps: OrchestratorViewProps) => mount.render(<View {...viewProps} />);
 
   const REPORT = { id: 'summary-1', createdAt: '2026-10-01T00:10:00.000Z' };
-  const renderStage = (agents: AgentView[], extra: { rootId?: string; report?: typeof REPORT } = {}) =>
+  const renderStage = (
+    agents: AgentView[],
+    extra: { rootId?: string; report?: typeof REPORT; archivedAgents?: Array<{ id: string; title: string }> } = {}
+  ) =>
     mount.render(
       <OrchestratorStage
         agents={agents}
@@ -447,6 +450,24 @@ describe.each(CASES)('the $view scene with $skin', ({ view, summary }) => {
     const drawer = el('orchestrator-peek-drawer');
     expect(el(id).contains(drawer)).toBe(true);
     expect(sprite('a').getAttribute('aria-pressed')).toBe('true');
+  });
+
+  describe('empty stage', () => {
+    it('draws the scene with its own empty line and nobody in it', async () => {
+      await renderStage([]);
+      const empty = el('orchestrator-empty-state');
+      expect(empty.contains(el(id))).toBe(true);
+      expect(empty.textContent).toContain(copy.stage.empty);
+      expect(query('orchestrator-archived-agents')).toBeNull();
+    });
+
+    it('says its archived line and lists each archived agent once the run is all archived', async () => {
+      await renderStage([], { archivedAgents: [{ id: 'a1', title: 'Write the docs' }] });
+      const empty = el('orchestrator-empty-state');
+      expect(empty.contains(el(id))).toBe(true);
+      expect(empty.textContent).toContain(copy.stage.emptyArchived);
+      expect(el('orchestrator-archived-agents').textContent).toContain('1 archived agent');
+    });
   });
 
   describe('finale', () => {
