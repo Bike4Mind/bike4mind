@@ -1,4 +1,3 @@
-import { sessionOrchestratorLabel } from './orchestratorLabelTool';
 import { askUser } from './askUserTool';
 import { applyPatch, usesApplyPatch } from './applyPatchTool';
 import { bashBackground, bashKill, bashList, bashOutput } from './backgroundTools';
@@ -33,6 +32,7 @@ import {
 import { MCP_READ_TOOLS, MCP_TOOLS } from './mcpTools';
 import { loopTool } from './loopTool';
 import { memoryDelete, memoryRead, memoryWrite } from './memoryTools';
+import { sessionOrchestratorLabel } from './orchestratorLabelTool';
 import { setSessionPullRequest } from './pullRequestTool';
 import { requestDirectory } from './requestDirectoryTool';
 import { screenCapture } from './screenTools';

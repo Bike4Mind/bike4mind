@@ -1543,7 +1543,7 @@ interface ChatSessionMeta {
    */
   orchestrator?: boolean;
   /**
-   * The user's override of the sidebar's orchestrator label (orchestratorIds): 'on' or 'off' wins
+   * The user's override of the sidebar's orchestrator label (orchestratorLabels): 'on' or 'off' wins
    * over the automatic rule, absent follows it. Display only: it never turns Orchestrate on or off.
    */
   orchestratorLabel?: OrchestratorLabelOverride;

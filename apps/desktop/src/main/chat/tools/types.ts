@@ -369,16 +369,16 @@ export interface ModelContext {
   keepScreenshot(bytes: Buffer, caption: string): Promise<ChatMedia | undefined>;
 }
 
-/**
- * Everything a tool may use. Narrow by default: no api client and no token, except for the
- * server-backed generation tools, which get exactly {@link MediaContext}, and the web tools,
- * which get exactly {@link WebContext}.
- */
 /** Sets the calling session's orchestrator label override; false when the session is gone. */
 export interface OrchestratorLabelContext {
   set(label: OrchestratorLabel): Promise<boolean>;
 }
 
+/**
+ * Everything a tool may use. Narrow by default: no api client and no token, except for the
+ * server-backed generation tools, which get exactly {@link MediaContext}, and the web tools,
+ * which get exactly {@link WebContext}.
+ */
 export interface ToolContext {
   /** Granted roots. Empty means the user has allowed nothing, and every path tool denies. */
   roots: readonly string[];
