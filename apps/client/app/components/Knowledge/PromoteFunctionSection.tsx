@@ -34,6 +34,7 @@ const OUTCOME_LABELS: Record<CallableFunctionCallRowOutcome, string> = {
 };
 
 const LABEL_HELP = {
+  platform: 'Platform: curated and checked by Bike4Mind. A cited worked example passed on the server.',
   verified: 'A cited worked example passed on the server.',
   unverified: 'Only declared tests ran on the server. Add a cited worked example and promote again to verify it.',
 } as const;
@@ -310,7 +311,7 @@ function ExamplesBlock({ tool, contract }: { tool: ICallableFunctionPublic; cont
   );
 }
 
-function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
+export function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
   const { data, isError } = useCallableFunctionCalls(tool.id);
   const counts = data
     ? Object.entries(data.outcomes)
@@ -466,7 +467,7 @@ export default function PromoteFunctionSection({
             <Chip
               size="sm"
               variant="soft"
-              color={tool.trustLabel === 'verified' ? 'success' : 'neutral'}
+              color={tool.trustLabel === 'unverified' ? 'neutral' : 'success'}
               data-testid="python-function-trust-chip"
             >
               {tool.trustLabel}

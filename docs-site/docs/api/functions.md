@@ -23,6 +23,18 @@ curl https://app.bike4mind.com/api/v1/functions \
 
 The response is `{ "data": [...], "next_cursor": ... }`. Each entry has `id`, `slug`, `description`, `trust_label`, `pin_version`, `pin_seq`, and `updated_at`. Pass `limit` and the previous `next_cursor` as `cursor` to read the next page; `next_cursor` is `null` on the last page.
 
+### Trust labels
+
+`trust_label` is set on every live function, in the list, in a single read, and in each call's `stamp`:
+
+| Label        | Meaning                                                                     |
+| ------------ | --------------------------------------------------------------------------- |
+| `platform`   | Platform: curated and checked by Bike4Mind. Also `verified`.                |
+| `verified`   | A cited worked example passed on the server when the function was promoted. |
+| `unverified` | No cited worked example was checked when the function was promoted.         |
+
+Only a Bike4Mind admin gives the `platform` label, and only to a `verified` function. A later promotion that leaves the function `unverified` removes it.
+
 ## Read a function
 
 ```bash

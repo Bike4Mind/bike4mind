@@ -4,7 +4,7 @@
  * server and transport, so no session id is issued or honored. The key's `functions:invoke` scope is the approval.
  */
 import type { Request } from 'express';
-import { ApiKeyScope, ForbiddenError, projectFunctionSchema } from '@bike4mind/common';
+import { ApiKeyScope, ForbiddenError, projectFunctionSchema, shownCallableFunctionTrustLabel } from '@bike4mind/common';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import {
@@ -58,6 +58,7 @@ async function listTools(caller: Caller): Promise<Tool[]> {
       inputSchema: { ...inputSchema },
       outputSchema: { ...outputSchema },
       annotations: { readOnlyHint: true },
+      _meta: { trust_label: shownCallableFunctionTrustLabel(fn) },
     };
   });
 }

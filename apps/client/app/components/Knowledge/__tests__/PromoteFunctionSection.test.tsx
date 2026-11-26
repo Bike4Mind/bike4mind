@@ -85,7 +85,7 @@ const tool = (overrides: Partial<ICallableFunctionPublic> = {}): ICallableFuncti
     ...overrides,
   }) as ICallableFunctionPublic;
 
-const live = (trustLabel: 'verified' | 'unverified', seq = 2) =>
+const live = (trustLabel: 'platform' | 'verified' | 'unverified', seq = 2) =>
   tool({
     state: 'live',
     status: 'live',
@@ -219,6 +219,7 @@ describe('PromoteFunctionSection', () => {
   });
 
   it.each([
+    ['platform', 'Platform: curated and checked by Bike4Mind.'],
     ['verified', 'A cited worked example passed on the server.'],
     ['unverified', 'Only declared tests ran on the server.'],
   ] as const)('a live tool shows the %s chip and its promotion', (label, help) => {

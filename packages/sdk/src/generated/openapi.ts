@@ -3325,7 +3325,7 @@ export interface components {
         /** @description Other functions the call used. Always empty today. */
         uses: unknown[];
         /** @enum {string|null} */
-        trust_label: 'verified' | 'unverified' | null;
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
         /** @enum {string} */
         surface: 'test' | 'rest' | 'chat' | 'agent' | 'mcp';
         duration_ms: number;
@@ -16355,10 +16355,10 @@ export interface components {
         slug: string;
         description: string;
         /**
-         * @description `verified` when a cited worked example passed on the server at promotion; otherwise `unverified`.
+         * @description `verified` when a cited worked example passed on the server at promotion; otherwise `unverified`. `platform` is a `verified` function curated and checked by Bike4Mind.
          * @enum {string|null}
          */
-        trust_label: 'verified' | 'unverified' | null;
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
         /** @description The artifact version the function runs. */
         pin_version: number;
         /** @description The promotion that made this pin live: 1 for the first. */
@@ -16374,10 +16374,10 @@ export interface components {
         slug: string;
         description: string;
         /**
-         * @description `verified` when a cited worked example passed on the server at promotion; otherwise `unverified`.
+         * @description `verified` when a cited worked example passed on the server at promotion; otherwise `unverified`. `platform` is a `verified` function curated and checked by Bike4Mind.
          * @enum {string|null}
          */
-        trust_label: 'verified' | 'unverified' | null;
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
         /** @description The artifact version the function runs. */
         pin_version: number;
         /** @description The promotion that made this pin live: 1 for the first. */
@@ -16428,7 +16428,7 @@ export interface components {
         /** @description Other functions the call used. Always empty today. */
         uses: unknown[];
         /** @enum {string|null} */
-        trust_label: 'verified' | 'unverified' | null;
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
         /** @enum {string} */
         surface: 'test' | 'rest' | 'chat' | 'agent' | 'mcp';
         duration_ms: number;
@@ -16508,7 +16508,7 @@ export interface components {
         /** @description Other functions the call used. Always empty today. */
         uses: unknown[];
         /** @enum {string|null} */
-        trust_label: 'verified' | 'unverified' | null;
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
         /** @enum {string} */
         surface: 'test' | 'rest' | 'chat' | 'agent' | 'mcp';
         duration_ms: number;
@@ -16555,7 +16555,7 @@ export interface components {
         /** @description Other functions the call used. Always empty today. */
         uses: unknown[];
         /** @enum {string|null} */
-        trust_label: 'verified' | 'unverified' | null;
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
         /** @enum {string} */
         surface: 'test' | 'rest' | 'chat' | 'agent' | 'mcp';
         duration_ms: number;
@@ -16638,7 +16638,7 @@ export interface components {
         /** @description Other functions the call used. Always empty today. */
         uses: unknown[];
         /** @enum {string|null} */
-        trust_label: 'verified' | 'unverified' | null;
+        trust_label: 'platform' | 'verified' | 'unverified' | null;
         /** @enum {string} */
         surface: 'test' | 'rest' | 'chat' | 'agent' | 'mcp';
         duration_ms: number;

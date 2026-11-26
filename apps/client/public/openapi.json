@@ -499,6 +499,7 @@
                   "null"
                 ],
                 "enum": [
+                  "platform",
                   "verified",
                   "unverified",
                   null
@@ -37708,11 +37709,12 @@
                     "null"
                   ],
                   "enum": [
+                    "platform",
                     "verified",
                     "unverified",
                     null
                   ],
-                  "description": "`verified` when a cited worked example passed on the server at promotion; otherwise `unverified`."
+                  "description": "`verified` when a cited worked example passed on the server at promotion; otherwise `unverified`. `platform` is a `verified` function curated and checked by Bike4Mind."
                 },
                 "pin_version": {
                   "type": "integer",
@@ -37774,11 +37776,12 @@
                   "null"
                 ],
                 "enum": [
+                  "platform",
                   "verified",
                   "unverified",
                   null
                 ],
-                "description": "`verified` when a cited worked example passed on the server at promotion; otherwise `unverified`."
+                "description": "`verified` when a cited worked example passed on the server at promotion; otherwise `unverified`. `platform` is a `verified` function curated and checked by Bike4Mind."
               },
               "pin_version": {
                 "type": "integer",
@@ -37937,6 +37940,7 @@
                   "null"
                 ],
                 "enum": [
+                  "platform",
                   "verified",
                   "unverified",
                   null
@@ -38177,6 +38181,7 @@
                   "null"
                 ],
                 "enum": [
+                  "platform",
                   "verified",
                   "unverified",
                   null
@@ -38350,6 +38355,7 @@
                   "null"
                 ],
                 "enum": [
+                  "platform",
                   "verified",
                   "unverified",
                   null
@@ -38568,6 +38574,7 @@
                   "null"
                 ],
                 "enum": [
+                  "platform",
                   "verified",
                   "unverified",
                   null

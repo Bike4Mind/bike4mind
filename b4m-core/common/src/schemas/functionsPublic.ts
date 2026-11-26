@@ -34,7 +34,10 @@ export const PublicFunctionSchema = z.object({
   trust_label: z
     .enum(CALLABLE_FUNCTION_TRUST_LABELS)
     .nullable()
-    .describe('`verified` when a cited worked example passed on the server at promotion; otherwise `unverified`.'),
+    .describe(
+      '`verified` when a cited worked example passed on the server at promotion; otherwise `unverified`. ' +
+        '`platform` is a `verified` function curated and checked by Bike4Mind.'
+    ),
   pin_version: z.number().int().describe('The artifact version the function runs.'),
   pin_seq: z.number().int().nullable().describe('The promotion that made this pin live: 1 for the first.'),
   updated_at: z.string(),

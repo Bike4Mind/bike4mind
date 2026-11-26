@@ -3,6 +3,7 @@ import {
   NotFoundError,
   REQUEST_TIMEOUT_ERROR_CODE,
   projectFunctionSchema,
+  shownCallableFunctionTrustLabel,
   type FunctionContractProblem,
   type ICallableFunctionResult,
 } from '@bike4mind/common';
@@ -103,7 +104,7 @@ export function toPublicFunction({ fn, name }: CallerFunction) {
     id: fn.id,
     slug: name,
     description: fn.description,
-    trust_label: fn.trustLabel ?? null,
+    trust_label: shownCallableFunctionTrustLabel(fn),
     pin_version: fn.pin.version,
     pin_seq: fn.pin.seq ?? null,
     updated_at: new Date(fn.updatedAt).toISOString(),

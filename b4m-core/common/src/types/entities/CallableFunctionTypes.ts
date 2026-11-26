@@ -30,9 +30,29 @@ export type CallableFunctionOwnerType = (typeof CALLABLE_FUNCTION_OWNER_TYPES)[n
 export const CALLABLE_FUNCTION_STATES = ['draft', 'live'] as const;
 export type CallableFunctionState = (typeof CALLABLE_FUNCTION_STATES)[number];
 
-/** `verified` when at least one cited worked example passed on the server at promotion; otherwise `unverified`. */
-export const CALLABLE_FUNCTION_TRUST_LABELS = ['verified', 'unverified'] as const;
+/**
+ * The label a reader sees. Promotion stores `verified` when at least one cited worked example passed on the server,
+ * otherwise `unverified`; `platform` is never stored, only shown for a `verified` function an admin marked.
+ */
+export const CALLABLE_FUNCTION_TRUST_LABELS = ['platform', 'verified', 'unverified'] as const;
 export type CallableFunctionTrustLabel = (typeof CALLABLE_FUNCTION_TRUST_LABELS)[number];
+
+/** What promotion writes; see {@link shownCallableFunctionTrustLabel} for `platform`. */
+export const CALLABLE_FUNCTION_PROMOTION_TRUST_LABELS = ['verified', 'unverified'] as const;
+export type CallableFunctionPromotionTrustLabel = (typeof CALLABLE_FUNCTION_PROMOTION_TRUST_LABELS)[number];
+
+export const CALLABLE_FUNCTION_TRUST_LABEL_TEXT: Record<CallableFunctionTrustLabel, string> = {
+  platform: 'Platform: curated and checked by Bike4Mind.',
+  verified: 'Verified: a worked example passed on the server when it was promoted.',
+  unverified: 'Unverified: no worked example was checked when it was promoted.',
+};
+
+/** An admin's mark: the function shows as `platform` while its own label stays `verified`. */
+export interface CallableFunctionPlatformMark {
+  /** The admin's userId. */
+  setBy: string;
+  setAt: Date;
+}
 
 export const CALLABLE_FUNCTION_EXAMPLE_LIMITS = {
   maxExamples: 20,
@@ -116,7 +136,7 @@ export interface CallableFunctionPromotion {
    */
   pin?: ICallableFunctionPin;
   description?: string;
-  trustLabel?: CallableFunctionTrustLabel;
+  trustLabel?: CallableFunctionPromotionTrustLabel;
   sources?: ICallableFunctionSource[];
 }
 
@@ -240,7 +260,9 @@ export interface ICallableFunction {
   /** Display data only: every call reads `FUNCTION` from the code again. */
   contract: FunctionContract;
   examples?: CallableFunctionExample[];
-  trustLabel?: CallableFunctionTrustLabel;
+  trustLabel?: CallableFunctionPromotionTrustLabel;
+  /** Set and cleared only through the admin route; a promotion or examples edit that unverifies drops it. */
+  platform?: CallableFunctionPlatformMark;
   lastServerRun?: CallableFunctionServerRun;
   promoted?: CallableFunctionPromotion;
   caseResults?: CallableFunctionCaseResults;
@@ -307,6 +329,17 @@ type RecipientReadable = Pick<
   ICallableFunction,
   'state' | 'contract' | 'description' | 'trustLabel' | 'sources' | 'promoted'
 > & { pin: Omit<ICallableFunctionPin, 'source'> };
+
+/**
+ * The label every surface shows: null unless live, and `platform` while an admin's mark stands on a `verified`
+ * function. On a recipient's kept promotion it reads that promotion's label beside the record's mark.
+ */
+export function shownCallableFunctionTrustLabel(
+  fn: Pick<ICallableFunction, 'state' | 'trustLabel' | 'platform'>
+): CallableFunctionTrustLabel | null {
+  if (fn.state !== 'live' || !fn.trustLabel) return null;
+  return fn.trustLabel === 'verified' && fn.platform ? 'platform' : fn.trustLabel;
+}
 
 /**
  * The version a recipient calls and reviews: the record while live, otherwise the last promotion kept on it, so an
@@ -416,7 +449,7 @@ export function toCallableFunctionPublic(
     }),
     latestVersion: head?.version ?? null,
     updateAvailable: live !== null && live.version > doc.pin.version,
-    trustLabel: doc.state === 'live' ? (doc.trustLabel ?? null) : null,
+    trustLabel: shownCallableFunctionTrustLabel(doc),
     examples: doc.examples ?? [],
     grants: doc.grants
       ? {
@@ -469,7 +502,7 @@ export function toCallableFunctionShared(
       pinnedAt: doc.pin.pinnedAt,
       ...(doc.pin.seq !== undefined ? { seq: doc.pin.seq } : {}),
     },
-    trustLabel: doc.state === 'live' ? (doc.trustLabel ?? null) : null,
+    trustLabel: shownCallableFunctionTrustLabel(doc),
     updatedAt: doc.updatedAt,
   };
 }
@@ -489,7 +522,7 @@ export function toCallableFunctionDetail(
 /** Promotion's label: `verified` only when a worked example ran and passed. */
 export function callableFunctionTrustLabel(
   results: Pick<CallableFunctionServerRunCase, 'kind' | 'passed'>[]
-): CallableFunctionTrustLabel {
+): CallableFunctionPromotionTrustLabel {
   return results.some(result => result.kind === 'example' && result.passed) ? 'verified' : 'unverified';
 }
 
@@ -497,7 +530,8 @@ export function callableFunctionTrustLabel(
  * Top-level fields the generic `update`/`updateGuarded`/`updateMany` refuse. The owner fields never change; the
  * slug, description, pin, and contract move together through `repin`; `pin.seq`, `pin.runtime`, the state, the
  * label, the server run, and the promotion record only through `promote`; the examples only through `setExamples`;
- * the case results only through `recordCaseResults`; the grants only through `setGrants`.
+ * the case results only through `recordCaseResults`; the grants only through `setGrants`; the platform mark only
+ * through `setPlatformMark` and `clearPlatformMark`.
  */
 export const CALLABLE_FUNCTION_PROTECTED_FIELDS = [
   'ownerType',
@@ -509,6 +543,7 @@ export const CALLABLE_FUNCTION_PROTECTED_FIELDS = [
   'contract',
   'state',
   'trustLabel',
+  'platform',
   'lastServerRun',
   'promoted',
   'examples',
@@ -597,6 +632,7 @@ export type CallableFunctionNewPin = Omit<ICallableFunctionPin, 'seq' | 'runtime
 export const CALLABLE_FUNCTION_CREATE_REFUSED_FIELDS = [
   'state',
   'trustLabel',
+  'platform',
   'lastServerRun',
   'promoted',
   'examples',
@@ -619,7 +655,8 @@ export interface CallableFunctionPromote {
   seq: number;
   runtime: CallableFunctionRuntimePin;
   lastServerRun: CallableFunctionServerRun;
-  trustLabel: CallableFunctionTrustLabel;
+  /** `unverified` also drops the platform mark. */
+  trustLabel: CallableFunctionPromotionTrustLabel;
   contract: FunctionContract;
   /** The `pinned` sources as fetched for this promotion. */
   sourcePins: ICallableFunctionSourcePin[];
@@ -663,7 +700,7 @@ export interface ICallableFunctionRepository extends IBaseRepository<ICallableFu
   ): Promise<ICallableFunctionDocument | null>;
   /**
    * Compare-and-set on `updatedAt`, so a promotion cannot land between the read that decided `unverify` and this
-   * write. `unverify` sets the label to `unverified` until the next promotion.
+   * write. `unverify` sets the label to `unverified` until the next promotion and drops the platform mark.
    */
   setExamples(
     id: string,
@@ -719,5 +756,12 @@ export interface ICallableFunctionRepository extends IBaseRepository<ICallableFu
     expected: { updatedAt: Date },
     sources: ICallableFunctionSource[]
   ): Promise<ICallableFunctionDocument | null>;
+  /**
+   * Admin only, so no owner filter: marks the function only while it is live and `verified` at the moment of the
+   * write; null otherwise.
+   */
+  setPlatformMark(id: string, mark: CallableFunctionPlatformMark): Promise<ICallableFunctionDocument | null>;
+  /** Admin only: removes the mark; null when there was none. */
+  clearPlatformMark(id: string): Promise<ICallableFunctionDocument | null>;
   deleteForOwner(id: string, owner: CallableFunctionOwner): Promise<boolean>;
 }

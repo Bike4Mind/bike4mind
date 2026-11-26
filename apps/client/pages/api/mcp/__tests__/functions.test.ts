@@ -377,8 +377,18 @@ describe('tools/list', () => {
         inputSchema: CONTRACT.inputs,
         outputSchema: CONTRACT.outputs,
         annotations: { readOnlyHint: true },
+        _meta: { trust_label: 'verified' },
       },
     ]);
+    await client.close();
+  });
+
+  it('labels a verified function an admin marked as platform', async () => {
+    h.functions[0] = fnDoc('6b0000000000000000000001', { platform: { setBy: 'admin1', setAt: T0 } });
+    const client = await connect();
+    const [tool] = (await client.listTools()).tools;
+    expect(tool._meta).toEqual({ trust_label: 'platform' });
+    expect(JSON.stringify(tool)).not.toContain('admin1');
     await client.close();
   });
 

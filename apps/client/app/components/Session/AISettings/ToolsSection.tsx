@@ -45,6 +45,7 @@ import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { PropsWithChildren, useEffect, useMemo, useState, useCallback, createContext, useContext } from 'react';
 import {
   CALLABLE_FUNCTION_TOOL_CONNECTION_ID,
+  CALLABLE_FUNCTION_TRUST_LABEL_TEXT,
   B4MLLMTools,
   IMcpServerResponse,
   type ICallableFunctionPublic,
@@ -280,12 +281,13 @@ const FUNCTIONS_CONNECTION = {
 // Chat offers the oldest MAX_CALLABLE_FUNCTIONS_PER_TURN live tools, the same order the list arrives in.
 const functionsRowDescription = (functions: ICallableFunctionPublic[]) => {
   if (functions.length === 0) return 'No live tools yet. Promote a saved tool to offer it in chat.';
-  const offered = functions
-    .slice(0, MAX_CALLABLE_FUNCTIONS_PER_TURN)
-    .map(fn => `${fn.slug} (${fn.trustLabel ?? 'unverified'})`)
-    .join(', ');
+  const shown = functions.slice(0, MAX_CALLABLE_FUNCTIONS_PER_TURN);
+  const offered = shown.map(fn => `${fn.slug} (${fn.trustLabel ?? 'unverified'})`).join(', ');
   const rest = functions.length - MAX_CALLABLE_FUNCTIONS_PER_TURN;
-  return rest > 0 ? `${offered}, and ${rest} more not offered` : offered;
+  const list = rest > 0 ? `${offered}, and ${rest} more not offered` : offered;
+  return shown.some(fn => fn.trustLabel === 'platform')
+    ? `${list}. ${CALLABLE_FUNCTION_TRUST_LABEL_TEXT.platform}`
+    : list;
 };
 const FUNCTIONS_ROW_DETAIL = `Up to ${MAX_CALLABLE_FUNCTIONS_PER_TURN} of your live tools, run on the server with a stamp`;
 

@@ -1,3 +1,4 @@
+import type { CallableFunctionTrustLabel } from './CallableFunctionTypes';
 import { IMongoDocument } from './common';
 
 /** Where a function call came from. */
@@ -97,7 +98,7 @@ export interface CallableFunctionStamp {
   data: CallableFunctionStampData[];
   uses: never[];
   /** Null unless the function is live. */
-  trust_label: 'verified' | 'unverified' | null;
+  trust_label: CallableFunctionTrustLabel | null;
   surface: CallableFunctionCallSurface;
   duration_ms: number;
   called_at: string;

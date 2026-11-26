@@ -431,6 +431,13 @@ describe('list', () => {
     });
   });
 
+  it('labels a verified function an admin marked as platform, without naming the admin', async () => {
+    h.functions[0] = fnDoc(LIVE_ID, { platform: { setBy: 'admin1', setAt: T0 } });
+    const res = await call(listRoute, {});
+    expect((res.body.data as { trust_label: string }[])[0].trust_label).toBe('platform');
+    expect(JSON.stringify(res.body)).not.toContain('admin1');
+  });
+
   it('leaves out a live function that is turned off or whose artifact was deleted', async () => {
     h.functions.push(fnDoc('6b0000000000000000000004', { slug: 'off', enabled: false }));
     h.functions.push(fnDoc('6b0000000000000000000005', { slug: 'gone' }));

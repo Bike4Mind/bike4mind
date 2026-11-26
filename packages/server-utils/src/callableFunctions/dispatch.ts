@@ -5,6 +5,7 @@ import {
   effectiveCallableFunctionStatus,
   functionJsonBytes,
   recipientCallableFunction,
+  shownCallableFunctionTrustLabel,
   validateFunctionValue,
   type CallableFunctionCallOutcome,
   type CallableFunctionCallSurface,
@@ -178,7 +179,7 @@ export const functionInputHash = (inputs: unknown): string =>
   createHash('sha256').update(canonicalJson(inputs), 'utf8').digest('hex');
 
 export function buildCallableFunctionStamp(input: {
-  fn: Pick<ICallableFunctionDocument, 'id' | 'slug' | 'pin' | 'state' | 'trustLabel'>;
+  fn: Pick<ICallableFunctionDocument, 'id' | 'slug' | 'pin' | 'state' | 'trustLabel' | 'platform'>;
   inputHash: string;
   run: Pick<CallableFunctionRunResult, 'runtime' | 'durationMs'>;
   surface: CallableFunctionCallSurface;
@@ -200,7 +201,7 @@ export function buildCallableFunctionStamp(input: {
     packages,
     data: [...callableFunctionStampData(input.fn.pin.dataPins), ...(input.sources ?? [])],
     uses: [],
-    trust_label: input.fn.state === 'live' ? (input.fn.trustLabel ?? null) : null,
+    trust_label: shownCallableFunctionTrustLabel(input.fn),
     surface: input.surface,
     duration_ms: input.run.durationMs,
     called_at: input.calledAt.toISOString(),

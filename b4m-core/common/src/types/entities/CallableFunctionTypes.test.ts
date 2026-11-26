@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   CALLABLE_FUNCTION_PROTECTED_FIELDS,
   CALLABLE_FUNCTION_SLUG_PATTERN,
+  CALLABLE_FUNCTION_TRUST_LABEL_TEXT,
+  CALLABLE_FUNCTION_TRUST_LABELS,
   CallableFunctionGrantVisibilitySchema,
   callableFunctionTrustLabel,
   effectiveCallableFunctionStatus,
+  recipientCallableFunction,
+  shownCallableFunctionTrustLabel,
   toCallableFunctionDetail,
   toCallableFunctionPublic,
   toCallableFunctionShared,
@@ -275,5 +279,44 @@ describe('callableFunctionTrustLabel', () => {
     expect(callableFunctionTrustLabel([{ kind: 'test', passed: true }])).toBe('unverified');
     expect(callableFunctionTrustLabel([])).toBe('unverified');
     expect(callableFunctionTrustLabel([{ kind: 'example', passed: false }])).toBe('unverified');
+  });
+});
+
+describe('the platform label', () => {
+  const mark = { setBy: 'admin-1', setAt: new Date('2026-01-03T00:00:00Z') };
+  const live = (overrides: Partial<ICallableFunctionDocument> = {}) =>
+    doc({ state: 'live', trustLabel: 'verified', pin: { ...doc().pin, seq: 1 }, platform: mark, ...overrides });
+
+  it('is a label with its own words', () => {
+    expect(CALLABLE_FUNCTION_TRUST_LABELS).toContain('platform');
+    expect(CALLABLE_FUNCTION_TRUST_LABEL_TEXT.platform).toBe('Platform: curated and checked by Bike4Mind.');
+    expect(CALLABLE_FUNCTION_PROTECTED_FIELDS).toContain('platform');
+  });
+
+  it('shows on a live, verified function an admin marked, to the owner and to a recipient', () => {
+    expect(shownCallableFunctionTrustLabel(live())).toBe('platform');
+    expect(toCallableFunctionPublic(live(), { version: 2 }).trustLabel).toBe('platform');
+    const view = toCallableFunctionShared(live(), 'person', { ownerName: 'Owner', reviewHash: 'h', review: null });
+    expect(view.trustLabel).toBe('platform');
+    expect(view).not.toHaveProperty('platform');
+  });
+
+  it('never shows while unverified, unmarked, or a draft, and never names the admin', () => {
+    expect(shownCallableFunctionTrustLabel(live({ trustLabel: 'unverified' }))).toBe('unverified');
+    expect(shownCallableFunctionTrustLabel(live({ platform: undefined }))).toBe('verified');
+    expect(shownCallableFunctionTrustLabel(live({ state: 'draft' }))).toBeNull();
+    expect(JSON.stringify(toCallableFunctionPublic(live(), { version: 2 }))).not.toContain('admin-1');
+  });
+
+  it("shows on a recipient's kept promotion while the mark stands", () => {
+    const draft = live({
+      state: 'draft',
+      trustLabel: undefined,
+      promoted: { seq: 1, contract, at: new Date(), pin: { ...doc().pin, seq: 1 }, trustLabel: 'verified' },
+    });
+    expect(shownCallableFunctionTrustLabel(recipientCallableFunction(draft)!)).toBe('platform');
+    expect(shownCallableFunctionTrustLabel(recipientCallableFunction({ ...draft, platform: undefined })!)).toBe(
+      'verified'
+    );
   });
 });

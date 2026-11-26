@@ -6,12 +6,12 @@ import {
   CALLABLE_FUNCTION_GRANT_LIMITS,
   CALLABLE_FUNCTION_LIMITS,
   CALLABLE_FUNCTION_OWNER_TYPES,
+  CALLABLE_FUNCTION_PROMOTION_TRUST_LABELS,
   CALLABLE_FUNCTION_PROTECTED_FIELDS,
   CALLABLE_FUNCTION_SLUG_PATTERN,
   CALLABLE_FUNCTION_SOURCE_MODES,
   CALLABLE_FUNCTION_SOURCE_URL_MAX_CHARS,
   CALLABLE_FUNCTION_STATES,
-  CALLABLE_FUNCTION_TRUST_LABELS,
   CallableFunctionCapError,
   CallableFunctionGrantVisibilitySchema,
   CallableFunctionProtectedFieldError,
@@ -23,6 +23,7 @@ import {
   type CallableFunctionExample,
   type CallableFunctionNewPin,
   type CallableFunctionOwner,
+  type CallableFunctionPlatformMark,
   type CallableFunctionPromote,
   type CallableFunctionRepin,
   type ICallableFunctionDataPin,
@@ -191,7 +192,13 @@ const CallableFunctionSchema = new Schema<ICallableFunctionDocument>(
         message: `At most ${CALLABLE_FUNCTION_DATA_LIMITS.maxSources} sources, each under its own name`,
       },
     },
-    trustLabel: { type: String, enum: CALLABLE_FUNCTION_TRUST_LABELS },
+    trustLabel: { type: String, enum: CALLABLE_FUNCTION_PROMOTION_TRUST_LABELS },
+    platform: {
+      type: new Schema(
+        { setBy: { type: String, required: true }, setAt: { type: Date, required: true } },
+        { _id: false }
+      ),
+    },
     lastServerRun: { type: Schema.Types.Mixed },
     promoted: {
       type: new Schema(
@@ -201,7 +208,7 @@ const CallableFunctionSchema = new Schema<ICallableFunctionDocument>(
           at: { type: Date, required: true },
           pin: { type: CallableFunctionPinSchema },
           description: { type: String, maxlength: FUNCTION_CONTRACT_LIMITS.maxDescriptionLength },
-          trustLabel: { type: String, enum: CALLABLE_FUNCTION_TRUST_LABELS },
+          trustLabel: { type: String, enum: CALLABLE_FUNCTION_PROMOTION_TRUST_LABELS },
           sources: { type: [CallableFunctionSourceSchema], default: undefined },
         },
         { _id: false }
@@ -459,7 +466,10 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     const result = await this.model.findOneAndUpdate(
       { _id: id, ...ownerFilter(owner), updatedAt: expected.updatedAt },
-      { $set: { examples, ...(options.unverify ? { trustLabel: 'unverified' } : {}) } },
+      {
+        $set: { examples, ...(options.unverify ? { trustLabel: 'unverified' } : {}) },
+        ...(options.unverify ? { $unset: { platform: 1 } } : {}),
+      },
       { new: true, runValidators: true }
     );
     return result?.toJSON() ?? null;
@@ -512,7 +522,29 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
           },
           state: 'live',
         },
+        // The mark holds only while promotion keeps the function verified.
+        ...(update.trustLabel === 'unverified' ? { $unset: { platform: 1 } } : {}),
       },
+      { new: true, runValidators: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async setPlatformMark(id: string, mark: CallableFunctionPlatformMark): Promise<ICallableFunctionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, state: 'live', trustLabel: 'verified' },
+      { $set: { platform: { setBy: mark.setBy, setAt: mark.setAt } } },
+      { new: true, runValidators: true }
+    );
+    return result?.toJSON() ?? null;
+  }
+
+  async clearPlatformMark(id: string): Promise<ICallableFunctionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, platform: { $exists: true } },
+      { $unset: { platform: 1 } },
       { new: true, runValidators: true }
     );
     return result?.toJSON() ?? null;

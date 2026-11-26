@@ -3,6 +3,7 @@ import { isAxiosError } from 'axios';
 import { Box, Button, Chip, Option, Select, Sheet, Stack, Switch, Typography } from '@mui/joy';
 import type { SxProps } from '@mui/joy/styles/types';
 import {
+  CALLABLE_FUNCTION_TRUST_LABEL_TEXT,
   describeFunctionContractChange,
   type CallableFunctionApprovalMode,
   type ICallableFunctionShared,
@@ -33,19 +34,21 @@ const APPROVAL_LABELS: Record<CallableFunctionApprovalMode, string> = {
   always_ask: 'Always ask',
 };
 
-const LABEL_TEXT: Record<'verified' | 'unverified', string> = {
-  verified: 'Verified: a worked example passed on the server when it was promoted.',
-  unverified: 'Unverified: no worked example was checked when it was promoted.',
-};
-
 const errorMessage = (error: unknown, fallback: string): string =>
   isAxiosError(error) && (error.response?.data as { code?: unknown } | undefined)?.code === 'review_conflict'
     ? 'The tool changed while you were reviewing it. Review it again.'
     : fallback;
 
-function SharedFunctionCard({ fn }: { fn: ICallableFunctionShared }) {
+/** One shared function and the recipient's review of it; also the recipient's view in the functions library. */
+export function SharedFunctionCard({
+  fn,
+  defaultOpen = false,
+}: {
+  fn: ICallableFunctionShared;
+  defaultOpen?: boolean;
+}) {
   const pending = fn.status === 'pending_review';
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [draftApproval, setDraftApproval] = useState<CallableFunctionApprovalMode>(fn.review?.approval ?? 'default');
   const [error, setError] = useState<string | null>(null);
   const review = useReviewSharedCallableFunction();
@@ -139,7 +142,7 @@ function SharedFunctionCard({ fn }: { fn: ICallableFunctionShared }) {
           <Stack gap="4px">
             <Typography level="title-sm">Label</Typography>
             <Typography level="body-sm" data-testid="shared-function-label">
-              {fn.trustLabel ? LABEL_TEXT[fn.trustLabel] : 'None.'}
+              {fn.trustLabel ? CALLABLE_FUNCTION_TRUST_LABEL_TEXT[fn.trustLabel] : 'None.'}
             </Typography>
           </Stack>
           <Stack gap="4px">
