@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ModelBackend, type IPlatformAttempt, type ModelInfo } from '@bike4mind/common';
+import {
+  ModelBackend,
+  PlatformAccountingConflictError,
+  type IPlatformAttempt,
+  type ModelInfo,
+} from '@bike4mind/common';
 import {
   createPlatformAttribution,
   pricePlatformUsage,
@@ -148,5 +153,93 @@ describe('platform accounting failure propagation', () => {
       providerCallId: 'call-1',
     });
     expect(markRecorded).not.toHaveBeenCalled();
+  });
+});
+
+describe('bounded platform recovery', () => {
+  it('throws a page-fetch failure without mutating attempts or losing the input continuation', async () => {
+    const recoverable = vi.fn().mockRejectedValue(new Error('page unavailable'));
+    const markUnresolved = vi.fn();
+    const recordPlatform = vi.fn();
+    const service = new PlatformAccounting({ recoverable, markUnresolved } as never, { recordPlatform } as never);
+    const page = { now: at, limit: 2, afterProviderCallId: 'previous-page' };
+    await expect(service.recover(page)).rejects.toThrow('page unavailable');
+    expect(recoverable).toHaveBeenCalledExactlyOnceWith(page);
+    expect(page.afterProviderCallId).toBe('previous-page');
+    expect(markUnresolved).not.toHaveBeenCalled();
+    expect(recordPlatform).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid page bounds before fetching or writing', async () => {
+    const recoverable = vi.fn();
+    const service = new PlatformAccounting({ recoverable } as never, {} as never);
+    for (const limit of [0, -1, 0.5, NaN, Infinity, 1001]) {
+      await expect(service.recover({ now: at, limit })).rejects.toThrow('Invalid platform recovery page');
+    }
+    await expect(service.recover({ now: new Date(NaN), limit: 1 })).rejects.toThrow('Invalid platform recovery page');
+    expect(recoverable).not.toHaveBeenCalled();
+  });
+
+  it('rejects an oversized repository page without processing any attempt', async () => {
+    const recoverable = vi.fn().mockResolvedValue({ attempts: [attempt, attempt] });
+    const get = vi.fn();
+    const recordPlatform = vi.fn();
+    const service = new PlatformAccounting({ recoverable, get } as never, { recordPlatform } as never);
+    await expect(service.recover({ now: at, limit: 1 })).rejects.toThrow('exceeds its limit');
+    expect(get).not.toHaveBeenCalled();
+    expect(recordPlatform).not.toHaveBeenCalled();
+  });
+
+  it('bounds the failure list to its page and returns only original call identities and safe codes', async () => {
+    const id = 'a'.repeat(128);
+    const fact = { ...pricePlatformUsage(params), providerCallId: id };
+    const recoverable = vi
+      .fn()
+      .mockResolvedValue({ attempts: [{ ...attempt, providerCallId: id, usage: fact }], nextCursor: id });
+    const stageUsage = vi.fn().mockRejectedValue(new PlatformAccountingConflictError());
+    const recordPlatform = vi.fn();
+    const service = new PlatformAccounting({ recoverable, stageUsage } as never, { recordPlatform } as never);
+    expect(await service.recover({ now: at, limit: 1 })).toEqual({
+      recorded: 0,
+      unresolved: 0,
+      failed: [{ providerCallId: id, code: 'conflict' }],
+      nextCursor: id,
+    });
+    expect(recordPlatform).not.toHaveBeenCalled();
+  });
+
+  it('never forwards error-controlled identifiers or private error details into recovery results', async () => {
+    const fact = pricePlatformUsage(params);
+    const recoverable = vi.fn().mockResolvedValue({ attempts: [{ ...attempt, usage: fact }] });
+    const stageUsage = vi
+      .fn()
+      .mockRejectedValue(
+        new PlatformAccountingPendingError('private-error-identity', { cause: new Error('private provider payload') })
+      );
+    const service = new PlatformAccounting({ recoverable, stageUsage } as never, {} as never);
+    const result = await service.recover({ now: at, limit: 1 });
+    expect(result).toEqual({
+      recorded: 0,
+      unresolved: 0,
+      failed: [{ providerCallId: attempt.providerCallId, code: 'persistence_pending' }],
+    });
+    expect(JSON.stringify(result)).not.toMatch(/private|cause|message|stack/);
+  });
+
+  it('does not count a concurrent live or usage-known attempt as durably unresolved', async () => {
+    const recoverable = vi.fn().mockResolvedValue({ attempts: [attempt] });
+    const markUnresolved = vi.fn().mockResolvedValue(undefined);
+    const get = vi.fn().mockResolvedValue({ ...attempt, state: 'usage_known' });
+    const findPlatformCall = vi.fn().mockResolvedValue(null);
+    const service = new PlatformAccounting(
+      { recoverable, markUnresolved, get } as never,
+      { findPlatformCall } as never
+    );
+    expect(await service.recover({ now: at, limit: 1 })).toEqual({
+      recorded: 0,
+      unresolved: 0,
+      failed: [{ providerCallId: attempt.providerCallId, code: 'persistence_pending' }],
+    });
+    expect(markUnresolved).toHaveBeenCalledExactlyOnceWith(attempt.providerCallId, 'expired_intent', at);
   });
 });
