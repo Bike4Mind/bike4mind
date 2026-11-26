@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { CORE_TUTORIALS_API_BASE } from '../hostBase';
+import { resetTutorialStores, tutorialStoreFor } from '../useTutorialStore';
 import { isCoreTutorialWalkActive, isRecordedTutorialTurn } from './walkActive';
 import { useTutorialPicker } from './tutorialPickerStore';
 
@@ -44,6 +47,28 @@ describe('isCoreTutorialWalkActive', () => {
   it('holds while a start or resume is in flight, before the first step shows', () => {
     useTutorialPicker.setState({ launching: true });
     expect(isCoreTutorialWalkActive()).toBe(true);
+  });
+
+  afterEach(() => {
+    resetTutorialStores();
+    window.history.replaceState(null, '', '/');
+  });
+
+  const beginWalk = (sessionId: string) =>
+    tutorialStoreFor(CORE_TUTORIALS_API_BASE)
+      .getState()
+      .begin({ moduleId: 'first-steps', sessionId, stepId: 'send', version: 1, revision: 0 });
+
+  it("holds while the walk's notebook is open but not yet marked on screen", () => {
+    beginWalk('abc');
+    window.history.replaceState(null, '', '/notebooks/abc');
+    expect(isCoreTutorialWalkActive()).toBe(true);
+  });
+
+  it('does not hold for a walk whose notebook is not the open route', () => {
+    beginWalk('abc');
+    window.history.replaceState(null, '', '/new');
+    expect(isCoreTutorialWalkActive()).toBe(false);
   });
 
   it('holds while a track asked for waits for the host to start it', () => {
