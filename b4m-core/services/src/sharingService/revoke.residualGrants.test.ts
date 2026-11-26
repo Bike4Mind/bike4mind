@@ -187,6 +187,15 @@ describe('revoke - residual grants', () => {
       expect(env.findReferencing).toHaveBeenCalledWith(expect.objectContaining({ id: 'sharee' }), { fileId: 'file-1' });
     });
 
+    it("detaches the item from the user's own project when they revoke their own share", async () => {
+      const env = adaptersFor([sharedFile()], [], [project({ users: [memberRow], fileIds: ['file-1'] })]);
+
+      await revoke('sharee', { id: 'file-1', type: 'files', userId: 'sharee' }, env.adapters);
+
+      expect(env.projects.get('project-1')!.fileIds).toEqual([]);
+      expect(env.files.get('file-1')!.users).toEqual([]);
+    });
+
     it('detaches a system-prompt file the same way', async () => {
       const env = adaptersFor(
         [sharedFile()],

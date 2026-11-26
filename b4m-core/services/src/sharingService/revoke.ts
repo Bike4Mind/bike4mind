@@ -214,6 +214,8 @@ export const revoke = async (userId: string, parameters: RevokeSharingParameters
       systemPrompts: pruned.systemPrompts,
     };
   } else if (!projectId) {
+    // Self-revokes included: a user who drops their own share can no longer back the item in a
+    // project they attached it to, so it leaves that project too unless another grantor remains.
     const detachedFrom = await detachFromProjectsWithoutGrantor(
       { document: document as SharedItem, type, member, userIdToRevoke },
       adapters
