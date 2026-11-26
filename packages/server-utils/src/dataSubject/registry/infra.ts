@@ -278,6 +278,8 @@ export const infraHolders = {
       // The admin who released a graduated hold.
       { path: 'releasedBy', matchBy: 'userId', action: 'anonymize' },
     ],
+    // 'model' or 'link_rule': which policy decided, not a person.
+    unrelatedPaths: ['decidedBy'],
   },
   BusinessMetricState: {
     kind: 'noUserData',

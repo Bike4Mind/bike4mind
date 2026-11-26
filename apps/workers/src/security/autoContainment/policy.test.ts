@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   ADMIN_ACTION_REASON_MAX_LENGTH,
   AutoContainmentConfigSchema,
+  INTERVENTION_POLICY_VERSION,
+  type LinkRuleFacts,
   RISK_EVIDENCE_VERSION,
   SHADOW_DETECTION_ACTIONS,
 } from '@bike4mind/common';
@@ -221,10 +223,15 @@ describe('decideIntervention', () => {
       tier: 'limit',
       userIds: ['u1'],
       scope: 'ai_spend',
-      policyVersion: 1,
+      policyVersion: INTERVENTION_POLICY_VERSION,
       expiresAt: new Date(NOW.getTime() + 72 * HOUR_MS),
+      decidedBy: 'model',
+      linkRules: [],
     });
-    expect(decision.kind === 'act' && decision.reason.startsWith('Automated limit (policy v1): ')).toBe(true);
+    expect(
+      decision.kind === 'act' &&
+        decision.reason.startsWith(`Automated limit (policy v${INTERVENTION_POLICY_VERSION}): `)
+    ).toBe(true);
     expect(decide({ detection: { wouldAction: 'confirmHold' } })).toMatchObject({ scope: 'signup_grant' });
   });
 
@@ -289,6 +296,151 @@ describe('decideIntervention', () => {
         why: 'not_abuse',
         tier: 'contain',
       });
+    });
+  });
+});
+
+describe('decideIntervention link rules', () => {
+  const NOW = new Date('2026-11-24T10:00:00Z');
+  const HOUR_MS = 60 * 60 * 1000;
+  const fresh = { ...assessment, assessedAt: new Date(NOW.getTime() - HOUR_MS) };
+  const abstained = { ...fresh, result: 'insufficient_evidence' as const, confidence: 0.6 };
+  const tiersOn = (over: Record<string, unknown> = {}) =>
+    AutoContainmentConfigSchema.parse({
+      mode: 'shadow',
+      tiers: {
+        limit: { mode: 'shadow', rolloutPercent: 100 },
+        holdGrant: { mode: 'shadow', rolloutPercent: 100 },
+        review: { mode: 'shadow', rolloutPercent: 100 },
+      },
+      ...over,
+    });
+  const facts = (over: Partial<LinkRuleFacts> = {}): LinkRuleFacts => ({
+    userId: 'u1',
+    paying: false,
+    partnerDomain: false,
+    creditsSpent: 40,
+    ownedDomainCluster: { domain: 'example.com', accounts: 3, spenders: 2 },
+    adminHeldDomain: null,
+    bannedSameDevice: 0,
+    ...over,
+  });
+  const decide = (
+    over: {
+      assessment?: Partial<typeof fresh>;
+      detection?: Partial<typeof detection>;
+      config?: ReturnType<typeof tiersOn>;
+      linkFacts?: LinkRuleFacts[] | null;
+    } = {}
+  ) =>
+    decideIntervention({
+      assessment: { ...abstained, ...over.assessment },
+      detection: { ...detection, wouldAction: 'limit', ...over.detection },
+      config: over.config ?? tiersOn(),
+      now: NOW,
+      verificationAvailable: false,
+      linkFacts: over.linkFacts === undefined ? [facts()] : over.linkFacts,
+    });
+
+  it('acts on the rule tier when the model abstains, recording who decided and which rule', () => {
+    const decision = decide();
+    expect(decision).toMatchObject({
+      kind: 'act',
+      tier: 'limit',
+      mode: 'shadow',
+      userIds: ['u1'],
+      scope: 'ai_spend',
+      decidedBy: 'link_rule',
+      linkRules: ['sharedOwnedDomain'],
+      policyVersion: INTERVENTION_POLICY_VERSION,
+      expiresAt: new Date(NOW.getTime() + 72 * HOUR_MS),
+    });
+    expect(decision.kind === 'act' && decision.reason).toMatch(
+      /^Automated limit by link rule sharedOwnedDomain \(policy v2\) on youngAccountSpend detection d1: 3 accounts on example\.com, 2 spent credits$/
+    );
+  });
+
+  it('holds the grant when only an unspent account fires, whatever tier the detection maps to', () => {
+    expect(decide({ linkFacts: [facts({ creditsSpent: 0 })] })).toMatchObject({
+      kind: 'act',
+      tier: 'holdGrant',
+      scope: 'signup_grant',
+      decidedBy: 'link_rule',
+    });
+  });
+
+  it.each([
+    ['unknown', { result: 'unknown' as const, confidence: null }],
+    ['stale', { result: 'abuse' as const, assessedAt: new Date(NOW.getTime() - 25 * HOUR_MS) }],
+    ['below confidence', { result: 'abuse' as const, confidence: 0.5 }],
+  ])('overrides a %s model judgment', (_label, over) => {
+    expect(decide({ assessment: over })).toMatchObject({ kind: 'act', decidedBy: 'link_rule' });
+  });
+
+  it('keeps a model act as decided by the model, noting the rules that also fired', () => {
+    expect(decide({ assessment: { result: 'abuse', confidence: 0.95 } })).toMatchObject({
+      kind: 'act',
+      tier: 'limit',
+      decidedBy: 'model',
+      linkRules: ['sharedOwnedDomain'],
+    });
+  });
+
+  it.each([
+    ['tier_off', { config: tiersOn({ tiers: { holdGrant: { mode: 'shadow', rolloutPercent: 100 } } }) }],
+    ['not_in_rollout', { config: tiersOn({ tiers: { limit: { mode: 'shadow', rolloutPercent: 0 } } }) }],
+    ['already_reviewed', { detection: { verdict: 'legitimate_human' as const } }],
+    ['too_many_accounts', { detection: { userIds: ['u1', '2', '3', '4', '5', '6'] } }],
+    ['mode_off', { config: tiersOn({ mode: 'off' }) }],
+  ])('applies the non-model gate %s to the rule tier', (why, over) => {
+    expect(decide(over)).toEqual({ kind: 'skip', why, tier: 'limit' });
+  });
+
+  it('never acts on an account the detection does not name', () => {
+    expect(decide({ linkFacts: [facts({ userId: 'stranger' })] })).toEqual({
+      kind: 'skip',
+      why: 'not_in_rollout',
+      tier: 'limit',
+    });
+  });
+
+  it('keeps the model skip when link rules are disabled, not loaded, or none fires', () => {
+    const modelSkip = { kind: 'skip', why: 'not_abuse', tier: 'limit' };
+    expect(decide({ config: tiersOn({ linkRules: { enabled: false } }) })).toEqual(modelSkip);
+    expect(decide({ linkFacts: null })).toEqual(modelSkip);
+    expect(decide({ linkFacts: [facts({ paying: true })] })).toEqual(modelSkip);
+  });
+
+  it('never lets a rule override a review-only detector', () => {
+    expect(decide({ detection: { detector: 'completionSequence' } })).toEqual({
+      kind: 'skip',
+      why: 'review_only_detector',
+      tier: 'limit',
+    });
+  });
+
+  describe('on a contain detection', () => {
+    const contain = { wouldAction: 'contain' as const };
+
+    it('still Contains on a confident abuse judgment, decided by the model', () => {
+      expect(decide({ detection: contain, assessment: { result: 'abuse', confidence: 0.95 } })).toMatchObject({
+        kind: 'act',
+        tier: 'contain',
+        decidedBy: 'model',
+        linkRules: ['sharedOwnedDomain'],
+      });
+    });
+
+    it('offers a link rule only a graduated tier, never Contain', () => {
+      const ruleFacts = [facts({ bannedSameDevice: 4, adminHeldDomain: 'held.example' })];
+      for (const assessmentOver of [
+        { result: 'insufficient_evidence' as const, confidence: 0.6 },
+        { result: 'abuse' as const, confidence: 0.5 },
+        { result: 'unknown' as const, confidence: null },
+      ]) {
+        const decision = decide({ detection: contain, assessment: assessmentOver, linkFacts: ruleFacts });
+        expect(decision).toMatchObject({ kind: 'act', tier: 'limit', decidedBy: 'link_rule' });
+      }
     });
   });
 });

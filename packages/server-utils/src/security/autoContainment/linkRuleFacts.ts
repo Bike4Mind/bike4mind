@@ -1,0 +1,182 @@
+import { emailDomainCandidates, type AutoContainmentConfig, type LinkRuleFacts } from '@bike4mind/common';
+import {
+  loadDeviceLinkAccounts,
+  signupDomainReviewRepository,
+  signupProtectionRepository,
+  usageEventRepository,
+  userRepository,
+} from '@bike4mind/database';
+import type { IUserSpendProfile, UserAccountRiskProfile, UserSignupLinkCandidate } from '@bike4mind/database';
+import type { Logger } from '@bike4mind/observability';
+import { getActiveSubscriptionsForUser } from '../../entitlements/activeSubscriptions';
+import { hasPaidSubscription, hasPurchasedCredits } from '../../entitlements/paidStanding';
+import { accountLinkKeys } from '../accountLinkSignals';
+import { LINK_CANDIDATE_LIMIT } from '../abuseAssessment/accountProfile';
+import { DEFAULT_DEVICE_LINK_CONFIG, evaluateDeviceLinks, liveDeviceLinkReaders } from './deviceLinkEvaluation';
+
+/**
+ * The facts the automated-containment link rules read per account
+ * (apps/workers/src/security/autoContainment/linkRules.ts). Bounded: at most maxAccountsPerDetection
+ * accounts and LINK_CANDIDATE_LIMIT domain candidates each. Fails closed per fact: a failed read
+ * leaves the fact unable to fire its rule (paying and partner read as true, the rest as unknown),
+ * is logged, and never throws.
+ */
+
+const HOUR_MS = 60 * 60 * 1000;
+/** Same fallback as the assessment's account profile (abuseAssessment/accountProfile.ts) when the strong-link rule is off (0). */
+const DEFAULT_LINK_WINDOW_HOURS = 72;
+
+export type BannedDeviceLinks = Map<string, { blockedUserId: string }[]>;
+
+export type LinkRuleFactsDeps = {
+  findAccountRiskProfiles: (ids: string[]) => Promise<UserAccountRiskProfile[]>;
+  findCreditPurchaseStamps: (ids: string[]) => Promise<Map<string, Date | null>>;
+  findActiveSubscriptions: (userId: string) => Promise<readonly { priceId: string }[]>;
+  isOrganizationDomain: (email: string) => Promise<boolean>;
+  findAdminBlockedDomain: (candidates: string[]) => Promise<string | null>;
+  findSignupLinkCandidates: typeof userRepository.findSignupLinkCandidates;
+  /** Spend from usage events since `since`; ids with no spend are absent. */
+  spendProfileByUsers: (ids: string[], since: Date) => Promise<Record<string, IUserSpendProfile>>;
+  /** Per account, the banned accounts it shares an uncommon, corroborated device with. */
+  bannedDeviceLinks: (ids: string[], config: AutoContainmentConfig) => Promise<BannedDeviceLinks>;
+};
+
+export const liveLinkRuleFactsDeps: LinkRuleFactsDeps = {
+  findAccountRiskProfiles: ids => userRepository.findAccountRiskProfiles(ids),
+  findCreditPurchaseStamps: ids => userRepository.findCreditPurchaseStamps(ids),
+  findActiveSubscriptions: userId => getActiveSubscriptionsForUser(userId, { strict: true }),
+  isOrganizationDomain: email => signupProtectionRepository.isOrganizationDomain(email),
+  findAdminBlockedDomain: candidates => signupDomainReviewRepository.findAdminBlockedDomain(candidates),
+  findSignupLinkCandidates: input => userRepository.findSignupLinkCandidates(input),
+  spendProfileByUsers: (ids, since) => usageEventRepository.spendProfileByUsers(ids, since, 1),
+  // Same policy as the assessment's device evidence (abuseAssessment/linkedAccountEvidence.ts).
+  bannedDeviceLinks: async (ids, config) => {
+    const results = await evaluateDeviceLinks(
+      await loadDeviceLinkAccounts(ids),
+      {
+        windowHours: config.deviceLinkWindowHours || DEFAULT_DEVICE_LINK_CONFIG.windowHours,
+        commonNetworks: config.deviceLinkCommonNetworks,
+      },
+      liveDeviceLinkReaders
+    );
+    return new Map([...results].map(([id, result]) => [id, result.linked ? result.matches : []]));
+  },
+};
+
+type DomainCluster = { domain: string; members: UserSignupLinkCandidate[] };
+
+export async function loadLinkRuleFacts(
+  userIds: readonly string[],
+  config: AutoContainmentConfig,
+  deps: LinkRuleFactsDeps = liveLinkRuleFactsDeps,
+  logger?: Pick<Logger, 'warn'>
+): Promise<LinkRuleFacts[]> {
+  const ids = [...new Set(userIds)].slice(0, config.maxAccountsPerDetection);
+  if (ids.length === 0) return [];
+  const read = async <T>(fact: string, run: () => Promise<T>, fallback: T): Promise<T> => {
+    try {
+      return await run();
+    } catch (error) {
+      logger?.warn('[AUTO_CONTAINMENT] link-rule fact unavailable; its rule cannot fire', {
+        fact,
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+      return fallback;
+    }
+  };
+
+  const accounts = await read('accounts', () => deps.findAccountRiskProfiles(ids), null);
+  if (!accounts) return [];
+  const members = new Set(ids);
+  const windowHours = config.strongLinkWindowHours || DEFAULT_LINK_WINDOW_HOURS;
+
+  const [stamps, deviceLinks, clusters] = await Promise.all([
+    read('paying', () => deps.findCreditPurchaseStamps(ids), null),
+    read('bannedSameDevice', () => deps.bannedDeviceLinks(ids, config), null),
+    Promise.all(accounts.map(account => domainClusterOf(account, windowHours, deps, read))),
+  ]);
+
+  // Spend since each account's own signup: no account spends before it exists, so one read from the
+  // earliest signup covers every account and candidate.
+  const spendIds = [...new Set([...ids, ...clusters.flatMap(cluster => cluster?.members.map(m => m.id) ?? [])])];
+  const signups = [
+    ...accounts.map(account => account.createdAt),
+    ...clusters.flatMap(cluster => cluster?.members.map(m => m.createdAt) ?? []),
+  ].filter((date): date is Date => date !== null);
+  const since = signups.length > 0 ? new Date(Math.min(...signups.map(date => date.getTime()))) : null;
+  const spend = since ? await read('creditsSpent', () => deps.spendProfileByUsers(spendIds, since), null) : null;
+  const spentOf = (id: string) => spend?.[id]?.totalCredits ?? 0;
+
+  return Promise.all(
+    accounts.map(async (account, index): Promise<LinkRuleFacts> => {
+      const email = account.email;
+      const cluster = clusters[index];
+      const blockedDevices = deviceLinks?.get(account.id) ?? [];
+      return {
+        userId: account.id,
+        paying: await payingOf(account.id, stamps, deps, read),
+        partnerDomain: email ? await read('partnerDomain', () => deps.isOrganizationDomain(email), true) : false,
+        // No spend read leaves every account at zero, which no spend-gated rule fires on.
+        creditsSpent: account.createdAt ? spentOf(account.id) : 0,
+        ownedDomainCluster:
+          cluster && spend
+            ? {
+                domain: cluster.domain,
+                accounts: 1 + cluster.members.length,
+                spenders: [account.id, ...cluster.members.map(m => m.id)].filter(id => spentOf(id) > 0).length,
+              }
+            : null,
+        adminHeldDomain: email
+          ? await read('heldSignupDomain', () => deps.findAdminBlockedDomain(emailDomainCandidates(email)), null)
+          : null,
+        bannedSameDevice: deviceLinks
+          ? new Set(blockedDevices.map(match => match.blockedUserId).filter(id => !members.has(id))).size
+          : null,
+      };
+    })
+  );
+}
+
+async function payingOf(
+  userId: string,
+  stamps: Map<string, Date | null> | null,
+  deps: LinkRuleFactsDeps,
+  read: <T>(fact: string, run: () => Promise<T>, fallback: T) => Promise<T>
+): Promise<boolean> {
+  if (!stamps) return true;
+  if (hasPurchasedCredits({ lastCreditsPurchasedAt: stamps.get(userId) ?? null })) return true;
+  const subscriptions = await read('paying', () => deps.findActiveSubscriptions(userId), null);
+  return subscriptions === null || hasPaidSubscription(subscriptions);
+}
+
+/** Accounts on the same owned mail domain that signed up within the window of this one; null when it has none to share. */
+async function domainClusterOf(
+  account: UserAccountRiskProfile,
+  windowHours: number,
+  deps: LinkRuleFactsDeps,
+  read: <T>(fact: string, run: () => Promise<T>, fallback: T) => Promise<T>
+): Promise<DomainCluster | null> {
+  const domain = accountLinkKeys(account).mailDomain;
+  if (!domain || !account.createdAt) return null;
+  const signedUp = account.createdAt.getTime();
+  const candidates = await read(
+    'sharedOwnedDomain',
+    () =>
+      deps.findSignupLinkCandidates({
+        excludeIds: [account.id],
+        from: new Date(signedUp - windowHours * HOUR_MS),
+        to: new Date(signedUp + windowHours * HOUR_MS),
+        ip: null,
+        ja4: null,
+        mailbox: null,
+        mailDomain: domain,
+        limit: LINK_CANDIDATE_LIMIT,
+      }),
+    null
+  );
+  if (!candidates) return null;
+  const members = candidates.filter(
+    candidate => candidate.id !== account.id && candidate.createdAt && accountLinkKeys(candidate).mailDomain === domain
+  );
+  return { domain, members };
+}

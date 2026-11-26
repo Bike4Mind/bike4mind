@@ -1116,6 +1116,17 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     }));
   }
 
+  /** `lastCreditsPurchasedAt` per id (the purchase half of paid standing); ids that are not users are absent. */
+  async findCreditPurchaseStamps(ids: string[]): Promise<Map<string, Date | null>> {
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) return new Map();
+    const docs = await this.model
+      .find({ _id: { $in: convertIds(validIds) } })
+      .select('lastCreditsPurchasedAt')
+      .lean();
+    return new Map(docs.map(doc => [String(doc._id), doc.lastCreditsPurchasedAt ?? null]));
+  }
+
   /** Who `ids` are and whether each is blocked, for the payment-risk linked-account checks. */
   async findLinkStatesByIds(ids: string[]): Promise<UserLinkState[]> {
     const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));

@@ -45,6 +45,24 @@ A claim left `pending` for 15 minutes (the run died, or the Contain ran out of t
 reclaimed by the next run on the detection and retried with the same key; the bulk path skips users
 it already contained. A Contain with no eligible account (admins, deleted users) records `failed`.
 
+## Link rules
+
+When the model abstains on a graduated decision (unknown, stale, not abuse, or below the tier's
+`minConfidence`), deterministic rules in `linkRules.ts` may decide Limit or Hold signup grant instead,
+under the same mode, tier, review-only, verdict, account-count and rollout gates. Facts are loaded
+by `packages/server-utils/src/security/autoContainment/linkRuleFacts.ts`, failing closed per fact.
+Paying and partner-domain accounts are never touched, and a rule never decides Contain.
+
+| Rule                | Fires when                                                                                    | Tier                              |
+| ------------------- | --------------------------------------------------------------------------------------------- | --------------------------------- |
+| `bannedSameDevice`  | Same uncommon device as a banned account, and credits spent since signup.                     | limit                             |
+| `sharedOwnedDomain` | 3+ accounts on one owned mail domain within the strong-link window, 2+ of them spent credits. | limit if it spent, else holdGrant |
+| `heldSignupDomain`  | The address's domain (or a parent) was confirmed blocked by an admin, not by automation.      | holdGrant                         |
+
+Decisions record `decidedBy` (`model` or `link_rule`), the fired `linkRules`, and the model's own
+`modelJudgment`, so model abstention on rule-decided cases is measurable. `linkRules.enabled`
+(default on) turns the rules off.
+
 ## Shadow grading
 
 Shadow writes `would_contain` rows without touching accounts. Joining them by

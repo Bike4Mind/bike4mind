@@ -1,9 +1,11 @@
 import {
+  isReviewOnlyCompletionDetector,
   type AbuseAssessmentItem,
   type AutoContainmentConfig,
   type AutoContainmentDecisionItem,
   type GraduatedInterventionTier,
   type InterventionHold,
+  type LinkRuleFacts,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
 import {
@@ -14,6 +16,7 @@ import {
 } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
 import { loadAutoContainmentConfig } from '@bike4mind/server-utils/security/autoContainment/config';
+import { loadLinkRuleFacts } from '@bike4mind/server-utils/security/autoContainment/linkRuleFacts';
 import type { AdminUsersBulkResult } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { usersBulkExecuteDepsFor, usersBulkResolveDeps } from '@bike4mind/server-utils/admin/usersBulk/adapters';
 import { executeAdminUsersBulk } from '@bike4mind/server-utils/admin/usersBulk/execute';
@@ -86,6 +89,8 @@ export type AutoContainmentDeps = {
   auditHold: (userId: string, decision: AutoContainmentDecisionItem) => Promise<void>;
   /** Whether a verification flow can clear a verify hold; without one, verify decisions become review. */
   verificationAvailable: () => Promise<boolean>;
+  /** Link-rule facts for the detection's accounts; fails closed per fact, never throws. */
+  loadLinkRuleFacts: (userIds: string[], config: AutoContainmentConfig) => Promise<LinkRuleFacts[]>;
   now: () => Date;
   logger: Pick<Logger, 'info' | 'warn' | 'error'>;
 };
@@ -157,6 +162,7 @@ export const liveAutoContainmentDeps = (logger: Logger): AutoContainmentDeps => 
   },
   // No card or phone verification flow calls unlockSignupGrant yet, so a verify decision is recorded as review.
   verificationAvailable: async () => false,
+  loadLinkRuleFacts: (userIds, config) => loadLinkRuleFacts(userIds, config, undefined, logger),
   now: () => new Date(),
   logger,
 });
@@ -232,6 +238,9 @@ async function claimDecision(
           policyVersion: decided.policyVersion,
           scope: decided.scope,
           expiresAt: decided.expiresAt,
+          decidedBy: decided.decidedBy,
+          linkRules: decided.linkRules,
+          modelJudgment: { result: assessment.result, confidence: assessment.confidence },
         }),
   });
   return recorded ? { decision: recorded, retried: false } : null;
@@ -270,6 +279,26 @@ async function releaseContainedHolds(
   }
 }
 
+/** Skips the reads when the link rules could not act anyway: rules off, review-only evidence, or an admin verdict. */
+async function linkFactsFor(
+  detection: ShadowDetectionItem,
+  config: AutoContainmentConfig,
+  deps: AutoContainmentDeps
+): Promise<LinkRuleFacts[] | null> {
+  if (!config.linkRules.enabled || isReviewOnlyCompletionDetector(detection.detector) || detection.verdict !== null) {
+    return null;
+  }
+  try {
+    return await deps.loadLinkRuleFacts(detection.userIds, config);
+  } catch (error) {
+    deps.logger.error('[AUTO_CONTAINMENT] link-rule facts unavailable', {
+      detectionId: detection.id,
+      error: errorText(error),
+    });
+    return null;
+  }
+}
+
 /** Decides, and in enforce mode acts on, one assessment. Throws only on a database failure. */
 export async function applyAutoContainment(
   assessment: AbuseAssessmentItem,
@@ -286,6 +315,7 @@ export async function applyAutoContainment(
     config,
     now: deps.now(),
     verificationAvailable: await deps.verificationAvailable(),
+    linkFacts: await linkFactsFor(detection, config, deps),
   });
   if (decided.kind === 'skip') return { status: 'skipped', reason: decided.why };
   if (decided.tier !== 'contain') return applyGraduatedTier(assessment, detection, decided, config, deps);

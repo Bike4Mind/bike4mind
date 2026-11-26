@@ -229,6 +229,24 @@ describe('signup protection persistence', () => {
     expect(await signupProtectionRepository.isOrganizationDomain('a@example.net')).toBe(false);
   });
 
+  it('finds a domain an admin confirmed blocked, never an automated or pending one, matching parents', async () => {
+    await seed('admin.example', { status: 'blocked', reviewedBy: 'admin-1', reviewedAt: autoDecidedAt });
+    await seed('auto.example', {
+      status: 'blocked',
+      reviewedAt: autoDecidedAt,
+      autoDecision: { policy: 'advisory-decision', decidedAt: autoDecidedAt },
+    });
+    await seed('pending.example');
+    await seed('released.example', { status: 'released', reviewedBy: 'admin-1' });
+
+    const find = signupDomainReviewRepository.findAdminBlockedDomain;
+    expect(await find(['np.admin.example', 'admin.example'])).toBe('admin.example');
+    expect(await find(['auto.example'])).toBeNull();
+    expect(await find(['pending.example'])).toBeNull();
+    expect(await find(['released.example'])).toBeNull();
+    expect(await find([])).toBeNull();
+  });
+
   describe('admin hold list', () => {
     const window = new Date('2026-03-01');
     const seed = () =>
