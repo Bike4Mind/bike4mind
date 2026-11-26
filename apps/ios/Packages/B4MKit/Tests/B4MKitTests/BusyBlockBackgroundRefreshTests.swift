@@ -27,10 +27,16 @@ private final class FakeScheduler: BackgroundRefreshScheduling, @unchecked Senda
 private final class FakeTask: BackgroundRefreshTask {
   var expirationHandler: (@Sendable () -> Void)?
   private(set) var completions: [Bool] = []
+  /// Submits already made at each completion: the system may suspend the app once a task completes.
+  private(set) var submitsAtCompletion: [Int] = []
   var onComplete: (() -> Void)?
+  private let scheduler: FakeScheduler?
+
+  init(scheduler: FakeScheduler? = nil) { self.scheduler = scheduler }
 
   func setTaskCompleted(success: Bool) {
     completions.append(success)
+    submitsAtCompletion.append(scheduler?.submits.count ?? 0)
     onComplete?()
   }
 }
@@ -99,12 +105,13 @@ final class BusyBlockBackgroundRefreshTests: XCTestCase {
 
   func testSyncedRunCompletesSuccessfullyAndRearms() async {
     let scheduler = FakeScheduler()
-    let task = FakeTask()
+    let task = FakeTask(scheduler: scheduler)
 
     await run(refresh(scheduler) { .synced }, until: task)
 
     XCTAssertEqual(task.completions, [true])
     XCTAssertEqual(scheduler.submits.count, 1)
+    XCTAssertEqual(task.submitsAtCompletion, [1])
   }
 
   func testRunSkippedBehindAnInFlightSyncStillSucceeds() async {
@@ -169,7 +176,7 @@ final class BusyBlockBackgroundRefreshTests: XCTestCase {
 
   func testExpirationCancelsTheSyncAndCompletesOnceUnsuccessfully() async {
     let scheduler = FakeScheduler()
-    let task = FakeTask()
+    let task = FakeTask(scheduler: scheduler)
     let cancelled = expectation(description: "sync cancelled")
     let refresh = refresh(scheduler) {
       try? await Task.sleep(for: .seconds(30))
@@ -188,12 +195,13 @@ final class BusyBlockBackgroundRefreshTests: XCTestCase {
 
     XCTAssertEqual(task.completions, [false])
     XCTAssertEqual(scheduler.submits.count, 1)
+    XCTAssertEqual(task.submitsAtCompletion, [1])
     XCTAssertNil(task.expirationHandler)
   }
 
   func testExpirationCompletesOnceWhenTheSyncIgnoresCancelAndFinishesLater() async {
     let scheduler = FakeScheduler()
-    let task = FakeTask()
+    let task = FakeTask(scheduler: scheduler)
     let gate = SyncGate()
     let refresh = refresh(scheduler) {
       await gate.wait()
@@ -212,6 +220,7 @@ final class BusyBlockBackgroundRefreshTests: XCTestCase {
 
     XCTAssertEqual(task.completions, [false])
     XCTAssertEqual(scheduler.submits.count, 1)
+    XCTAssertEqual(task.submitsAtCompletion, [1])
   }
 
   func testExpirationAfterCompletionDoesNothing() async {
