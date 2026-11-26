@@ -99,9 +99,9 @@ The deployment workflow follows a clear branching strategy that maps branches to
 #### Preview Sleep Schedule
 Preview stages scale their chat completion and realtime fanout services to zero tasks over the weekend, so idle previews stop billing for containers:
 
-- **Sleep**: Saturday 02:00 UTC. **Wake**: Monday 11:00 UTC. Both are scheduled scaling actions on the stage's own services; the window is set in `infra/previewSleepConfig.ts`.
+- **Sleep**: Saturday 02:00 UTC. **Wake**: Sunday 23:00 UTC, which is Monday morning across Asia-Pacific. Both are scheduled scaling actions on the stage's own services; the window is set in `infra/previewSleepConfig.ts`.
 - **Waking early**: while a preview is asleep, the app shows a banner with a **Wake** button. It restores the regular task counts and shows progress until the tasks are running and passing their load balancer health checks, which can take a few minutes on Spot capacity. The banner works without the realtime connection, since that is one of the sleeping services.
-- **Deploying during the window does not wake the preview.** A deploy does not reset scheduled scaling, so a push to a sleeping PR leaves the services at zero until the Monday wake or a click on **Wake**.
+- **Deploying during the window does not wake the preview.** A deploy does not reset scheduled scaling, so a push to a sleeping PR leaves the services at zero until the scheduled wake or a click on **Wake**.
 - Production and `dev` never sleep. A preview that opts into service health alarms with `ENABLE_MONITORING=true` does not sleep either, since those alarms treat zero tasks as an outage.
 
 ### Environment Isolation

@@ -2,7 +2,7 @@ import { chatCompletionScaling, type ServiceScaling } from './chatCompletionCapa
 
 // Weekend-only window; widening it to weekday nights is a team call, so these stay tunable here.
 export const PREVIEW_SLEEP_CRON = 'cron(0 2 ? * SAT *)';
-export const PREVIEW_WAKE_CRON = 'cron(0 11 ? * MON *)';
+export const PREVIEW_WAKE_CRON = 'cron(0 23 ? * SUN *)';
 export const PREVIEW_SLEEP_TIMEZONE = 'UTC';
 
 export const PREVIEW_ASLEEP: ServiceScaling = { min: 0, max: 0 };

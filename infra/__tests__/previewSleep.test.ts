@@ -25,7 +25,7 @@ describe('preview sleep config', () => {
 
   it('sleeps on the weekend and wakes before the work week', () => {
     expect(PREVIEW_SLEEP_CRON).toBe('cron(0 2 ? * SAT *)');
-    expect(PREVIEW_WAKE_CRON).toBe('cron(0 11 ? * MON *)');
+    expect(PREVIEW_WAKE_CRON).toBe('cron(0 23 ? * SUN *)');
   });
 
   it('wakes each service to its regular non-prod bounds', () => {
