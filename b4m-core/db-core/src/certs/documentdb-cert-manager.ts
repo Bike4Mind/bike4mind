@@ -12,6 +12,7 @@ import { awsGlobalBundle } from './aws-global-bundle';
 //
 const DOCUMENTDB_CA_BUNDLE_BASE64 = process.env.DOCUMENTDB_CA_BUNDLE_BASE64 || awsGlobalBundle;
 
+/** @deprecated AWS DocumentDB support is deprecated and will be removed in a future release. */
 export interface CertificateConfig {
   certPath: string;
   certExists: boolean;
@@ -20,6 +21,7 @@ export interface CertificateConfig {
 /**
  * Get the certificate configuration for DocumentDB
  * This function ensures the certificate file exists in the Lambda environment
+ * @deprecated AWS DocumentDB support is deprecated and will be removed in a future release.
  */
 export function getDocumentDBCertificate(): CertificateConfig {
   // Use /tmp in Lambda environment
@@ -43,6 +45,7 @@ export function getDocumentDBCertificate(): CertificateConfig {
 /**
  * Check if we're using DocumentDB based on the connection string
  * DocumentDB URLs typically contain "docdb" or "documentdb" in the hostname
+ * @deprecated AWS DocumentDB support is deprecated and will be removed in a future release.
  */
 export function isDocumentDBConnection(mongoUri: string): boolean {
   const dbType = process.env.MAIN_DB_TYPE || 'MongoAtlas';
@@ -62,6 +65,7 @@ export function isDocumentDBConnection(mongoUri: string): boolean {
 
 /**
  * Modify the MongoDB URI to include the TLS CA file path
+ * @deprecated AWS DocumentDB support is deprecated and will be removed in a future release.
  */
 export function addCertificateToUri(mongoUri: string, certPath: string): string {
   if (mongoUri.includes('tlsCAFile=')) {
