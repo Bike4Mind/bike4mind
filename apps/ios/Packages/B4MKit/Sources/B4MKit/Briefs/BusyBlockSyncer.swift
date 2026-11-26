@@ -96,9 +96,11 @@ public final class BusyBlockSyncer {
   public func save(enabled: Bool) async throws -> BusyBlocksState {
     let startedIn = session
     // A finished task is released here too: its owner may not have resumed yet, and re-awaiting it would spin.
-    while let current {
-      _ = await current.value
-      release(current)
+    // A save still in flight from an earlier session is awaited as well, so two writes never race.
+    while let pending = current ?? sentSave {
+      _ = await pending.value
+      release(pending)
+      if sentSave == pending { sentSave = nil }
     }
     guard session == startedIn else { throw CancellationError() }
     let save = Task { try await api.save(enabled: enabled, blocks: enabled ? currentBlocks() : []) }

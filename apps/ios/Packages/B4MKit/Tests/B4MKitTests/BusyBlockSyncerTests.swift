@@ -479,6 +479,27 @@ final class BusyBlockSyncerTests: XCTestCase {
     XCTAssertEqual(saves, [false])
   }
 
+  func testSaveInANewSessionWaitsForTheSaveAlreadySentByTheOldOne() async {
+    let api = FakeBusyBlocksAPI(enabled: true)
+    let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized))
+    await api.holdSave()
+
+    let old = Task { try await syncer.save(enabled: false) }
+    while await api.saveAttempts == 0 { await Task.yield() }
+    syncer.sessionDidStart()
+    let new = Task { try await syncer.save(enabled: true) }
+    for _ in 0..<10 { await Task.yield() }
+    let attemptsBeforeOldLanded = await api.saveAttempts
+    await api.release()
+    _ = try? await old.value
+    await api.release()
+    _ = try? await new.value
+
+    XCTAssertEqual(attemptsBeforeOldLanded, 1)
+    let saves = await api.saves.map(\.enabled)
+    XCTAssertEqual(saves, [false, true])
+  }
+
   func testSyncFromThePreviousSessionDoesNotOverwriteTheReset() async {
     let api = FakeBusyBlocksAPI(enabled: false)
     let syncer = BusyBlockSyncer(api: api, reader: FakeReader(access: .authorized), now: { [now] in now })
