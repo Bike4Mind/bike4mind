@@ -72,6 +72,7 @@ function renderJob(overrides: Record<string, unknown> = {}) {
 }
 
 function setup(options: { connected?: boolean } = {}) {
+  const account = { scope: 'acct' };
   const patch = vi.fn(async (_url: string, body: unknown) => ({
     data: { composition: composition(body as Record<string, unknown>) },
   }));
@@ -109,13 +110,13 @@ function setup(options: { connected?: boolean } = {}) {
       options.connected === false
         ? null
         : {
-            scope: 'acct',
+            scope: account.scope,
             productions: new ProductionsClient(api as unknown as AuthenticatedApiClient),
             files: files as unknown as MediaApiClient,
           },
     media: media as never,
   });
-  return { service, api, patch, files, media };
+  return { service, api, patch, files, media, account };
 }
 
 describe('toProductionsError', () => {
@@ -143,6 +144,12 @@ describe('toProductionsError', () => {
       kind: 'failed',
       message: 'Starting the export failed: Video export needs a paid plan',
     });
+  });
+
+  it('reads a 401 as signed-out, a bare 5xx by status, and a plain error by its message', () => {
+    expect(toProductionsError(axiosError(401, {}), 'x', 'item').kind).toBe('signed-out');
+    expect(toProductionsError(axiosError(503, null), 'Loading', 'item').message).toBe('Loading failed with HTTP 503.');
+    expect(toProductionsError(new Error('boom'), 'Loading', 'item').message).toBe('Loading failed: boom');
   });
 
   it('prefers a refusal message over its code', () => {
@@ -201,6 +208,21 @@ describe('ProductionsService', () => {
     expect(result.value.outputs).toEqual([{ id: 'o1', aspectRatio: '16:9', width: 1920, height: 1080 }]);
   });
 
+  it('keeps a fallback clip label with its clip when the order changes', async () => {
+    const { service, api } = setup();
+    const swapped = composition();
+    const track = swapped.timeline.tracks[0] as { clips: Array<{ id: string; startMs: number }> };
+    track.clips[0].startMs = 0;
+    track.clips[1].startMs = 4_000;
+    api.get.mockResolvedValueOnce({ composition: swapped });
+    const result = await service.get({ id: ID });
+    if (!result.ok) throw new Error(result.error.message);
+    expect(result.value.videoTracks[0].clips.map(clip => [clip.id, clip.label])).toEqual([
+      ['b', 'Clip 2'],
+      ['a', 'Hero shot'],
+    ]);
+  });
+
   it('renames with a title-only PATCH', async () => {
     const { service, patch } = setup();
     const result = await service.rename({ id: ID, title: 'Spring launch' });
@@ -252,6 +274,15 @@ describe('ProductionsService', () => {
       'video/mp4',
       expect.any(Number)
     );
+  });
+
+  it('drops its downloads and the bucket when the account changes', async () => {
+    const { service, files, media, account } = setup();
+    await service.media({ fileId: FILE });
+    account.scope = 'other';
+    await service.media({ fileId: FILE });
+    expect(files.getFile).toHaveBeenCalledTimes(2);
+    expect(media.clearReusableBucket).toHaveBeenCalledWith(PRODUCTIONS_BUCKET);
   });
 
   it('answers not-ready while the file has no URL, and retries on the next ask', async () => {
