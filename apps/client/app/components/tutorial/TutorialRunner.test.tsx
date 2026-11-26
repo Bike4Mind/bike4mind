@@ -43,6 +43,7 @@ import {
   PAUSED_NOTICE,
   SKIP_FAILED_NOTICE,
   TutorialRunner,
+  bridgeHeading,
   hasForeignQuest,
   stepProgress,
 } from './TutorialRunner';
@@ -799,14 +800,14 @@ describe('the bridge step', () => {
   it('heads the bridge with the finished chain rather than a step number, which the steps list leaves out', () => {
     renderRunner(transport(), undefined, { using: bridged, onShowSteps: vi.fn() });
     begin('bridge');
-    expect(screen.getByTestId('tutorial-coach-steps')).toHaveTextContent('Quest chain complete');
+    expect(screen.getByTestId('tutorial-coach-steps')).toHaveTextContent('All done');
   });
 
   it('counts the module steps in the bridge heading', () => {
     const closing: TutorialScript = { ...script, steps: [...script.steps, ...bridged.steps] };
     renderRunner(transport(), undefined, { using: closing });
     begin('bridge');
-    expect(screen.getByTestId('tutorial-coach-progress')).toHaveTextContent('Quest chain complete: all 3 steps');
+    expect(screen.getByTestId('tutorial-coach-progress')).toHaveTextContent('All done: 3 steps complete');
   });
 });
 
@@ -1481,5 +1482,19 @@ describe('a module that moved under a running walk', () => {
     expect(mockToast).not.toHaveBeenCalledWith(JUMP_FAILED_NOTICE);
     expect(useTutorialStore.getState().active).toBeNull();
     expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('bridgeHeading', () => {
+  const withSteps = (types: string[]) =>
+    ({ ...script, steps: types.map((type, i) => ({ id: `s${i}`, type, body: '' })) }) as unknown as TutorialScript;
+
+  it('counts the steps before the bridge, singular for one', () => {
+    expect(bridgeHeading(withSteps(['point', 'bridge']))).toBe('All done: 1 step complete');
+    expect(bridgeHeading(withSteps(['point', 'point', 'bridge']))).toBe('All done: 2 steps complete');
+  });
+
+  it('drops the count when the module has no steps but the bridge', () => {
+    expect(bridgeHeading(withSteps(['bridge']))).toBe('All done');
   });
 });

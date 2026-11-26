@@ -9,10 +9,18 @@ interface TutorialPickerState {
   hostMounted: boolean;
   /** A core walk shows on the open notebook: other first-run surfaces hold back while it does. */
   walkOnScreen: boolean;
+  /** The recorded prompt the walk on screen waits for, when its step is a prompt step. */
+  walkPrompt: string | null;
+  /** The tour offer is on screen and unanswered: other first-run surfaces wait for it, as they do for a walk. */
+  offerWaiting: boolean;
+  /** The user took up or opened the offer this visit, so it no longer holds anything back. */
+  offerAnswered: boolean;
   setOpen: (open: boolean) => void;
   requestTrack: (track: TutorialTrack) => void;
   clearTrackRequest: () => void;
-  setHostState: (state: { hostMounted?: boolean; walkOnScreen?: boolean }) => void;
+  setHostState: (state: { hostMounted?: boolean; walkOnScreen?: boolean; walkPrompt?: string | null }) => void;
+  setOfferWaiting: (offerWaiting: boolean) => void;
+  answerOffer: () => void;
 }
 
 /** Lets entry points outside the core host (welcome card, account menu) open the picker or start a track. */
@@ -21,8 +29,13 @@ export const useTutorialPicker = create<TutorialPickerState>(set => ({
   requestedTrack: null,
   hostMounted: false,
   walkOnScreen: false,
+  walkPrompt: null,
+  offerWaiting: false,
+  offerAnswered: false,
   setOpen: open => set({ open }),
   requestTrack: requestedTrack => set({ requestedTrack, open: false }),
   clearTrackRequest: () => set({ requestedTrack: null }),
   setHostState: state => set(state),
+  setOfferWaiting: offerWaiting => set({ offerWaiting }),
+  answerOffer: () => set({ offerAnswered: true, offerWaiting: false }),
 }));

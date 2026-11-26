@@ -63,4 +63,13 @@ describe('getComposerCreditUi', () => {
     });
     expect(getComposerCreditUi({ ...base, hasModels: false, effectiveCredits: 40 }).lowCreditsNotice).toBe(false);
   });
+
+  it('keeps the message box at zero credits during a tutorial walk, and still blocks the toolbar', () => {
+    expect(getComposerCreditUi({ ...base, effectiveCredits: 0, tutorialWalk: true })).toEqual({
+      replaceComposer: false,
+      lowCreditsNotice: false,
+      toolbarBlocked: true,
+    });
+    expect(getComposerCreditUi({ ...base, effectiveCredits: 0, tutorialWalk: false }).replaceComposer).toBe(true);
+  });
 });

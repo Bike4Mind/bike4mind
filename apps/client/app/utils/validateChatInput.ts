@@ -11,6 +11,8 @@ interface ValidateChatInputParams {
   enforceCredits: boolean;
   /** Active model id, so a pin the catalog no longer serves can be named rather than described as absent. */
   selectedModel?: string;
+  /** The message is the running tutorial step's recorded prompt, which replays without a model call or credits. */
+  recordedTutorialTurn?: boolean;
 }
 
 /**
@@ -25,6 +27,7 @@ export function validateChatInput({
   effectiveCredits,
   enforceCredits,
   selectedModel,
+  recordedTutorialTurn = false,
 }: ValidateChatInputParams): string | null {
   if (!accessibleModels || accessibleModels.length === 0) {
     return "You don't have access to any AI models. Please contact your administrator to request the appropriate permissions.";
@@ -46,7 +49,7 @@ export function validateChatInput({
     return 'Empty message, rejected';
   } else if (!currentUser) {
     return 'User data not available';
-  } else if (effectiveCredits <= 0 && enforceCredits) {
+  } else if (effectiveCredits <= 0 && enforceCredits && !recordedTutorialTurn) {
     // An open-signup user whose free credits are deferred until email verification gets a clear
     // "unlock" prompt instead of a dead-end "Out of Credits!" - they've never had credits to spend.
     return isAwaitingEmailVerification(currentUser)
