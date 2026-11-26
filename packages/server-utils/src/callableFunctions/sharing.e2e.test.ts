@@ -4,6 +4,7 @@ import {
   CallableFunctionProtectedFieldError,
   calculateContentHash,
   parseFunctionContract,
+  recipientCallableFunction,
   reviewHash,
   type FunctionContract,
   type ICallableFunctionGrants,
@@ -327,6 +328,51 @@ describe('the access matrix, through the dispatcher', () => {
     expect(await promote(2)).toMatchObject({ state: 'live', pin: { version: 2, seq: 2 } });
     expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'ok' });
     expect(codeRun()).toBe(edited);
+  });
+
+  it('reads a promotion saved without its pin as none kept: live runs, and a repin refuses recipients as before', async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    const owner = { ownerType: 'user' as const, ownerKey: OWNER.id };
+    await CallableFunction.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      { $set: { promoted: { seq: 1, contract: CONTRACT, at: new Date() } } }
+    );
+    await reviewSharedCallableFunction(PERSON, id, { reviewHash: await reviewHash(CONTRACT), approval: 'default' });
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'ok' });
+
+    const live = await CallableFunction.findById(id).lean();
+    const repinned = await callableFunctionRepository.repin(id, owner, 1, {
+      pin: { ...live!.pin, version: 2, pinnedAt: new Date() },
+      contract: CONTRACT,
+      description: CONTRACT.description,
+    });
+    expect(repinned).toMatchObject({ state: 'draft', promoted: { seq: 1 } });
+    expect(repinned!.promoted!.pin).toBeUndefined();
+    expect(recipientCallableFunction(repinned!)).toBeNull();
+    expect(await canCallFunction(PERSON, repinned!)).toBeNull();
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'refused', reason: 'not_found' });
+    expect(await listSharedCallableFunctions(PERSON)).toEqual([]);
+  });
+
+  it('refuses a reviewed recipient at once when the owner turns the function off, on the kept promotion too', async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    await reviewSharedCallableFunction(PERSON, id, { reviewHash: await reviewHash(CONTRACT), approval: 'default' });
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'ok' });
+
+    await setCallableFunctionEnabled(OWNER, id, false);
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'refused', reason: 'disabled' });
+    expect(await listSharedCallableFunctions(PERSON)).toEqual([]);
+
+    await setCallableFunctionEnabled(OWNER, id, true);
+    const live = await CallableFunction.findById(id).lean();
+    await CallableFunction.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      { $set: { state: 'draft', promoted: { seq: 1, contract: CONTRACT, at: new Date(), pin: live!.pin } } }
+    );
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'ok' });
+    await setCallableFunctionEnabled(OWNER, id, false);
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'refused', reason: 'disabled' });
+    expect(await listSharedCallableFunctions(PERSON)).toEqual([]);
   });
 
   it('admits a project member, and refuses them at the next call after they leave', async () => {

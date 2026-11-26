@@ -360,7 +360,10 @@ export async function setCallableFunctionExamples(
 export const CALLABLE_FUNCTION_CALLS_WINDOW_DAYS = 30;
 const RECENT_CALLS = 5;
 
-/** The owner's own calls of their function over the last 30 days: counts by outcome and the latest few. */
+/**
+ * Calls of the owner's function over the last 30 days, theirs and its recipients': counts by outcome and the latest
+ * few, each marked when a recipient made it.
+ */
 export async function summarizeCallableFunctionCalls(
   actor: CallableFunctionActor,
   id: string,
@@ -369,7 +372,7 @@ export async function summarizeCallableFunctionCalls(
   const fn = await callableFunctionRepository.findByIdForOwner(id, userOwner(actor));
   if (!fn) throw notFound();
   const since = new Date(now.getTime() - CALLABLE_FUNCTION_CALLS_WINDOW_DAYS * 24 * 60 * 60 * 1000);
-  return callableFunctionCallRepository.summarizeForCaller(fn.id, actor.id, since, RECENT_CALLS);
+  return callableFunctionCallRepository.summarizeForOwner(fn.id, actor.id, since, RECENT_CALLS);
 }
 
 /**

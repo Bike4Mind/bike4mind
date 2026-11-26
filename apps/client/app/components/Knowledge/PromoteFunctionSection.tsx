@@ -319,7 +319,7 @@ function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
     : '';
   return (
     <Stack spacing={0.5} data-testid="python-function-calls">
-      <Typography level="title-sm">Your calls in the last 30 days</Typography>
+      <Typography level="title-sm">Calls in the last 30 days</Typography>
       {isError && (
         <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
           The calls could not be loaded.
@@ -336,6 +336,7 @@ function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
                 <tr>
                   <th>Time</th>
                   <th>Outcome</th>
+                  <th>By</th>
                 </tr>
               </thead>
               <tbody>
@@ -345,6 +346,7 @@ function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
                       {new Date(call.startedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
                     </td>
                     <td>{OUTCOME_LABELS[call.outcome] ?? call.outcome}</td>
+                    <td>{call.byRecipient ? 'A recipient' : 'You'}</td>
                   </tr>
                 ))}
               </tbody>

@@ -469,6 +469,48 @@ describe('a function shared with the caller', () => {
     expect(h.runner).toHaveBeenCalledTimes(1);
     await client.close();
   });
+
+  it('refuses at once after a revoke, a change to the reviewed interface, or the owner turning it off', async () => {
+    const reviewed = async () => {
+      share(['u1']);
+      h.reviews = [
+        {
+          functionId: SHARED_ID,
+          userId: 'u1',
+          reviewHash: await reviewHash(CONTRACT),
+          approval: 'default',
+          enabled: true,
+        },
+      ];
+      return h.functions.find(fn => fn.id === SHARED_ID)!;
+    };
+    const client = await connect();
+    const call = () => client.callTool({ name: sharedName, arguments: { load: 2, span: 4 } });
+    const notFound = { isError: true, content: [{ type: 'text', text: 'Function not found' }] };
+
+    await reviewed();
+    expect(await call()).toMatchObject({ structuredContent: { deflection: 0.0081 } });
+
+    // As revokeCallableFunctionShare leaves it: no grants and no reviews.
+    (await reviewed()).grants = null;
+    h.reviews = [];
+    expect(await call()).toMatchObject(notFound);
+    expect(h.calls.at(-1)).toMatchObject({ callerUserId: 'u1', outcome: 'refused' });
+
+    (await reviewed()).contract = { ...CONTRACT, description: 'Midspan deflection, now in millimeters.' };
+    expect(await call()).toMatchObject({
+      isError: true,
+      content: [{ type: 'text', text: FUNCTION_REVIEW_REQUIRED_MESSAGE }],
+    });
+    expect((await client.listTools()).tools.map(t => t.name)).toEqual(['beam_midspan_deflection']);
+
+    (await reviewed()).enabled = false;
+    expect(await call()).toMatchObject(notFound);
+    expect((await client.listTools()).tools.map(t => t.name)).toEqual(['beam_midspan_deflection']);
+
+    expect(h.runner).toHaveBeenCalledTimes(1);
+    await client.close();
+  });
 });
 
 describe('tools/call', () => {

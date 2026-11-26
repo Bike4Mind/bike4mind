@@ -256,10 +256,6 @@ export function useCallableFunctionCalls(id: string) {
 
 const shareQueryKey = (id: string) => [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, id, 'grants'] as const;
 
-/**
- * The owner's share of the tool: its grants and the named people's names. Not kept once nothing watches it: the share
- * dialog seeds its form from this once, so a cached copy from before a save would be saved back over it.
- */
 /** The account holding exactly `email`, in any organization, for the owner of tool `id` to share with; null if none. */
 export async function lookupCallableFunctionRecipient(
   id: string,
@@ -272,6 +268,10 @@ export async function lookupCallableFunctionRecipient(
   ).data;
 }
 
+/**
+ * The owner's share of the tool: its grants and the named people's names. Not kept once nothing watches it: the share
+ * dialog seeds its form from this once, so a cached copy from before a save would be saved back over it.
+ */
 export function useCallableFunctionShare(id: string, enabled = true) {
   return useQuery({
     queryKey: shareQueryKey(id),

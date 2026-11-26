@@ -113,6 +113,8 @@ export interface CallableFunctionCallSummary {
     startedAt: Date;
     outcome: CallableFunctionCallRowOutcome;
     surface: CallableFunctionCallSurface;
+    /** Made by someone the function is shared with, not the owner; who it was is not shown. */
+    byRecipient: boolean;
   }[];
 }
 

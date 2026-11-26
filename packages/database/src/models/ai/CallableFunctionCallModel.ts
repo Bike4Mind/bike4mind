@@ -92,22 +92,31 @@ class CallableFunctionCallRepository extends BaseRepository<ICallableFunctionCal
     return updated;
   }
 
-  /** One caller's calls of one function since `since`, read through `callablefncall_function_started`. */
-  async summarizeForCaller(
+  /**
+   * The calls of one owner's function since `since`, by the owner and by recipients of a share, read through
+   * `callablefncall_function_started`. A caller the function was never shared with is left out.
+   */
+  async summarizeForOwner(
     functionId: string,
-    callerUserId: string,
+    ownerUserId: string,
     since: Date,
     recentLimit: number
   ): Promise<CallableFunctionCallSummary> {
     // Contract reads are logged too, but they are not calls of the function.
-    const match = { functionId, callerUserId, op: 'call', startedAt: { $gte: since } };
+    const match = {
+      functionId,
+      ownerUserId,
+      op: 'call',
+      reason: { $ne: 'not_caller' },
+      startedAt: { $gte: since },
+    };
     const [counts, recent] = await Promise.all([
       this.model.aggregate<{ _id: CallableFunctionCallRowOutcome; count: number }>([
         { $match: match },
         { $group: { _id: '$outcome', count: { $sum: 1 } } },
       ]),
       this.model
-        .find(match, { startedAt: 1, outcome: 1, surface: 1 })
+        .find(match, { startedAt: 1, outcome: 1, surface: 1, callerUserId: 1 })
         .sort({ startedAt: -1 })
         .limit(recentLimit)
         .lean(),
@@ -123,6 +132,7 @@ class CallableFunctionCallRepository extends BaseRepository<ICallableFunctionCal
         startedAt: row.startedAt,
         outcome: row.outcome,
         surface: row.surface,
+        byRecipient: row.callerUserId !== ownerUserId,
       })),
     };
   }

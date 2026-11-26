@@ -236,7 +236,7 @@ describe('PromoteFunctionSection', () => {
     expect(screen.getByTestId('python-function-promote-blocked').textContent).toBe('Turn the tool on to promote it.');
   });
 
-  it("lists the owner's calls of the last 30 days: the count, the outcomes, and the latest with time and outcome", () => {
+  it("lists the function's calls of the last 30 days: the count, the outcomes, and the latest with time, outcome, and caller", () => {
     h.calls = {
       isError: false,
       data: {
@@ -244,8 +244,8 @@ describe('PromoteFunctionSection', () => {
         total: 3,
         outcomes: { ok: 2, timeout: 1 },
         recent: [
-          { id: 'c1', startedAt: '2026-11-23T10:00:00.000Z', outcome: 'ok', surface: 'test' },
-          { id: 'c2', startedAt: '2026-11-22T10:00:00.000Z', outcome: 'timeout', surface: 'test' },
+          { id: 'c1', startedAt: '2026-11-23T10:00:00.000Z', outcome: 'ok', surface: 'test', byRecipient: true },
+          { id: 'c2', startedAt: '2026-11-22T10:00:00.000Z', outcome: 'timeout', surface: 'test', byRecipient: false },
         ],
       },
     };
@@ -254,6 +254,7 @@ describe('PromoteFunctionSection', () => {
     expect(screen.getByTestId('python-function-calls-total').textContent).toBe('3 calls: Returned 2, Timed out 1.');
     const rows = screen.getAllByTestId('python-function-call-row');
     expect(rows.map(row => within(row).getAllByRole('cell')[1]!.textContent)).toEqual(['Returned', 'Timed out']);
+    expect(rows.map(row => within(row).getAllByRole('cell')[2]!.textContent)).toEqual(['A recipient', 'You']);
     expect(rows[0]!.textContent).toContain('2026');
   });
 
