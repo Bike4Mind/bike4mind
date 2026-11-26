@@ -246,10 +246,15 @@ describe.each(SCENE_VIEW_IDS)('the %s scene', view => {
     });
 
     it('never stacks a needs-you agent while a calm agent holds a seat', async () => {
+      // Every zone a calm state reaches is full, and more wait than the needs-you zone seats.
       const seats = Object.values(map.zones).reduce((sum, zone) => sum + zone.slots.length, 0);
-      const agents = [...many('w', 'working', seats), agentFixture('n', 'needs-you')];
-      await render(props(agents));
-      expect(query(`${id}-agent-n`)).not.toBeNull();
+      const calmStates = ALL_STATES.filter(state => state !== 'needs-you');
+      const calm = Array.from({ length: seats * calmStates.length }, (_, index) =>
+        agentFixture(`c${index}`, calmStates[index % calmStates.length])
+      );
+      const waiting = many('n', 'needs-you', map.zones[states.zone['needs-you']].slots.length + 2);
+      await render(props([...calm, ...waiting]));
+      for (const agent of waiting) expect(query(`${id}-agent-${agent.id}`), agent.id).not.toBeNull();
     });
   });
 
