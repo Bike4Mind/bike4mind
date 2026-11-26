@@ -522,7 +522,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
             flexWrap: 'wrap',
             gap: 1,
             minWidth: 0,
-            flex: { xs: '1 1 100%', sm: '1 1 0' },
+            flex: { xs: '1 1 100%', sm: '1 1 0%' },
             order: { xs: 1, sm: 0 },
             justifyContent: { xs: 'flex-start', sm: 'center' },
             '& .MuiChip-root': { flexShrink: 0 },
