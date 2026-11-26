@@ -6,6 +6,9 @@ import {
 } from '@bike4mind/utils/embeddingProviders';
 import {
   AiAccessRefusedError,
+  EmptyConversationError,
+  hasReadableConversationMessage,
+  isEmptyConversationError,
   type AttachmentLakeAccess,
   IChatHistoryItemDocument,
   IFabFileDocument,
@@ -406,6 +409,9 @@ export const SLOW_MODEL_ERROR_REPLY = 'The AI model took too long to respond. Pl
 // The fault is ours, not the user's credits, so it must not read like their balance ran out.
 export const PROVIDER_SPEND_LIMIT_REPLY =
   'This model is temporarily unavailable on our side. Please choose a different model or try again later.';
+/** Final reply when the turn has no user or assistant message a model can read (e.g. a blank prompt). */
+export const EMPTY_CONVERSATION_REPLY =
+  'This message has no content the model can read. Type a message or attach a file, then send it again.';
 
 /** Final reply when every allowlisted model failed a substituted turn; the provider's own wording would name the substitute. */
 export const MODEL_UNAVAILABLE_ERROR_REPLY =
@@ -4940,6 +4946,12 @@ export class ChatCompletionProcess {
         quest.promptMeta!.context!.tokensBySource = tokensBySource;
       }
 
+      // Every backend refuses a conversation with nothing readable in it (a blank prompt with no
+      // history or attachments). Refuse here, before any credit is reserved, instead of as a provider error.
+      if (!hasReadableConversationMessage(messages)) {
+        throw new EmptyConversationError();
+      }
+
       // Detect and handle context overflow with detailed breakdown.
       // Measured counts only: the estimator assumes 3.5 chars/token against prose that really runs
       // ~6, so it over-counts prose by up to ~1.7x. Rejecting a turn on that figure would fail
@@ -6224,8 +6236,9 @@ export class ChatCompletionProcess {
             if (lastError instanceof UserApiKeyRejectedError) {
               // The user's own saved key, not ours: an expected user-side outcome, logged once here.
               logger.warn('[User API Key] Provider rejected the user-supplied API key', lastError.logFields);
-            } else if (isExpectedCompletionError(lastError)) {
-              // Already warned by the backend or the attempt summary below.
+            } else if (isExpectedCompletionError(lastError) || isEmptyConversationError(lastError)) {
+              // Already warned by the backend or the attempt summary below; an empty conversation is
+              // settled at warn by the outer catch.
             } else if (
               isAbortError(lastError) ||
               isStreamIdleTimeoutError(lastError) ||
@@ -8102,6 +8115,15 @@ export class ChatCompletionProcess {
         // Expected user-side outcome, already warned once in the attempt loop. Settled rather than
         // rethrown, so /process logs no processing failure and emits no ProcessingFailed metric.
         setErrorReply(userApiKeyRejectedReply(err.provider));
+        quest.type = 'error';
+        setTerminalQuestStatus(quest, 'done');
+        finalQuest = await saveQuest(quest);
+        return;
+      } else if (isEmptyConversationError(err)) {
+        // Caller input (nothing readable to send), so warn, not error: it must not page. Thrown by the
+        // pre-flight guard, or by a backend sanitizer as a backstop. Content-free by construction.
+        logger.warn('[Empty Conversation] Request refused: no readable user or assistant message', { questId });
+        setErrorReply(EMPTY_CONVERSATION_REPLY);
         quest.type = 'error';
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);

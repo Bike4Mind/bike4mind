@@ -1,8 +1,9 @@
 /**
  * @vitest-environment node
  *
- * Text-matched wiring: infra/chatCompletion.ts is an SST program and does not load outside
- * `sst`, so the call site is read from source while the helper is imported directly.
+ * Text-matched wiring: infra/chatCompletion.ts and infra/subscriberFanout.ts are SST programs and
+ * do not load outside `sst`, so the call sites are read from source while the helper is imported
+ * directly.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
@@ -36,6 +37,13 @@ describe('chatCompletionCapacity', () => {
 describe('ChatCompletion service capacity', () => {
   it('takes its capacity from isPreviewStage', () => {
     const service = cut(readInfra('chatCompletion.ts'), "new sst.aws.Service('ChatCompletion'", '\n});');
+    expect(service).toContain('capacity: chatCompletionCapacity(isPreviewStage),');
+  });
+});
+
+describe('subscriberFanoutV2 service capacity', () => {
+  it('takes its capacity from isPreviewStage', () => {
+    const service = cut(readInfra('subscriberFanout.ts'), "new sst.aws.Service('subscriberFanoutV2'", '\n});');
     expect(service).toContain('capacity: chatCompletionCapacity(isPreviewStage),');
   });
 });

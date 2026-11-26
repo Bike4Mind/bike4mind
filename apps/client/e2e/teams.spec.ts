@@ -326,7 +326,18 @@ test.describe('Teams', () => {
       const adminPage = new AdminPage(asAdmin.page);
       await adminPage.gotoAdmin();
       await adminPage.navigateToOrganizationsTab();
+      // The search is debounced and its refetch swaps the rows for the loading state, which closes a
+      // row menu opened on the unfiltered list. Open the menu only once the filtered list has loaded.
+      const searched = asAdmin.page.waitForResponse(r => {
+        const url = new URL(r.url());
+        return (
+          r.request().method() === 'GET' &&
+          url.pathname.endsWith('/api/organizations') &&
+          url.searchParams.get('query') === FULL_TEAM
+        );
+      });
       await asAdmin.page.getByTestId('admin-organizations-search-input').fill(FULL_TEAM);
+      expect((await searched).ok()).toBe(true);
       await asAdmin.page.getByTestId(`org-actions-${fullTeamId}`).filter({ visible: true }).first().click();
       await asAdmin.page.getByTestId(`adjust-seats-${fullTeamId}`).click();
       await asAdmin.page.getByTestId('seats-input').locator('input').fill('4');

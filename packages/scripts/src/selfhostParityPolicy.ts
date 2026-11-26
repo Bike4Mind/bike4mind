@@ -761,9 +761,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'queue:infra/queues.ts:accountDataExportQueueDLQ',
     '8234bb46aa2d71c0b2303134eb96ad2918c4735483c21631faa46b1b27736d60'
   ),
+  // The erasure also deletes callable function data: the data bucket when hosted, the files bucket on self-host.
   wired(
     'queue:infra/queues.ts:accountErasureQueue',
-    '746c040649f74b43385f01ce1a47a1e98222ef0ae70cac9cdaf49cfee41d0464',
+    '6592ca979ba828be45ab32a65f80719b001971c31f416d43c2f2d19e7f7f1c5e',
     {
       source: 'apps/workers/src/selfhost/accountErasureQueue.ts',
       symbol: 'registerAccountErasureQueue',
@@ -1226,8 +1227,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/youngAccountSpendAlert.ts:youngAccountSpendAlert',
-    '0fdfbcaf8af6ffe9c4e387cf32b5e6e8ea3ab73a8c4a5e24f84e5150bfa6a80e',
-    'Hosted production abuse alert to Slack; not applicable to a portable deployment.',
+    'c7844fc8ec21721907300874349c2c0677aef7cb092f3041136af6b32f9bf2e9',
+    'Hosted production abuse alert to Slack and hosted CloudWatch alarm threshold sync; not applicable to a portable deployment.',
     ['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm', 'import:@aws-sdk/client-cloudwatch', 'ssm:GetParameter']
   ),
   hostedOnly(
@@ -1256,9 +1257,10 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
       fingerprint: '969bed6cde6dafb23b320883c779caff4c30686bce073f671c27da06190f92a6',
     }
   ),
+  // The sweep also deletes callable function data: the data bucket when hosted, the files bucket on self-host.
   wired(
     'schedule:infra/cron.ts:accountDeletionSweep',
-    '3c9574bcf45752d386991c362252400f0bbdd3987f1e455ed6ef6cb0b3e1ab8c',
+    'f17522d8779b0a87c5e15914ac358c662109fafa58ad839818f92175c42d400e',
     {
       source: 'apps/workers/src/selfhost/accountDeletionSweep.ts',
       symbol: 'registerAccountDeletionSweep',
@@ -1317,7 +1319,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    '2e18094a8a37e55b333a9cec439dc308ff32ce2b3fd57c9ef896356ff5900f71',
+    'b9fae2dab8c3517ddcdb55c3d54d0c1e9a818e346ae78b44349d1b2cb0aea0d1',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gapBecause(
@@ -1328,7 +1330,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   gap('service:infra/searxng.ts:Searxng', 'fef5f4ce5e094d32525bb4a13828a34b67ba75a38ab72c70e526ba908c31f049'),
   gap(
     'service:infra/subscriberFanout.ts:subscriberFanoutV2',
-    'f22fd878b4415013dafdb60fd0699f5d6c10695f02eccb2450ff66d0388323d6'
+    '93a5312a4a0ff8b50927169d7801ec022068b8f1c7aa5f6b75afff7f1c3451ba'
   ),
   gap(
     'sesRule:infra/emailIngestion.ts:emailReceiptRule',

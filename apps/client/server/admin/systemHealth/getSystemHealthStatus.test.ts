@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const configValues = vi.hoisted(() => ({}) as Record<string, string | undefined>);
 vi.mock('@bike4mind/server-utils/utils/config', () => ({ Config: configValues }));
+const findSetting = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/database', () => ({ adminSettingsRepository: { findOne: findSetting } }));
 vi.mock('@server/auth/oktaOidcClient', () => ({
   getOktaConfigStatus: vi.fn(async () => ({
     sstConfigured: false,
@@ -34,6 +36,7 @@ describe('getSystemHealthStatus email', () => {
       delete process.env[key];
     }
     for (const key of Object.keys(configValues)) delete configValues[key];
+    findSetting.mockReset().mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -71,7 +74,19 @@ describe('getSystemHealthStatus email', () => {
       missingSecrets: [],
       optionalSecrets: [],
       secrets: { MAIL_FROM: true },
+      senderSource: 'secret',
     });
+  });
+
+  it('counts the mailFrom admin setting as the sender when the MAIL_FROM secret is unset', async () => {
+    process.env.MAIL_STATUS_TRANSPORT = 'ses';
+    configValues.MAIL_FROM = 'not-configured';
+    findSetting.mockResolvedValue({ settingName: 'mailFrom', settingValue: 'Ops <ops@example.com>' });
+
+    const { email } = await getSystemHealthStatus();
+
+    expect(email).toMatchObject({ configured: true, missingSecrets: [], senderSource: 'setting' });
+    expect(JSON.stringify(email)).not.toContain('@');
   });
 
   it('names the SMTP settings on a self-host deploy even when the status transport says ses', async () => {

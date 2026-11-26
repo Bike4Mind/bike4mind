@@ -164,6 +164,8 @@ import { ambientHeld, isEditable, isPrintableKey, useAmbientSettle } from './orc
 import { inTavernDialogue } from './orchestrator/tavern/dialogue';
 import type { AgentActions, InnkeeperDesk, StageAmbient } from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
+import { agentsSurfaceAvailable as isAgentsSurfaceAvailable } from './orchestrator/agentsSurface';
+import { archivedAgentsOf } from '@shared/spawnTree';
 import {
   readAmbientHintSeen,
   readIntroSeen,
@@ -299,6 +301,17 @@ export function ChatShell({
   onOpenImportSettings?: (focus: ClaudeImportKind) => void;
   studio?: StudioController;
 }) {
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [placeMemory] = useState(readPlaceMemory);
+  const [launch] = useState(() =>
+    resolveLaunch({ preference: launchPlace(), memory: placeMemory, lastSession: readLastSession() })
+  );
+  const remembered = launch.session;
+  // The session to restore and the open one are fetched even when no loaded page holds them.
+  const keepIds = useMemo(
+    () => [remembered?.id, isSessionDraft(activeId) ? null : activeId].filter((id): id is string => !!id),
+    [remembered, activeId]
+  );
   const {
     sessions,
     loading,
@@ -317,7 +330,16 @@ export function ChatShell({
     exportError,
     clearExportError,
     apply,
-  } = useSessions();
+    hasMore,
+    loadingMore,
+    loadMore,
+    total: sessionTotal,
+    searchSessions,
+  } = useSessions(keepIds);
+  const sessionPaging = useMemo(
+    () => ({ hasMore, loadingMore, onLoadMore: loadMore, total: sessionTotal }),
+    [hasMore, loadingMore, loadMore, sessionTotal]
+  );
   const {
     sections: userSections,
     actions: sectionActions,
@@ -326,12 +348,6 @@ export function ChatShell({
     error: sectionError,
     dismissError: dismissSectionError,
   } = useSidebarSections();
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [placeMemory] = useState(readPlaceMemory);
-  const [launch] = useState(() =>
-    resolveLaunch({ preference: launchPlace(), memory: placeMemory, lastSession: readLastSession() })
-  );
-  const remembered = launch.session;
   const [place, setPlace] = useState<Place>(launch.place);
   // The session mode the list filters by and New starts. A session place sets it; Studio leaves
   // it alone, so the conversation open underneath stays open for the return trip.
@@ -900,7 +916,16 @@ export function ChatShell({
     modelSupportsTools(orchestrationSession.model, findModelOption(catalog.models, orchestrationSession.model));
   const delegating = orchestrationSession?.orchestrate === true;
   const hasAgents = spawnedStates.length > 0;
-  const agentsSurfaceAvailable = hasAgents || (delegating && orchestrateCapable);
+  const hasArchivedAgents = useMemo(
+    () => activeId !== null && archivedAgentsOf(sessions, activeId).length > 0,
+    [sessions, activeId]
+  );
+  const agentsSurfaceAvailable = isAgentsSurfaceAvailable({
+    session: orchestrationSession,
+    hasAgents,
+    hasArchivedAgents,
+    orchestrateCapable,
+  });
   const orchestrating = orchestratorPrefs.surface === 'orchestrate' && agentsSurfaceAvailable;
   // Presenter mode redacts the stage (orchestrator/presenter.ts). Around it, the header names the root as
   // "Orchestrator" without its project line, and the trays above the composer, which quote agents' questions
@@ -1908,6 +1933,8 @@ export function ChatShell({
             sessions={sessions}
             mode={mode}
             loading={loading}
+            paging={sessionPaging}
+            searchSessions={searchSessions}
             activeId={selectedRosterId ?? activeId}
             statuses={statuses}
             prSummaries={prSummaries}
@@ -2046,7 +2073,7 @@ export function ChatShell({
                 </Box>
                 <OrchestrateToggle
                   states={spawnedStates}
-                  enabled={delegating && orchestrateCapable}
+                  enabled={agentsSurfaceAvailable}
                   parentNeedsYou={!!activeId && statuses.get(activeId) === 'needs-action'}
                   surface={orchestrating ? 'orchestrate' : 'chat'}
                   onSurfaceChange={orchestratorPrefs.setSurface}

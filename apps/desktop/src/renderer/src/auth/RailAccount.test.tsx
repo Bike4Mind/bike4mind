@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthState } from '@shared/auth';
 import { initialUpdateState, reduceUpdate, type UpdateStatus } from '@shared/update';
 import type { AppUpdateController } from '../chat/useAppUpdate';
@@ -87,8 +87,9 @@ function mount(node: React.ReactNode, bridge: Record<string, unknown> = {}) {
 
 /** A credits bridge: `balance` left, and `creditsSpent` burned yesterday, on a monthly plan. */
 function creditsBridge(balance: number, creditsSpent: number) {
-  const day = new Date();
-  day.setHours(0, 0, 0, 0);
+  // The burn rate divides by the time since the bar began, so the bar starts exactly a day ago:
+  // anchored to midnight, the runway would depend on the hour the test runs.
+  const barStartsAt = new Date(Date.now() - 86_400_000).toISOString();
   return {
     account: {
       getSelection: pending,
@@ -107,7 +108,7 @@ function creditsBridge(balance: number, creditsSpent: number) {
       getHistory: async () => ({
         ok: true,
         usage: {
-          bars: [{ startsAt: new Date(day.getTime() - 86_400_000).toISOString(), creditsSpent, requests: 1 }],
+          bars: [{ startsAt: barStartsAt, creditsSpent, requests: 1 }],
         },
       }),
     },
@@ -314,7 +315,18 @@ describe('the next step the update label takes', () => {
   );
 });
 
+const PINNED_NOW = new Date('2026-06-15T12:00:00Z');
+
 describe('the credits orb above the rail avatar', () => {
+  // The runway math reads the clock, so pin it: the outcome must not depend on when the suite runs.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(PINNED_NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   async function mountWith(balance: number, creditsSpent: number) {
     mount(
       <SignedInRailAccount state={signedIn} update={controllerIn('idle')} context={contextWith()} />,

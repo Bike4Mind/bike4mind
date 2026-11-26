@@ -1728,6 +1728,9 @@ importers:
       '@aws-sdk/client-bedrock-runtime':
         specifier: ^3.1150.0
         version: 3.1151.0
+      '@aws-sdk/client-kms':
+        specifier: ^3.1150.0
+        version: 3.1151.0
       '@aws-sdk/client-lambda':
         specifier: ^3.1150.0
         version: 3.1151.0
@@ -2357,6 +2360,9 @@ importers:
       '@aws-sdk/client-sqs':
         specifier: ^3.1150.0
         version: 3.1151.0
+      '@aws-sdk/client-sts':
+        specifier: ^3.1150.0
+        version: 3.1151.0
       '@aws-sdk/client-wafv2':
         specifier: ^3.1150.0
         version: 3.1151.0
@@ -2610,6 +2616,10 @@ packages:
 
   '@aws-sdk/client-iam@3.1151.0':
     resolution: {integrity: sha512-siA6oRLg3acwc/qUFE/Yw3fH5m975vMbjsQ0Dq9LPxtF9Gr+yZAhKjczk111zKTdZz4+v0iwnKVePlxCx8rKIw==}
+    engines: {node: '>=20.0.0'}
+
+  '@aws-sdk/client-kms@3.1151.0':
+    resolution: {integrity: sha512-08fLhoL25hIt4cRNWebRVusJfQGaNEUln/uXUUGB7z/ajpcWbqW2imsQu7jhqFIQnXl5vXQC9lyzpVOMZSbjYg==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/client-lambda@3.1151.0':
@@ -13444,6 +13454,17 @@ snapshots:
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
+  '@aws-sdk/client-kms@3.1151.0':
+    dependencies:
+      '@aws-sdk/core': 3.978.5
+      '@aws-sdk/credential-provider-node': 3.972.86
+      '@aws-sdk/types': 3.975.0
+      '@smithy/core': 3.36.1
+      '@smithy/fetch-http-handler': 5.8.0
+      '@smithy/node-http-handler': 4.12.1
+      '@smithy/types': 4.19.0
+      tslib: 2.8.1
+
   '@aws-sdk/client-lambda@3.1151.0':
     dependencies:
       '@aws-sdk/core': 3.978.3
@@ -13530,8 +13551,8 @@ snapshots:
     dependencies:
       '@aws-sdk/core': 3.978.5
       '@aws-sdk/credential-provider-node': 3.972.86
-      '@aws-sdk/signature-v4-multi-region': 3.996.48
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/signature-v4-multi-region': 3.996.49
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/fetch-http-handler': 5.8.0
       '@smithy/node-http-handler': 4.12.1
@@ -13594,7 +13615,7 @@ snapshots:
   '@aws-sdk/credential-provider-env@3.972.74':
     dependencies:
       '@aws-sdk/core': 3.978.5
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
@@ -13611,7 +13632,7 @@ snapshots:
   '@aws-sdk/credential-provider-http@3.972.76':
     dependencies:
       '@aws-sdk/core': 3.978.5
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/fetch-http-handler': 5.8.0
       '@smithy/node-http-handler': 4.12.1
@@ -13639,7 +13660,7 @@ snapshots:
       '@aws-sdk/credential-provider-sso': 3.973.18
       '@aws-sdk/credential-provider-web-identity': 3.972.80
       '@aws-sdk/nested-clients': 3.997.48
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/credential-provider-imds': 4.5.2
       '@smithy/types': 4.19.0
@@ -13698,7 +13719,7 @@ snapshots:
   '@aws-sdk/credential-provider-process@3.972.74':
     dependencies:
       '@aws-sdk/core': 3.978.5
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
@@ -13717,7 +13738,7 @@ snapshots:
       '@aws-sdk/core': 3.978.5
       '@aws-sdk/nested-clients': 3.997.48
       '@aws-sdk/token-providers': 3.1150.0
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
@@ -13737,7 +13758,7 @@ snapshots:
     dependencies:
       '@aws-sdk/core': 3.978.5
       '@aws-sdk/nested-clients': 3.997.48
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
@@ -13789,8 +13810,8 @@ snapshots:
 
   '@aws-sdk/middleware-sdk-ec2@3.972.62':
     dependencies:
-      '@aws-sdk/core': 3.978.3
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/core': 3.978.5
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/signature-v4': 5.7.4
       '@smithy/types': 4.19.0
@@ -13825,7 +13846,7 @@ snapshots:
   '@aws-sdk/nested-clients@3.997.48':
     dependencies:
       '@aws-sdk/core': 3.978.5
-      '@aws-sdk/signature-v4-multi-region': 3.996.48
+      '@aws-sdk/signature-v4-multi-region': 3.996.49
       '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/fetch-http-handler': 5.8.0
@@ -13877,7 +13898,6 @@ snapshots:
       '@smithy/signature-v4': 5.7.4
       '@smithy/types': 4.19.0
       tslib: 2.8.1
-    optional: true
 
   '@aws-sdk/token-providers@3.1150.0':
     dependencies:

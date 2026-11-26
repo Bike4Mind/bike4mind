@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   modals: vi.fn(),
   toggle: vi.fn(),
   remove: vi.fn(),
+  removeAsync: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
   deployment: vi.fn(),
@@ -22,7 +23,7 @@ const idleMutation = (mutate = vi.fn()) => ({ mutate, mutateAsync: vi.fn(), isPe
 
 vi.mock('@client/app/hooks/data/whatsNewModals', () => ({
   useGetWhatsNewModals: mocks.modals,
-  useDeleteWhatsNewModal: () => idleMutation(mocks.remove),
+  useDeleteWhatsNewModal: () => ({ ...idleMutation(mocks.remove), mutateAsync: mocks.removeAsync }),
   useToggleWhatsNewModal: () => ({ ...idleMutation(mocks.toggle), ...mocks.toggleState }),
   useCreateWhatsNewModal: () => idleMutation(mocks.create),
   useUpdateWhatsNewModal: () => idleMutation(mocks.update),
@@ -69,6 +70,7 @@ describe('AdminWhatsNewModalsTab', () => {
     mocks.modals.mockReset();
     mocks.toggle.mockReset();
     mocks.remove.mockReset();
+    mocks.removeAsync.mockReset();
     mocks.create.mockReset();
     mocks.update.mockReset();
     mocks.toggleState = {};
@@ -123,16 +125,51 @@ describe('AdminWhatsNewModalsTab', () => {
     expect(screen.getByTestId('whats-new-row-actions-b')).toBeEnabled();
   });
 
-  it('asks before deleting a modal from its row menu', async () => {
+  const openDelete = async (id: string) => {
+    await userEvent.click(screen.getByTestId(`whats-new-row-actions-${id}`));
+    await userEvent.click(screen.getByTestId(`whats-new-row-delete-${id}`));
+    await userEvent.click(screen.getByTestId('whats-new-delete-confirm-dialog-reason-input-preset-0'));
+  };
+
+  it('deletes a modal only after its title is typed', async () => {
     mocks.modals.mockReturnValue(listResult([modal('a')]));
+    mocks.removeAsync.mockResolvedValue(undefined);
     renderTab();
 
-    await userEvent.click(screen.getByTestId('whats-new-row-actions-a'));
-    await userEvent.click(screen.getByTestId('whats-new-row-delete-a'));
-    expect(mocks.remove).not.toHaveBeenCalled();
+    await openDelete('a');
+    const confirm = screen.getByTestId('whats-new-delete-confirm-btn');
+    expect(confirm).toBeDisabled();
+    await userEvent.type(screen.getByTestId('whats-new-delete-confirm-dialog-typed-input'), 'Modal');
+    expect(confirm).toBeDisabled();
+    expect(mocks.removeAsync).not.toHaveBeenCalled();
 
+    await userEvent.type(screen.getByTestId('whats-new-delete-confirm-dialog-typed-input'), ' a');
+    await userEvent.click(confirm);
+    expect(mocks.removeAsync).toHaveBeenCalledWith('a');
+    expect(screen.queryByTestId('whats-new-delete-confirm-dialog')).not.toBeInTheDocument();
+  });
+
+  it('asks for the word delete when the modal has no title', async () => {
+    mocks.modals.mockReturnValue(listResult([modal('a', { title: '  ' })]));
+    mocks.removeAsync.mockResolvedValue(undefined);
+    renderTab();
+
+    await openDelete('a');
+    await userEvent.type(screen.getByTestId('whats-new-delete-confirm-dialog-typed-input'), 'delete');
     await userEvent.click(screen.getByTestId('whats-new-delete-confirm-btn'));
-    expect(mocks.remove).toHaveBeenCalledWith('a');
+    expect(mocks.removeAsync).toHaveBeenCalledWith('a');
+  });
+
+  it('keeps the delete dialog open when the delete fails', async () => {
+    mocks.modals.mockReturnValue(listResult([modal('a')]));
+    mocks.removeAsync.mockRejectedValue(new Error('boom'));
+    renderTab();
+
+    await openDelete('a');
+    await userEvent.type(screen.getByTestId('whats-new-delete-confirm-dialog-typed-input'), 'Modal a');
+    await userEvent.click(screen.getByTestId('whats-new-delete-confirm-btn'));
+    expect(mocks.removeAsync).toHaveBeenCalledWith('a');
+    expect(screen.getByTestId('whats-new-delete-confirm-dialog')).toBeInTheDocument();
   });
 
   it('offers to create the first modal when there are none', async () => {

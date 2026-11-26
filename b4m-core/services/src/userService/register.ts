@@ -29,7 +29,7 @@ import {
 } from '@bike4mind/common';
 import { type FreeCreditAdapters, releasePendingFreeCredits } from './freeCredits';
 import { shouldBlockDisposableEmail } from './disposableEmail';
-import { OAuthSourceClientLookup, resolveOAuthSourceTag } from './sourceTag';
+import { OAuthSourceClientLookup, oauthSourceTagFor, resolveActiveOAuthClientId } from './sourceTag';
 import { assertUsernameNotReserved } from './reservedUsername';
 import { callerTransactionSession } from './callerTransaction';
 import {
@@ -325,10 +325,12 @@ export const registerUser = async (
     tags = [...new Set([...tags, PENDING_FREE_CREDITS_TAG])];
   }
 
-  // Attribution must never block a signup, so a failed lookup only drops the tag.
+  // Attribution must never block a signup, so a failed lookup only drops the tag and signupClientId.
+  let signupClientId: string | null = null;
   if (sourceClientId && db.oauthClients) {
     try {
-      const sourceTag = await resolveOAuthSourceTag(sourceClientId, db.oauthClients);
+      signupClientId = await resolveActiveOAuthClientId(sourceClientId, db.oauthClients);
+      const sourceTag = signupClientId ? oauthSourceTagFor(signupClientId) : null;
       if (sourceTag) tags = [...new Set([...tags, sourceTag])];
     } catch (error) {
       logger.warn(`Could not resolve OAuth source tag for client ${sourceClientId}: ${error}`);
@@ -357,7 +359,7 @@ export const registerUser = async (
     // This registration path is OTC-only (the only caller, registerViaOTC, always
     // passes password: ''), so the account is passwordless by construction.
     hasUsablePassword: false,
-    tags: tags ?? null,
+    tags,
     systemFiles: [],
     mementos: [],
 
@@ -421,6 +423,7 @@ export const registerUser = async (
     ...(isReferralInvite && invite
       ? { signupInvite: { source: 'referral' as const, inviteId: invite.id, at: new Date() } }
       : {}),
+    ...(signupClientId ? { signupClientId } : {}),
     numReferralsAvailable,
     stripeCustomerId: null,
     organizationId: null,

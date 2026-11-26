@@ -51,6 +51,7 @@ import {
   setCallableFunctionExamples,
   summarizeCallableFunctionCalls,
 } from './registry';
+import type { CallableFunctionDataStorage } from './dataPins';
 import { promoteCallableFunction } from './promote';
 import {
   callableFunctionOffer,
@@ -592,6 +593,48 @@ describe('a recipient review', () => {
     expect(shared).toMatchObject({ status: 'reviewed', pin: { version: 2, seq: 2 } });
   });
 
+  it('drafts the function on a pin change, then keeps the review of an unchanged interface and names the new pins', async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    const pinOf = (name: string, digit: string) => ({
+      name,
+      sha256: digit.repeat(64),
+      bytes: 12,
+      sourceFileId: oid(),
+      pinnedAt: new Date(),
+    });
+    const setPins = async (pins: ReturnType<typeof pinOf>[]) => {
+      const current = await CallableFunction.findById(id).lean();
+      return callableFunctionRepository.setDataPins(id, OWNER_KEY, { updatedAt: current!.updatedAt }, pins);
+    };
+    const promoteAgain = async () => {
+      const current = await CallableFunction.findById(id).lean();
+      await CallableFunction.updateOne(
+        { _id: id },
+        { $set: { state: 'live', 'pin.seq': (current!.pin.seq ?? 0) + 1 } }
+      );
+    };
+
+    await setPins([pinOf('points.csv', 'c')]);
+    await promoteAgain();
+    const [first] = await listSharedCallableFunctions(PERSON);
+    expect(first).toMatchObject({ status: 'pending_review', dataPins: ['points.csv'] });
+    expect(JSON.stringify(first)).not.toMatch(/c{64}/);
+    await reviewSharedCallableFunction(PERSON, id, { reviewHash: first!.reviewHash, approval: 'default' });
+
+    // The review hash reads only the interface, as for the code; a pin change refuses everyone until the next promotion.
+    expect(await setPins([pinOf('points.csv', 'c'), pinOf('loads.csv', 'd')])).toMatchObject({ state: 'draft' });
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'refused', reason: 'not_found' });
+    expect(await listSharedCallableFunctions(PERSON)).toEqual([]);
+
+    await promoteAgain();
+    const [after] = await listSharedCallableFunctions(PERSON);
+    expect(after).toMatchObject({
+      status: 'reviewed',
+      reviewHash: first!.reviewHash,
+      dataPins: ['points.csv', 'loads.csv'],
+    });
+  });
+
   it.each<[string, FunctionContract]>([
     ['description', { ...CONTRACT, description: 'Midspan deflection, in meters.' }],
     ['name', { ...CONTRACT, name: 'beam_deflection' }],
@@ -695,7 +738,9 @@ describe('a recipient review', () => {
       /duplicate key/
     );
 
-    await deleteCallableFunction(OWNER, id);
+    await deleteCallableFunction(OWNER, id, {
+      deletePrefix: vi.fn(async () => 0),
+    } as unknown as CallableFunctionDataStorage);
     expect(await CallableFunctionReview.countDocuments({})).toBe(0);
   });
 

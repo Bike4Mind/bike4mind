@@ -13,6 +13,7 @@ import {
   type ModelInfo,
   type PlatformUnresolvedReason,
   type PlatformAttemptDiagnostics,
+  type PlatformRecoveryResult,
   type UsageEventStatus,
 } from '@bike4mind/common';
 import { priceCompletionUsage } from './priceCompletionUsage';
@@ -149,22 +150,54 @@ export class PlatformAccounting {
     limit: number;
     executionId?: string;
     afterProviderCallId?: string;
-  }): Promise<{ recorded: number; unresolved: number; nextCursor?: string }> {
+  }): Promise<PlatformRecoveryResult> {
+    if (
+      !Number.isInteger(params.limit) ||
+      params.limit < 1 ||
+      params.limit > 1000 ||
+      !Number.isFinite(params.now.getTime())
+    )
+      throw new Error('Invalid platform recovery page');
     const pending = await this.attempts.recoverable(params);
-    let recorded = 0;
-    let unresolved = 0;
+    if (pending.attempts.length > params.limit) throw new Error('Platform recovery page exceeds its limit');
+    const result: PlatformRecoveryResult = {
+      recorded: 0,
+      unresolved: 0,
+      failed: [],
+      ...(pending.nextCursor ? { nextCursor: pending.nextCursor } : {}),
+    };
     for (const attempt of pending.attempts) {
-      if (attempt.usage) {
-        await this.settle(attempt.providerCallId, attempt.usage);
-        recorded++;
-      } else {
-        const existing = await this.usage.findPlatformCall(attempt.providerCallId);
-        if (existing) throw new PlatformAccountingConflictError();
-        await this.attempts.markUnresolved(attempt.providerCallId, 'expired_intent', params.now);
-        unresolved++;
+      let phase: 'lookup' | 'persistence' | 'recovery' = 'recovery';
+      try {
+        if (attempt.usage) {
+          phase = 'persistence';
+          await this.settle(attempt.providerCallId, attempt.usage);
+          result.recorded++;
+        } else {
+          phase = 'lookup';
+          const existing = await this.usage.findPlatformCall(attempt.providerCallId);
+          if (existing) throw new PlatformAccountingConflictError();
+          phase = 'persistence';
+          await this.attempts.markUnresolved(attempt.providerCallId, 'expired_intent', params.now);
+          const updated = await this.attempts.get(attempt.providerCallId);
+          if (updated?.state !== 'unresolved') throw new PlatformAccountingPendingError(attempt.providerCallId);
+          result.unresolved++;
+        }
+      } catch (error) {
+        result.failed.push({
+          providerCallId: attempt.providerCallId,
+          code:
+            error instanceof PlatformAccountingConflictError
+              ? 'conflict'
+              : phase === 'lookup'
+                ? 'lookup_failed'
+                : phase === 'persistence'
+                  ? 'persistence_pending'
+                  : 'recovery_failed',
+        });
       }
     }
-    return { recorded, unresolved, ...(pending.nextCursor ? { nextCursor: pending.nextCursor } : {}) };
+    return result;
   }
 
   async diagnostics(params: {

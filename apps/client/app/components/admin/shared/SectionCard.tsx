@@ -37,7 +37,11 @@ export function SectionCard({
         alignItems="center"
         sx={{ px: 2, minHeight: 50, py: 1, borderBottom: '1px solid', borderColor: 'admin.border' }}
       >
-        <Typography level="title-md" component="h3" sx={{ color: 'admin.ink', mr: help ? 0 : 'auto' }}>
+        <Typography
+          level="title-md"
+          component="h3"
+          sx={{ color: 'admin.ink', mr: help ? 0 : 'auto', minWidth: 0, overflowWrap: 'anywhere' }}
+        >
           {title}
         </Typography>
         {/* The guide caps a heading's help icon at 16 px. */}

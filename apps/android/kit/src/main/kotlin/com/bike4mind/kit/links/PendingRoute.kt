@@ -28,6 +28,7 @@ class PendingRoute {
         Route.Sessions -> SESSIONS
         is Route.Session -> SESSION + pending.sessionId
         is Route.Brief -> BRIEF + pending.briefId
+        is Route.Compose -> COMPOSE + pending.target.name + ":" + pending.draft
         is Route.Web -> null
     }
 
@@ -38,6 +39,7 @@ class PendingRoute {
         Route.Sessions -> true
         is Route.Session -> Route.isValidId(route.sessionId)
         is Route.Brief -> Route.isValidId(route.briefId)
+        is Route.Compose -> true
         is Route.Web -> false
     }
 
@@ -45,12 +47,21 @@ class PendingRoute {
         saved == SESSIONS -> Route.Sessions
         saved.startsWith(SESSION) -> Route.Session(saved.removePrefix(SESSION))
         saved.startsWith(BRIEF) -> Route.Brief(saved.removePrefix(BRIEF))
+        saved.startsWith(COMPOSE) -> decodeCompose(saved.removePrefix(COMPOSE))
         else -> null
+    }
+
+    /** The draft follows the first ':' and may itself hold any character. */
+    private fun decodeCompose(saved: String): Route? {
+        val target = saved.substringBefore(':', missingDelimiterValue = "")
+        val draft = saved.substringAfter(':', missingDelimiterValue = "")
+        return Route.ComposeTarget.entries.firstOrNull { it.name == target }?.let { Route.Compose(it, draft) }
     }
 
     private companion object {
         const val SESSIONS = "sessions"
         const val SESSION = "session:"
         const val BRIEF = "brief:"
+        const val COMPOSE = "compose:"
     }
 }

@@ -36,7 +36,16 @@ export type PyodideWorkerMessage =
   | { type: 'execute'; code: string; packages: string[]; timeoutMs: number }
   // Loads the code as a module and reads FUNCTION; paramsJson null describes it without calling run.
   // The worker echoes `nonce` on its call-result, which guest code never sees.
-  | { type: 'call'; code: string; packages: string[]; paramsJson: string | null; timeoutMs: number; nonce: string }
+  // `files` are a saved tool's pinned data, written read-only under /data, which every call starts empty.
+  | {
+      type: 'call';
+      code: string;
+      packages: string[];
+      paramsJson: string | null;
+      timeoutMs: number;
+      nonce: string;
+      files?: { name: string; bytes: ArrayBuffer }[];
+    }
   | { type: 'cancel' };
 
 /** Messages sent from worker to main thread */

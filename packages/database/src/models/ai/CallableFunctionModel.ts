@@ -1,5 +1,7 @@
 import {
   CALLABLE_FUNCTION_CREATE_REFUSED_FIELDS,
+  CALLABLE_FUNCTION_DATA_LIMITS,
+  CALLABLE_FUNCTION_DATA_PIN_NAME_PATTERN,
   CALLABLE_FUNCTION_EXAMPLE_LIMITS,
   CALLABLE_FUNCTION_GRANT_LIMITS,
   CALLABLE_FUNCTION_LIMITS,
@@ -21,6 +23,7 @@ import {
   type CallableFunctionOwner,
   type CallableFunctionPromote,
   type CallableFunctionRepin,
+  type ICallableFunctionDataPin,
   type ICallableFunctionDocument,
   type ICallableFunctionGrants,
   type ICallableFunctionOfferable,
@@ -74,6 +77,28 @@ const CallableFunctionPinSchema = new Schema(
         },
         { _id: false }
       ),
+    },
+    dataPins: {
+      type: [
+        new Schema(
+          {
+            name: { type: String, required: true, match: CALLABLE_FUNCTION_DATA_PIN_NAME_PATTERN },
+            sha256: { type: String, required: true, match: /^[0-9a-f]{64}$/ },
+            bytes: { type: Number, required: true, min: 0 },
+            sourceFileId: { type: String, required: true },
+            pinnedAt: { type: Date, required: true },
+          },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+      validate: {
+        validator: (pins?: { name: string }[]) =>
+          !pins ||
+          (pins.length <= CALLABLE_FUNCTION_DATA_LIMITS.maxPins &&
+            new Set(pins.map(pin => pin.name)).size === pins.length),
+        message: `At most ${CALLABLE_FUNCTION_DATA_LIMITS.maxPins} data files, each under its own name`,
+      },
     },
   },
   { _id: false }
@@ -359,12 +384,23 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
     update: CallableFunctionRepin
   ): Promise<ICallableFunctionDocument | null> {
     if (!mongoose.isObjectIdOrHexString(id)) return null;
-    // The new pin has not passed a server run, so the function is a draft again until it is promoted.
+    // The new pin has not passed a server run, so the function is a draft again until it is promoted. Field by
+    // field, so the data files stay pinned.
+    const pin = newPin(update.pin);
     const result = await this.model.findOneAndUpdate(
       { _id: id, ...ownerFilter(owner), 'pin.version': expectedVersion },
       {
-        $set: { pin: newPin(update.pin), contract: update.contract, description: update.description, state: 'draft' },
-        $unset: { trustLabel: 1, lastServerRun: 1, caseResults: 1 },
+        $set: {
+          'pin.artifactId': pin.artifactId,
+          'pin.version': pin.version,
+          'pin.contentHash': pin.contentHash,
+          'pin.source': pin.source,
+          'pin.pinnedAt': pin.pinnedAt,
+          contract: update.contract,
+          description: update.description,
+          state: 'draft',
+        },
+        $unset: { 'pin.seq': 1, 'pin.runtime': 1, trustLabel: 1, lastServerRun: 1, caseResults: 1 },
       },
       { new: true, runValidators: true }
     );
@@ -477,6 +513,24 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
       // shares past the most recent are not listed but stay callable.
       .limit(CALLABLE_FUNCTION_LIMITS.maxPerOwner);
     return docs.map(doc => doc.toObject() as ICallableFunctionSharedSource);
+  }
+
+  async setDataPins(
+    id: string,
+    owner: CallableFunctionOwner,
+    expected: { updatedAt: Date },
+    dataPins: ICallableFunctionDataPin[]
+  ): Promise<ICallableFunctionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = await this.model.findOneAndUpdate(
+      { _id: id, ...ownerFilter(owner), updatedAt: expected.updatedAt },
+      {
+        $set: { 'pin.dataPins': dataPins, state: 'draft' },
+        $unset: { 'pin.seq': 1, 'pin.runtime': 1, trustLabel: 1, lastServerRun: 1, caseResults: 1 },
+      },
+      { new: true, runValidators: true }
+    );
+    return result?.toJSON() ?? null;
   }
 
   async deleteForOwner(id: string, owner: CallableFunctionOwner): Promise<boolean> {

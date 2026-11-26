@@ -9,6 +9,7 @@ export default defineConfig({
       : { exclude: [...configDefaults.exclude, '**/*.repo.test.ts'] }),
     // Download MongoDB binary once before all tests to prevent race conditions
     globalSetup: './vitest.setup.ts',
+    setupFiles: ['./src/__test__/setupKeyring.ts'],
     // Increase timeout to allow for MongoDB binary download and operations
     hookTimeout: 60000,
     // Most suites here boot a real mongod (createMongoServer/createMongoReplSet/setupMongoTest), so
