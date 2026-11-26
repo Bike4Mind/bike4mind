@@ -4,11 +4,13 @@ import {
   TERMINAL_GENERATION_JOB_STATES,
   VIDEO_MODEL_CATALOG,
   getImageModelCatalogEntry,
+  selectShotReferences,
   validateImageRequest,
   type AspectRatio,
   type GenerationJobState,
   type ImageJobInput,
   type MusicModelId,
+  type StudioCharacter,
   type VideoModelCapabilities,
   type VideoModelId,
 } from '@bike4mind/common';
@@ -20,7 +22,9 @@ import type { ProductionJobView, ProductionToolConfig } from './config';
 
 type Context = Omit<ToolContext, 'config'>;
 
-export type Submitted = { ok: true; jobIds: string[] } | { ok: false; message: string; notReady?: true };
+export type Submitted =
+  | { ok: true; jobIds: string[]; model?: string; charactersDropped?: string[] }
+  | { ok: false; message: string; notReady?: true };
 
 const DEFAULT_WAIT_TIMEOUT_MS = 150_000;
 const DEFAULT_POLL_INTERVAL_MS = 3_000;
@@ -87,6 +91,13 @@ export function buildShotImagePrompt(prompt: string, brandColors: readonly strin
   return clip(parts.join(' '));
 }
 
+/** Names the characters whose images were passed, so the model ties each reference to a person. */
+export function characterPromptLine(characters: readonly Pick<StudioCharacter, 'name'>[]): string {
+  if (characters.length === 0) return '';
+  const names = characters.map(character => character.name).join(', ');
+  return `Feature ${names} from the reference images exactly as they appear: same face, hair, build and outfit.`;
+}
+
 /** A product packshot drawn from the brief alone, for a production that has no product image to reference. */
 export function buildPackshotPrompt(summary: string): string {
   return clip(
@@ -123,23 +134,33 @@ async function untilInputReady<R>(
   return result;
 }
 
-/** The first draft the model accepts; an aspect ratio it cannot make is dropped (cover-fit crops it later). */
+/**
+ * The first draft the model accepts; an aspect ratio it cannot make is dropped (cover-fit crops it later). The
+ * references are cut to the model's cap by selectShotReferences, which also reports the characters that lost a slot.
+ */
 function imageRequestFor(
   model: string,
   prompt: string,
   references: readonly string[],
+  characters: readonly StudioCharacter[],
   aspectRatio: string
-): ImageJobRequestDraft | null {
+): { draft: ImageJobRequestDraft; charactersDropped: StudioCharacter[] } | null {
   const parsed = ImageJobRequestSchema.shape.model.safeParse(model);
   if (!parsed.success) return null;
   const entry = getImageModelCatalogEntry(parsed.data);
   const maxReferences = entry.modes.generate?.inputs.reference?.max ?? 0;
-  const inputs: ImageJobInput[] = references
-    .slice(0, maxReferences)
-    .map(fileId => ({ role: 'reference', fileId: fileId.toLowerCase() }));
-  const base = { model, mode: 'generate' as const, prompt, ...(inputs.length > 0 && { inputs }) };
+  const selection = selectShotReferences({ productFileIds: references, characters }, maxReferences);
+  const inputs: ImageJobInput[] = selection.fileIds.map(fileId => ({
+    role: 'reference',
+    fileId: fileId.toLowerCase(),
+  }));
+  // Leading with the names keeps them when a long prompt is cut to the cap.
+  const line = characterPromptLine(selection.characters);
+  const fullPrompt = line ? clip(`${line} ${prompt}`) : prompt;
+  const base = { model, mode: 'generate' as const, prompt: fullPrompt, ...(inputs.length > 0 && { inputs }) };
   for (const draft of [{ ...base, aspectRatio }, base]) {
-    if (validateImageRequest({ ...draft, count: 1 }, entry).ok) return draft;
+    if (validateImageRequest({ ...draft, count: 1 }, entry).ok)
+      return { draft, charactersDropped: selection.droppedCharacters };
   }
   return null;
 }
@@ -157,6 +178,8 @@ export async function submitShotImages(
   shot: {
     prompt: string;
     references: readonly string[];
+    /** The shot's featured characters, in order; they share the model's reference cap with `references`. */
+    characters?: readonly StudioCharacter[];
     /** A reference is still in its upload safety check, so a refusal of it is waited out instead of reported. */
     referencesChecking?: boolean;
     aspectRatio: string;
@@ -168,8 +191,9 @@ export async function submitShotImages(
   if (!image) return { ok: false, message: 'Image generation is not available for this run.' };
   let lastRefusal = 'No usable image model takes reference images.';
   for (const model of config.imageModels) {
-    const request = imageRequestFor(model, shot.prompt, shot.references, shot.aspectRatio);
-    if (!request) continue;
+    const built = imageRequestFor(model, shot.prompt, shot.references, shot.characters ?? [], shot.aspectRatio);
+    if (!built) continue;
+    const request = built.draft;
     const target = 'shotId' in shot ? { shotId: shot.shotId } : { purpose: shot.purpose };
     const createAll = async () => {
       let created: Awaited<ReturnType<typeof image.createJobs>> | undefined;
@@ -198,7 +222,7 @@ export async function submitShotImages(
       const created = shot.referencesChecking ? await untilInputReady(context, config, createAll) : await createAll();
       if (created === 'dead') return { ok: false, message: DEAD_REPLAY_MESSAGE };
       if (shot.referencesChecking && isInputNotReady(created)) {
-        return { ok: false, notReady: true, message: 'the product reference is not ready yet (its safety check)' };
+        return { ok: false, notReady: true, message: 'a reference image is not ready yet (its safety check)' };
       }
       result = created;
     } catch (error) {
@@ -208,7 +232,13 @@ export async function submitShotImages(
     if (!result) continue;
     if (result.ok) {
       await context.statusUpdate({ generationJobs: result.jobs.map(job => ({ id: job.id, kind: 'image' as const })) });
-      return { ok: true, jobIds: result.jobs.map(job => job.id) };
+      const dropped = built.charactersDropped.map(character => character.name);
+      return {
+        ok: true,
+        jobIds: result.jobs.map(job => job.id),
+        model,
+        ...(dropped.length > 0 && { charactersDropped: dropped }),
+      };
     }
     if (!MODEL_REFUSALS.has(result.code)) return { ok: false, message: `${result.code}: ${result.message}` };
     lastRefusal = `${result.code}: ${result.message}`;
