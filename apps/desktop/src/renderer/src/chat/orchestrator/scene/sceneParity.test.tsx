@@ -638,6 +638,22 @@ describe.each(CASES)('the $view scene with $skin', ({ view, summary }) => {
     expect(at(sprite('s3'))).toEqual(pct(workSlots[0]));
   });
 
+  it('keeps each sprite at its place in the DOM when its agent comes to need you and stops', async () => {
+    // A moved node loses its previous computed style, so its walk to the new seat would not animate.
+    const [a, b, c] = many('o', 'working', 3);
+    const view = props([a, b, c]);
+    await render(view);
+    const before = sprites();
+    const unmoved = () => sprites().map((node, index) => node === before[index]);
+    expect(before.map(node => node.dataset.agentAvatar)).toEqual(['o0', 'o1', 'o2']);
+    // The roster lists needs-you first, so the agent that comes to need you moves to the front of the props.
+    await render({ ...view, agents: [{ ...b, state: 'needs-you' }, a, c] });
+    expect(sprite('o1').getAttribute('aria-label')).toMatch(/needs you/i);
+    expect(unmoved()).toEqual([true, true, true]);
+    await render({ ...view, agents: [a, { ...b, state: 'working' }, c] });
+    expect(unmoved()).toEqual([true, true, true]);
+  });
+
   it('shows each agent by a one-word name', async () => {
     const agents = ALL_STATES.map((state, index) => agentFixture(`a${index}`, state));
     const view = props(agents);

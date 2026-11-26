@@ -761,6 +761,12 @@ export function SceneStage({
     const placement = placements.get(agent.id);
     return placement?.kind === 'seat' ? [{ agent, placement }] : [];
   });
+  // Drawn in a fixed order, not the roster's (which puts needs-you first): React would move a sprite whose
+  // state changed, and a moved node drops its previous computed style, so it jumps to its seat instead of
+  // walking. Tab and screen-reader order follow; the dialogue and needs-you strip surface waiting agents.
+  const drawOrder = [...visible].sort((left, right) =>
+    left.agent.id < right.agent.id ? -1 : left.agent.id > right.agent.id ? 1 : 0
+  );
   const shortName = useCallback((agent: AgentView) => personas.get(agent.id)?.label ?? agent.title, [personas]);
   const stacks = new Map<string, { point: ScenePoint; stacked: StackedAgent[] }>();
   for (const agent of agents) {
@@ -954,7 +960,7 @@ export function SceneStage({
           onOpenPr={onOpenPr}
         />
         <SceneLight testId={`${testId}-light`} mood={mood} map={map} />
-        {visible.map(({ agent, placement }) => (
+        {drawOrder.map(({ agent, placement }) => (
           <Sprite
             key={agent.id}
             testId={testId}
