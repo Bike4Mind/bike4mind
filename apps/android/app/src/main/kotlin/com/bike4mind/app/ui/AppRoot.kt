@@ -70,9 +70,10 @@ fun AppRoot(
         restored = true
     }
 
-    // A sign-out made while offline is finished on the server once the app is back in front.
+    // A sign-out made while offline is finished on the server once the app is back in front, and again when a
+    // server switch brings in a graph whose pending revocations have not been tried yet.
     val scope = rememberCoroutineScope()
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+    fun retryPendingRevocations() {
         scope.launch {
             try {
                 graph.session.retryPendingRevocations()
@@ -83,6 +84,8 @@ fun AppRoot(
             }
         }
     }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { retryPendingRevocations() }
+    LaunchedEffect(graph) { retryPendingRevocations() }
 
     // A session that ends (a refresh refused, a sign-out elsewhere) drops what belonged to the account. Checked only
     // once restore has settled, so a signed-in cold start keeps the gallery's stale-first cache.
