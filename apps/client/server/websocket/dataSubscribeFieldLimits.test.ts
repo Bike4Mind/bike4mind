@@ -101,16 +101,6 @@ describe('resolveFieldLimits', () => {
     expect(findWithheldFilterPaths({ 'origin.channel': 'api' }, limits)).toEqual([]);
   });
 
-  it('excludes password/stripeCustomerId/resetPasswordToken/throttle/riskSignals for the users collection', () => {
-    expect(resolveFieldLimits('users', opts())).toMatchObject({
-      password: false,
-      stripeCustomerId: false,
-      resetPasswordToken: false,
-      throttle: false,
-      riskSignals: false,
-    });
-  });
-
   it('withholds every USER_SECRET_FIELDS entry the REST self-view drops, as itself or as its secret sub-paths', () => {
     const limits = resolveFieldLimits('users', opts()) ?? {};
     const rebuilt: readonly string[] = USER_SUBFIELD_REDACTED_FIELDS;
