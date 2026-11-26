@@ -52,12 +52,12 @@ describe('preview sleep wiring', () => {
   const source = readInfra('previewSleep.ts');
 
   it('creates every scheduled action inside the preview-only, non-dev block', () => {
-    const gate = source.indexOf('if (isPreviewStage && !$dev) {');
+    expect(source).toContain('const previewSleepEnabled = isPreviewStage && !$dev;');
+    const gate = source.indexOf('if (previewSleepEnabled) {');
     expect(gate).toBeGreaterThanOrEqual(0);
     const actions = [...source.matchAll(/new aws\.appautoscaling\.ScheduledAction\(/g)].map(m => m.index ?? -1);
     expect(actions).toHaveLength(2);
     for (const at of actions) expect(at).toBeGreaterThan(gate);
-    expect(source.trimEnd().endsWith('}')).toBe(true);
     expect(source.slice(0, gate)).not.toContain('ScheduledAction');
   });
 
@@ -65,6 +65,21 @@ describe('preview sleep wiring', () => {
     expect(source).toContain('service.nodes.autoScalingTarget');
     expect(source).toContain('minCapacity: PREVIEW_ASLEEP.min, maxCapacity: PREVIEW_ASLEEP.max');
     expect(source).toContain('minCapacity: awake.min, maxCapacity: awake.max');
+  });
+
+  it('gives the web Lambda grants and targets only on preview, scoped to the own targets', () => {
+    const web = source.slice(source.indexOf('export const previewSleepForWeb'));
+    expect(web).toMatch(/^export const previewSleepForWeb = previewSleepEnabled\n\s*\?/);
+    expect(web.trimEnd()).toMatch(/: \{ environment: \{\}, permissions: \[\] \};$/);
+    const register = web.slice(web.indexOf("'application-autoscaling:RegisterScalableTarget'"));
+    expect(register.slice(0, register.indexOf('\n          },'))).toContain(
+      'resources: targets.map(({ target }) => target.arn)'
+    );
+    const ecs = web.slice(web.indexOf("'ecs:UpdateService'"));
+    expect(ecs.slice(0, ecs.indexOf('\n          },'))).toContain('ecsServiceArn(target.resourceId)');
+    const webTs = readInfra('web.ts');
+    expect(webTs).toContain('...previewSleepForWeb.permissions,');
+    expect(webTs).toContain('...previewSleepForWeb.environment,');
   });
 
   it('is exported after both services it schedules', () => {
