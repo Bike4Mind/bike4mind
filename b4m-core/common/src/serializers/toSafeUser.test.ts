@@ -6,6 +6,7 @@ import {
   toSafeUsers,
   redactUserSecretsForSelf,
   USER_SECRET_FIELDS,
+  USER_SECRET_SUBFIELD_PATHS,
   USER_SUBFIELD_REDACTED_FIELDS,
 } from './toSafeUser';
 import {
@@ -531,6 +532,10 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
         lastUsedAt: new Date(),
         totpSecret: 'x',
         backupCodes: ['x'],
+        pendingBackupCodes: 'x',
+        failedAttempts: 1,
+        lastFailedAttempt: new Date(),
+        lockedUntil: new Date(),
         futureField: 'x',
       },
       allowed: ['totpEnabled', 'passkeyEnabled', 'setupAt', 'lastUsedAt'],
@@ -551,6 +556,8 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
         disconnectReason: null,
         accessToken: 'x',
         refreshToken: 'x',
+        expiresAt: new Date(),
+        pendingSelectionExpiresAt: new Date(),
         futureField: 'x',
       },
       allowed: ['siteName', 'resources', 'status', 'connectedAt', 'selectedResourceId', 'disconnectReason'],
@@ -571,6 +578,7 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
         disconnectReason: null,
         accessToken: 'x',
         botId: 'x',
+        owner: { type: 'user' },
         futureField: 'x',
       },
       allowed: [
@@ -647,6 +655,44 @@ describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () =
       expect(Object.keys(parsed[field] as Record<string, unknown>).sort()).toEqual([...allowed].sort());
     }
   );
+
+  // The same drops, expressed as dotted paths for the users WebSocket projection, which cannot rebuild an object.
+  it.each(CASES)(
+    'USER_SECRET_SUBFIELD_PATHS lists exactly the $field subfields the rebuild drops',
+    ({ field, input, allowed }) => {
+      const dropped = Object.keys(input)
+        .filter(key => key !== 'futureField' && !allowed.includes(key))
+        .map(key => `${field}.${key}`);
+      const listed = USER_SECRET_SUBFIELD_PATHS.filter(path => path.startsWith(`${field}.`));
+      expect([...listed].sort()).toEqual(dropped.sort());
+    }
+  );
+
+  it('USER_SECRET_SUBFIELD_PATHS lists exactly the authProviders subfields the per-element rebuild drops', () => {
+    const provider = {
+      id: 'p1',
+      strategy: 'okta',
+      accessToken: 'x',
+      refreshToken: 'x',
+      samlNameId: 'x',
+      samlSessionIndex: 'x',
+      samlIdentityProviderId: 'x',
+      oktaIdentityProviderId: 'x',
+      encrypted: true,
+    };
+    const out = redactUserSecretsForSelf({ authProviders: [provider] } as never)!;
+    const kept = Object.keys((out.authProviders as Array<Record<string, unknown>>)[0]);
+    const dropped = Object.keys(provider)
+      .filter(key => !kept.includes(key))
+      .map(key => `authProviders.${key}`);
+    const listed = USER_SECRET_SUBFIELD_PATHS.filter(path => path.startsWith('authProviders.'));
+    expect([...listed].sort()).toEqual(dropped.sort());
+  });
+
+  it('every USER_SECRET_SUBFIELD_PATHS entry sits under a USER_SUBFIELD_REDACTED_FIELDS object', () => {
+    const rebuilt: readonly string[] = USER_SUBFIELD_REDACTED_FIELDS;
+    for (const path of USER_SECRET_SUBFIELD_PATHS) expect(rebuilt).toContain(path.split('.')[0]);
+  });
 
   // authProviders rebuilds an array, not an object, so it needs its own shape checks rather than a CASES entry.
   // The redactor's per-element rebuild is checked here; the schema's own strip is checked in the next test.
