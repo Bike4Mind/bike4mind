@@ -18,6 +18,8 @@ export const CALLABLE_FUNCTION_CALL_OUTCOMES = [
   'memory',
   'output_too_large',
   'refused',
+  /** A pinned data file's bytes did not match its sha256, so the guest never ran. */
+  'data_mismatch',
 ] as const;
 export type CallableFunctionCallOutcome = (typeof CALLABLE_FUNCTION_CALL_OUTCOMES)[number];
 
@@ -71,6 +73,13 @@ export interface ICallableFunctionCall {
 
 export interface ICallableFunctionCallDocument extends ICallableFunctionCall, IMongoDocument {}
 
+export interface CallableFunctionStampData {
+  name: string;
+  mode: 'pinned';
+  sha256: string;
+  bytes: number;
+}
+
 /** What a call ran on. Room for output hashes beside `data` later; nothing here assumes every output is inline. */
 export interface CallableFunctionStamp {
   function_id: string;
@@ -82,7 +91,8 @@ export interface CallableFunctionStamp {
   input_hash: string;
   runtime: { kind: string; version: string; lock_hash: string | null };
   packages: { name: string; version: string }[];
-  data: never[];
+  /** One entry per data file the call could read, in pin order. */
+  data: CallableFunctionStampData[];
   uses: never[];
   /** Null unless the function is live. */
   trust_label: 'verified' | 'unverified' | null;

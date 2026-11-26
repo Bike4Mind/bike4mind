@@ -1,6 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import {
   S3Client,
+  CopyObjectCommand,
   PutObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
@@ -11,6 +12,7 @@ import {
   DeleteObjectsCommand,
   PutObjectCommandInput,
   ObjectCannedACL,
+  type S3ClientConfig,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { BaseStorage } from './BaseStorage';
@@ -40,7 +42,9 @@ export class S3Storage extends BaseStorage {
 
   constructor(
     private bucketName: string,
-    private region = process.env.AWS_REGION || 'us-east-2'
+    private region = process.env.AWS_REGION || 'us-east-2',
+    /** Credentials other than the process's own, such as an assumed role's; its signed links carry them. */
+    credentials?: S3ClientConfig['credentials']
   ) {
     super();
 
@@ -52,6 +56,7 @@ export class S3Storage extends BaseStorage {
 
     this.s3 = createS3Client({
       region: this.region,
+      ...(credentials && { credentials }),
       ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
       maxAttempts: 3,
       retryMode: 'standard',
@@ -132,6 +137,28 @@ export class S3Storage extends BaseStorage {
     } finally {
       content.destroy();
     }
+  }
+
+  /** Streams `content` of exactly `contentLength` bytes to storage without holding it in memory. */
+  async uploadStream(
+    content: Readable,
+    destination: string,
+    contentLength: number,
+    options?: Omit<PutObjectCommandInput, 'Bucket' | 'Key' | 'Body' | 'ContentLength'>
+  ): Promise<string> {
+    return this.put(content, destination, false, { ...options, ContentLength: contentLength });
+  }
+
+  /** Copies an object to another key in this bucket, server-side. */
+  async copy(source: string, destination: string): Promise<string> {
+    await this.s3.send(
+      new CopyObjectCommand({
+        Bucket: this.bucketName,
+        CopySource: `${this.bucketName}/${source.split('/').map(encodeURIComponent).join('/')}`,
+        Key: destination,
+      })
+    );
+    return destination;
   }
 
   private async put(

@@ -32,6 +32,7 @@ import { mcpHandler } from './mcp';
 import { appUrlForLambdaEnv, cdnUrlForLambdaEnv, router, routerDistributionId } from './router';
 import { searxngUrl } from './searxng';
 import { mailBodyEnvironment, mailBodyPutPermission } from './mailBodyOffload';
+import { callableFunctionDataForEraser } from './callableFunctionData';
 
 // Data Lake Taxonomy Analysis Queue - declared before the chunk/vectorize queues below
 // because both of those Lambdas now need to link it too (finalizeBatchIfComplete, which they
@@ -897,9 +898,11 @@ const accountErasureQueueSubscription = accountErasureQueue.subscribe(
         actions: ['cloudfront:CreateInvalidation'],
         resources: [router.nodes.cdn.apply(cdn => cdn.nodes.distribution.arn)],
       },
+      ...callableFunctionDataForEraser.permissions,
     ],
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
+      ...callableFunctionDataForEraser.environment,
     },
   },
   SINGLE_RECORD_BATCH

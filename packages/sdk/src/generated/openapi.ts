@@ -3258,7 +3258,15 @@ export interface components {
        * @enum {string}
        */
       outcome?:
-        'ok' | 'input_invalid' | 'output_invalid' | 'error' | 'timeout' | 'memory' | 'output_too_large' | 'refused';
+        | 'ok'
+        | 'input_invalid'
+        | 'output_invalid'
+        | 'error'
+        | 'timeout'
+        | 'memory'
+        | 'output_too_large'
+        | 'refused'
+        | 'data_mismatch';
       /** @description The outputs, checked against `output_schema`. */
       output?: {
         [key: string]: unknown;
@@ -16346,7 +16354,15 @@ export interface components {
        * @enum {string}
        */
       outcome:
-        'ok' | 'input_invalid' | 'output_invalid' | 'error' | 'timeout' | 'memory' | 'output_too_large' | 'refused';
+        | 'ok'
+        | 'input_invalid'
+        | 'output_invalid'
+        | 'error'
+        | 'timeout'
+        | 'memory'
+        | 'output_too_large'
+        | 'refused'
+        | 'data_mismatch';
       /** @description What the call ran on: the code, inputs, runtime, and packages, by hash and version. */
       stamp?: {
         function_id: string;
@@ -16464,7 +16480,15 @@ export interface components {
        * @enum {string}
        */
       outcome?:
-        'ok' | 'input_invalid' | 'output_invalid' | 'error' | 'timeout' | 'memory' | 'output_too_large' | 'refused';
+        | 'ok'
+        | 'input_invalid'
+        | 'output_invalid'
+        | 'error'
+        | 'timeout'
+        | 'memory'
+        | 'output_too_large'
+        | 'refused'
+        | 'data_mismatch';
       /** @description The outputs, checked against `output_schema`. */
       output?: {
         [key: string]: unknown;

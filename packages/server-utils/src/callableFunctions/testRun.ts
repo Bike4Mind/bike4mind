@@ -20,6 +20,7 @@ import {
 } from '@bike4mind/common';
 import { artifactRepository, callableFunctionRepository } from '@bike4mind/database';
 import { assertCallableFunctionsEnabled } from './access';
+import { callableFunctionDataHash } from './dataPins';
 import {
   CALLABLE_FUNCTION_CONTRACT_READ_WAIT_MS,
   dispatchFunctionCall,
@@ -201,7 +202,8 @@ const sameRunKey = (recorded: CallableFunctionCaseResults, target: CallableFunct
   recorded.pinVersion === target.fn.pin.version &&
   recorded.contentHash === target.fn.pin.contentHash &&
   recorded.runtimeVersion === target.runtime.version &&
-  recorded.lockHash === target.runtime.lockHash;
+  recorded.lockHash === target.runtime.lockHash &&
+  recorded.dataHash === callableFunctionDataHash(target.fn.pin.dataPins);
 
 /** True when a case's stamp names the runtime that read the contract. */
 export const ranOnTargetRuntime = (target: CallableFunctionServerRunTarget, result: CallableFunctionTestCaseResult) =>
@@ -249,11 +251,13 @@ export async function recordServerCaseResults(
     changed = true;
   }
   if (!changed) return;
+  const dataHash = callableFunctionDataHash(target.fn.pin.dataPins);
   const results: CallableFunctionCaseResults = {
     pinVersion: target.fn.pin.version,
     contentHash: target.fn.pin.contentHash,
     runtimeVersion: target.runtime.version,
     lockHash: target.runtime.lockHash,
+    ...(dataHash ? { dataHash } : {}),
     cases: [...byHash.values()],
   };
   await callableFunctionRepository.recordCaseResults(target.fn.id, { ownerType: 'user', ownerKey: actor.id }, results);
