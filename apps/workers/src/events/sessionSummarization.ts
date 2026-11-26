@@ -206,18 +206,17 @@ export const handler = withEventContext(async (event, logger) => {
   const completionEndTime = Date.now();
   // Billed after the session write (or a terminal no-write exit), not before: a write that throws
   // retries the event with a fresh model call, which would otherwise bill twice.
-  const recordUsage = () =>
-    recordSessionOperationalUsage({
-      operation: 'notebook_summary',
-      user: payer,
-      sessionId,
-      modelId,
-      modelInfo,
-      completionInfo: lastCompletionInfo,
-      startTime: completionStartTime,
-      endTime: completionEndTime,
-      logger,
-    });
+  const usageArgs = {
+    operation: 'notebook_summary',
+    user: payer,
+    sessionId,
+    modelId,
+    modelInfo,
+    completionInfo: lastCompletionInfo,
+    startTime: completionStartTime,
+    endTime: completionEndTime,
+    logger,
+  } as const;
 
   const summaryText = completionBuffers
     .map(text => text?.trim())
@@ -234,7 +233,7 @@ export const handler = withEventContext(async (event, logger) => {
       outputTokens: lastCompletionInfo?.outputTokens ?? null,
       hadPreviousSummary: Boolean(session.summary),
     });
-    await recordUsage();
+    await recordSessionOperationalUsage(usageArgs);
     return;
   }
 
@@ -276,7 +275,7 @@ export const handler = withEventContext(async (event, logger) => {
   // Re-checks update access and not-deleted, so a revoke or delete during the completion drops the
   // result - and with it the FabFile, upload and tag job below.
   const written = await sessionRepository.updateWithUpdateAccess(writer, summaryFields, writeOpts);
-  await recordUsage();
+  await recordSessionOperationalUsage(usageArgs);
   if (!written) {
     logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping summary write`);
     return;
