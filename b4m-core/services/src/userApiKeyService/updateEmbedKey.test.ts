@@ -111,7 +111,11 @@ describe('userApiKeyService - updateEmbedKey', () => {
     const repo = makeRepo(null, embedKey());
     const orgs = makeOrgs(['org-1']);
 
-    const result = await updateEmbedKey('admin-user', { keyId: 'key-1', agentId: 'agent-2' }, deps(repo, orgs));
+    const result = await updateEmbedKey(
+      'admin-user',
+      { keyId: 'key-1', agentId: 'agent-2' },
+      deps(repo, orgs, makeAgents({ organizationId: 'org-1' }))
+    );
 
     expect(result.agentId).toBe('agent-2');
     expect(orgs.findIdsAdministeredBy).toHaveBeenCalledWith('admin-user');
@@ -222,6 +226,42 @@ describe('userApiKeyService - updateEmbedKey agent ownership', () => {
     const orgAgent = makeAgents({ organizationId: 'org-1' });
 
     await updateEmbedKey('user1', { keyId: 'key-1', agentId: 'agent-2' }, deps(repo, makeOrgs(), orgAgent));
+    expect(stored.agentId).toBe('agent-2');
+  });
+
+  it("rejects an org admin binding a teammate's key to the teammate's personal agent", async () => {
+    const repo = makeRepo(null, embedKey());
+    const teammateAgent = makeAgents({ userId: 'user1' });
+
+    await expect(
+      updateEmbedKey(
+        'admin-user',
+        { keyId: 'key-1', agentId: 'agent-2' },
+        deps(repo, makeOrgs(['org-1']), teammateAgent)
+      )
+    ).rejects.toThrow(/only the owner of a personal agent/i);
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects an org admin binding a teammate's key to the admin's own personal agent", async () => {
+    const repo = makeRepo(null, embedKey());
+    const adminAgent = makeAgents({ userId: 'admin-user' });
+
+    await expect(
+      updateEmbedKey('admin-user', { keyId: 'key-1', agentId: 'agent-2' }, deps(repo, makeOrgs(['org-1']), adminAgent))
+    ).rejects.toThrow(/owned by the billing organization or the key owner/i);
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
+  it('lets the key owner bind their own personal agent', async () => {
+    const stored = embedKey();
+    const repo = makeRepo(stored);
+
+    await updateEmbedKey(
+      'user1',
+      { keyId: 'key-1', agentId: 'agent-2' },
+      deps(repo, makeOrgs(), makeAgents({ userId: 'user1' }))
+    );
     expect(stored.agentId).toBe('agent-2');
   });
 

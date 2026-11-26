@@ -16,6 +16,9 @@ const m = vi.hoisted(() => ({
   settleHold: vi.fn(),
   record: vi.fn(async () => undefined),
   complete: vi.fn(),
+  findOwnedAgent: vi.fn(),
+  getMemoryJournal: vi.fn(),
+  appendMemory: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -46,9 +49,9 @@ vi.mock('@bike4mind/server-utils/auth/assertAiAccessAllowed', () => ({ assertAiA
 vi.mock('@bike4mind/database', async () => ({
   ...(await import('@bike4mind/server-utils/__tests__/pendingCreditHoldFake')).pendingCreditHoldFake,
   agentRepository: {
-    shareable: { findAccessibleById: async () => null, findUpdateAccessById: async () => ({ id: 'a1' }) },
-    getMemoryJournal: async () => [],
-    appendMemory: vi.fn(),
+    findByIdAndUserId: m.findOwnedAgent,
+    getMemoryJournal: m.getMemoryJournal,
+    appendMemory: m.appendMemory,
   },
   apiKeyRepository: {},
   adminSettingsRepository: {},
@@ -64,7 +67,7 @@ vi.mock('@bike4mind/utils', async importOriginal => ({
 }));
 vi.mock('@bike4mind/services', async () => ({
   agentMemoryService: {
-    buildMemoryPromptSection: () => '',
+    buildMemoryPromptSection: (memories: { content: string }[]) => memories.map(mem => mem.content).join('\n'),
     extractMemoriesFromConversation: async (
       _name: string,
       _personality: string,
@@ -131,6 +134,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   m.enforce = true;
   m.hold.mockResolvedValue({ ownerId: 'u1', ownerType: 'user', reservedCredits: 1 });
+  m.findOwnedAgent.mockImplementation(async (id: string) => ({ id }));
+  m.getMemoryJournal.mockResolvedValue([]);
   m.settleHold.mockImplementation(async (_hold, credits: number) => credits);
   m.complete.mockImplementation(async (_model, _messages, _opts, cb) => {
     await cb([JSON.stringify({ characters: CAST, speaker: 'grimbold', text: 'Ale?', style: 'speech' })]);
@@ -195,5 +200,32 @@ describe('POST /api/ai/tavern-conversation metering', () => {
     expect(res._getJSONData()).toMatchObject({ speaker: 'grimbold' });
     expect(m.release).toHaveBeenCalledOnce();
     expect(m.settleHold).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/ai/tavern-conversation agent memory', () => {
+  const memory = { content: 'owner-only note', timestamp: new Date(), type: 'observation', importance: 5 };
+
+  it('looks agents up by id and the caller, so memory is read and written only for the owner', async () => {
+    m.getMemoryJournal.mockResolvedValue([memory]);
+
+    await call({ characters: CAST, history: [], agentIds: { grimbold: 'a1' } });
+
+    expect(m.findOwnedAgent).toHaveBeenCalledWith('a1', 'u1');
+    expect(m.getMemoryJournal).toHaveBeenCalledWith('a1', 20);
+    expect(JSON.stringify(m.complete.mock.calls[0][1])).toContain('owner-only note');
+  });
+
+  it('neither reads nor writes the memory of an agent the caller does not own', async () => {
+    m.findOwnedAgent.mockResolvedValue(null);
+    m.getMemoryJournal.mockResolvedValue([memory]);
+
+    const { req } = await callWithReq({ characters: CAST, history: [], agentIds: { grimbold: 'shared-agent' } });
+    await vi.waitFor(() => expect(m.findOwnedAgent).toHaveBeenCalledTimes(2));
+
+    expect(m.getMemoryJournal).not.toHaveBeenCalled();
+    expect(m.appendMemory).not.toHaveBeenCalled();
+    expect(JSON.stringify(m.complete.mock.calls[0][1])).not.toContain('owner-only note');
+    expect(req.logger.warn).not.toHaveBeenCalled();
   });
 });

@@ -99,6 +99,10 @@ export const updateEmbedKey = async (
     if (!agent || !isAgentOwnedByEmbedKey(agent, apiKey)) {
       throw new BadRequestError('agentId must reference an agent owned by the billing organization or the key owner');
     }
+    // An org admin may configure a teammate's key, but only the owner of a personal agent may publish it.
+    if (!isAgentOwnedByEmbedKey(agent, { organizationId: apiKey.organizationId, userId })) {
+      throw new BadRequestError('Only the owner of a personal agent can bind it to an embed key');
+    }
     patch.agentId = params.agentId;
   }
   if (params.allowedOrigins !== undefined) patch.allowedOrigins = params.allowedOrigins;
