@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { ChatMessage } from '@shared/chat';
 import { IMPORTED_MESSAGE_PREFIX } from '@shared/claudeImport';
 import { capOutput } from '../chat/tools/types';
@@ -62,14 +63,20 @@ export function readNotebook(raw: unknown): WebNotebook | null {
       .filter((value): value is string => !!value)
       .sort()
       .at(-1) ?? createdAt;
-  return {
-    id,
-    name: str(row.name)?.trim() || 'Untitled notebook',
-    createdAt,
-    updatedAt,
-    // Must stay comparable with the legacy `updatedAt|lastUpdated` form (comparableVersion in WebSessionSync).
-    version: lastUpdated ?? updated ?? '',
-  };
+  const name = str(row.name)?.trim() || 'Untitled notebook';
+  return { id, name, createdAt, updatedAt, version: webNotebookVersion(lastUpdated ?? updated ?? '', name) };
+}
+
+/** Marks the current-form version; anything else is a legacy cursor (see needsWebImport). */
+export const WEB_VERSION_PREFIX = 'v2|';
+
+/**
+ * What the desktop copy mirrors: its quests, which move `lastUpdated`, and its title. The title is
+ * hashed in because auto-naming writes the name after the turn without moving `lastUpdated`.
+ */
+function webNotebookVersion(lastUpdated: string, name: string): string {
+  const nameTag = createHash('sha256').update(name).digest('hex').slice(0, 12);
+  return `${WEB_VERSION_PREFIX}${lastUpdated}|${nameTag}`;
 }
 
 function replyOf(quest: Json): string {

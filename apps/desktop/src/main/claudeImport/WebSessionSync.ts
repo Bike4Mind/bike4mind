@@ -4,10 +4,10 @@ import type { ChatSession } from '@shared/chat';
 import type { ClaudeImportCounts } from '@shared/claudeImport';
 import { deriveTitle, isForkedImport, type SessionStore } from '../chat/SessionStore';
 import type { WebNotebookCursor } from './ImportStateStore';
-import { mapQuests, readNotebook, sourceIdOf, type WebNotebook } from './webSessionMapper';
+import { mapQuests, readNotebook, sourceIdOf, WEB_VERSION_PREFIX, type WebNotebook } from './webSessionMapper';
 
 const LIST_PATH = '/api/sessions';
-/** Keyset-paged, newest first, public projection: the cost of a page does not grow with its depth. */
+/** Keyset-paged by `_id`, newest created first: a deep page costs the same as the first. */
 const NOTEBOOK_LIST_PATH = '/api/v1/sessions';
 const COUNT_PATH = '/api/sessions/count';
 /** The v1 list's maximum `limit`. */
@@ -48,7 +48,7 @@ function pageOf(result: unknown): z.infer<typeof pageSchema> {
 
 const notebookPageSchema = z.object({ data: z.array(z.unknown()), next_cursor: z.string().min(1).nullable() });
 
-/** A list read the next run should retry: the network, a timeout, throttling or a server fault. */
+/** A failed list page worth retrying within the run: the network, a timeout, throttling or a server fault. */
 function isTransient(error: unknown): boolean {
   if (!isAxiosError(error)) return false;
   const status = error.response?.status;
@@ -62,7 +62,11 @@ export function describeWebError(error: unknown): string {
     if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') return 'timed out';
     if (error.code) return error.code;
   }
-  return error instanceof Error ? error.message : String(error);
+  // A ZodError's message is a multi-line JSON dump; the full text stays in the log.
+  if (error instanceof z.ZodError) return 'unexpected response';
+  const message = error instanceof Error ? error.message : String(error);
+  const firstLine = message.split('\n', 1)[0].trim();
+  return firstLine.length > 120 ? `${firstLine.slice(0, 117)}...` : firstLine || 'unknown error';
 }
 
 /** A listed id the list did not return; kept as a safety net before deleting a local copy. */
@@ -95,7 +99,7 @@ export function webSessionId(notebookId: string, scopeTag: string): string {
 }
 
 export interface WebNotebookList {
-  /** Newest first, so a partial list still holds the notebooks the user most likely wants. */
+  /** Newest created first (the list pages by `_id`), so a partial list keeps the recent notebooks. */
   notebooks: WebNotebook[];
   /** False when the list stopped early; a partial list must never drive pruning. */
   complete: boolean;
@@ -128,7 +132,7 @@ async function readListPage(
 }
 
 /**
- * Every notebook the account owns on the web, newest first. A failed first page throws; a page
+ * Every notebook the account owns on the web, newest created first. A failed first page throws; a page
  * that fails later ends the list early with what was read, so one bad page late in a large account
  * does not cost the user every notebook before it.
  */
@@ -189,18 +193,25 @@ export async function fetchQuests(api: WebApi, notebookId: string): Promise<{ qu
 export function needsWebImport(notebook: WebNotebook, cursor: WebNotebookCursor | undefined): boolean {
   if (!cursor || cursor.status === 'failed') return true;
   if (cursor.status === 'forked' || cursor.status === 'removed') return false;
-  return comparableVersion(cursor.version) !== notebook.version;
+  // An empty version means the last read was unsettled or truncated: it never matches.
+  if (!cursor.version || cursor.version.startsWith(WEB_VERSION_PREFIX)) return cursor.version !== notebook.version;
+  return legacyLastUpdated(cursor.version) !== lastUpdatedOf(notebook.version);
 }
 
 /**
- * Cursors written before the v1 list stored `updatedAt|lastUpdated`; the v1 list carries only
- * `lastUpdated`, which every chat turn and notebook update also bumps. Comparing on that half keeps
- * existing imports from all re-reading at once after the switch.
+ * Cursors written before the v1 list stored `updatedAt|lastUpdated`, and the v1 list carries no
+ * `updatedAt`. Comparing on `lastUpdated` keeps existing imports from all re-reading at once after
+ * the switch; the old marker already caught any rename that landed before it was written.
  */
-function comparableVersion(version: string): string {
+function legacyLastUpdated(version: string): string {
   const bar = version.indexOf('|');
   if (bar < 0) return version;
   return version.slice(bar + 1) || version.slice(0, bar);
+}
+
+/** The `lastUpdated` half of a current-form version (`v2|<lastUpdated>|<nameTag>`). */
+function lastUpdatedOf(version: string): string {
+  return version.slice(WEB_VERSION_PREFIX.length, version.lastIndexOf('|'));
 }
 
 /** Re-reads the whole notebook and replaces the desktop copy; quest ids keep message ids stable. */

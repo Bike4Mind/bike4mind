@@ -21,7 +21,14 @@ import {
 } from './ClaudeCodeSync';
 import { ClaudeImportService } from './ClaudeImportService';
 import { sessionScopeKey, type SessionScope } from '../chat/sessionScope';
-import { fetchQuests, listWebNotebooks, needsWebImport, webSessionId, type WebApi } from './WebSessionSync';
+import {
+  describeWebError,
+  fetchQuests,
+  listWebNotebooks,
+  needsWebImport,
+  webSessionId,
+  type WebApi,
+} from './WebSessionSync';
 import { AttachmentStore } from '../chat/AttachmentStore';
 import { mapToolCall, applyCodeEvent, tidyMessages, type CodeMapState } from './claudeCodeMapper';
 import { activeTodos } from '@shared/todos';
@@ -852,28 +859,33 @@ describe('web session sync', () => {
       });
     });
 
-    describe('needsWebImport with a legacy cursor version', () => {
+    describe('needsWebImport', () => {
       const UPDATED = '2026-01-03T00:00:00.000Z';
       const LAST_UPDATED = '2026-01-02T00:00:00.000Z';
-      const notebook = readNotebook({ id: 'nb1', updatedAt: UPDATED, lastUpdated: LAST_UPDATED });
+      const notebook = readNotebook({ id: 'nb1', name: 'Trip', updatedAt: UPDATED, lastUpdated: LAST_UPDATED })!;
       const cursorAt = (version: string) => ({ sessionId: 's', version, status: 'imported' as const });
 
-      it('does not re-import when the stored lastUpdated half matches', () => {
-        expect(needsWebImport(notebook!, cursorAt(`${UPDATED}|${LAST_UPDATED}`))).toBe(false);
+      it('re-imports a notebook renamed without moving lastUpdated (auto-naming)', () => {
+        const renamed = readNotebook({ id: 'nb1', name: 'Trip to Kyoto', lastUpdated: LAST_UPDATED })!;
+        expect(needsWebImport(notebook, cursorAt(notebook.version))).toBe(false);
+        expect(needsWebImport(renamed, cursorAt(notebook.version))).toBe(true);
       });
 
-      it('re-imports when the stored lastUpdated half differs', () => {
-        expect(needsWebImport(notebook!, cursorAt(`${UPDATED}|2026-01-01T00:00:00.000Z`))).toBe(true);
+      it('re-imports after an unsettled or truncated read', () => {
+        expect(needsWebImport(notebook, cursorAt(''))).toBe(true);
       });
 
-      it('falls back to the stored updatedAt half when lastUpdated was empty', () => {
-        const bare = readNotebook({ id: 'nb1', updatedAt: UPDATED });
-        expect(needsWebImport(bare!, cursorAt(`${UPDATED}|`))).toBe(false);
+      it('does not re-import a legacy cursor whose lastUpdated half matches', () => {
+        expect(needsWebImport(notebook, cursorAt(`${UPDATED}|${LAST_UPDATED}`))).toBe(false);
       });
 
-      it('compares a current-form version as is', () => {
-        expect(needsWebImport(notebook!, cursorAt(LAST_UPDATED))).toBe(false);
-        expect(needsWebImport(notebook!, cursorAt(UPDATED))).toBe(true);
+      it('re-imports a legacy cursor whose lastUpdated half differs', () => {
+        expect(needsWebImport(notebook, cursorAt(`${UPDATED}|2026-01-01T00:00:00.000Z`))).toBe(true);
+      });
+
+      it('falls back to the legacy updatedAt half when lastUpdated was empty', () => {
+        const bare = readNotebook({ id: 'nb1', updatedAt: UPDATED })!;
+        expect(needsWebImport(bare, cursorAt(`${UPDATED}|`))).toBe(false);
       });
     });
 
@@ -917,6 +929,21 @@ describe('web session sync', () => {
       await service.setWebSettings({ enabled: true });
       await service.syncWeb();
       expect((await service.state()).web.error).toBe('Could not read your notebooks from Bike4Mind web (HTTP 403).');
+    });
+
+    it('keeps a malformed first page out of the Settings error as a short reason', async () => {
+      const get = vi.fn().mockResolvedValue({ unexpected: true });
+      const { service } = await setup(new Map([['account-a', { get } as unknown as WebApi]]));
+      await service.setWebSettings({ enabled: true });
+      await service.syncWeb();
+      expect((await service.state()).web.error).toBe(
+        'Could not read your notebooks from Bike4Mind web (unexpected response).'
+      );
+    });
+
+    it('reduces a non-HTTP error to its first line', () => {
+      expect(describeWebError(new Error('Not signed in\nstack details'))).toBe('Not signed in');
+      expect(describeWebError(new Error('x'.repeat(200)))).toHaveLength(120);
     });
 
     it.each([null, {}, { id: '../invalid', prompt: 'bad' }])('rejects a malformed quest row: %j', async row => {
@@ -2269,7 +2296,7 @@ describe('webSessionMapper', () => {
   const AT = '2026-01-01T00:00:00.000Z';
 
   describe('readNotebook', () => {
-    it("reads id, name and timestamps, and versions on the list's lastUpdated", () => {
+    it('reads id, name and timestamps, and versions on lastUpdated and the name', () => {
       const notebook = readNotebook({
         id: '65a1b2c3d4e5f60718293a4b',
         name: ' Trip plan ',
@@ -2282,7 +2309,7 @@ describe('webSessionMapper', () => {
         name: 'Trip plan',
         createdAt: '2026-01-01T00:00:00.000Z',
         updatedAt: '2026-01-03T00:00:00.000Z',
-        version: '2026-01-02T00:00:00.000Z',
+        version: expect.stringMatching(/^v2\|2026-01-02T00:00:00\.000Z\|[0-9a-f]{12}$/),
       });
     });
 
