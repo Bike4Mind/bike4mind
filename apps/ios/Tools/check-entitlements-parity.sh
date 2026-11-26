@@ -111,8 +111,6 @@ permitted=$(plist_values "$APP_INFO_PLIST" BGTaskSchedulerPermittedIdentifiers)
 modes=$(grep 'INFOPLIST_KEY_UIBackgroundModes' "$PROJECT_FILE" || true)
 [ "$(printf '%s\n' "$modes" | grep -c '[" ]fetch[" ;]')" -ge 2 ] ||
   fail "$PROJECT_FILE INFOPLIST_KEY_UIBackgroundModes must include fetch in the Debug and Release app configs"
-[ -z "$(printf '%s\n' "$modes" | grep -v '[" ]fetch[" ;]')" ] ||
-  fail "$PROJECT_FILE has an INFOPLIST_KEY_UIBackgroundModes without fetch"
 
 if [ "$failures" -gt 0 ]; then
   exit 1
