@@ -21,6 +21,7 @@ import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
 import { dispatchByMethod } from '@server/middlewares/dispatchByMethod';
 import { getCreateImageJobsDeps } from '@bike4mind/server-utils/generationJobs/wiring';
+import { limitInputFilesForKey } from '@bike4mind/server-utils/files/generateKeyInputs';
 import { listOwnGenerationJobs } from '@server/generations/listOwnGenerationJobs';
 import { readIdempotencyKey } from '@server/generations/readIdempotencyKey';
 import { adminRoleWithheldFor } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
@@ -90,6 +91,8 @@ const createRouter = nextRouteForContract(createImageJobContract, {
   const organizationId = paidRun
     ? paidRun.billingOrganizationId
     : await resolveMediaBillingOrgId(req, req.validated.organization_id);
+  const deps = getCreateImageJobsDeps();
+  const imageDeps = { ...deps, loadInputFile: limitInputFilesForKey(req, deps.loadInputFile) };
   const result = await createImageJobs(
     {
       user: { id: req.user.id, organizationId, adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo) },
@@ -103,7 +106,7 @@ const createRouter = nextRouteForContract(createImageJobContract, {
       // rather than double-bills. Naming organization_id bills another owner, and keys are scoped per owner.
       ...(idempotencyKey && { idempotencyKey: `${source}:image:${req.user.id}:${idempotencyKey}` }),
     },
-    getCreateImageJobsDeps()
+    imageDeps
   );
   if (!result.ok) throw toHttpError(result);
   const data = await Promise.all(
