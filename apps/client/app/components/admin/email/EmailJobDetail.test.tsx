@@ -292,8 +292,8 @@ describe('EmailJobDetail', () => {
       }
     );
 
-    it('offers Schedule for a draft, even one that has been sent before', () => {
-      m.job = draftJob(EmailJobOverallStatus.COMPLETE);
+    it('offers Schedule for a draft, even one whose send failed', () => {
+      m.job = draftJob(EmailJobOverallStatus.FAILED);
       renderDetail('job1');
 
       expect(scheduleButton()).toBeInTheDocument();
@@ -317,6 +317,61 @@ describe('EmailJobDetail', () => {
       expect(screen.queryByLabelText('Send At')).toBeNull();
       fireEvent.click(scheduleButton()!);
       expect(screen.queryByTestId('email-job-schedule-error')).toBeNull();
+    });
+
+    it('drops the Send At form when a refetch moves the job out of draft, keeping the schedule error', async () => {
+      m.schedule.mockRejectedValue(badRequest('Can only schedule jobs in draft status'));
+      const view = renderDetail('job1');
+
+      fireEvent.click(scheduleButton()!);
+      fireEvent.change(screen.getByLabelText('Send At'), { target: { value: '2099-01-01T10:00' } });
+      fireEvent.click(screen.getAllByRole('button', { name: 'Schedule' })[1]);
+      await screen.findByTestId('email-job-schedule-error');
+
+      m.job = { ...draftJob(), status: EmailJobStatus.SCHEDULED };
+      view.rerender(
+        <CssVarsProvider theme={appTheme}>
+          <EmailJobDetail jobId="job1" onBack={() => {}} />
+        </CssVarsProvider>
+      );
+
+      expect(screen.queryByLabelText('Send At')).toBeNull();
+      expect(scheduleButton()).toBeNull();
+      expect(screen.getByTestId('email-job-schedule-error')).toHaveTextContent(
+        'Can only schedule jobs in draft status'
+      );
+    });
+
+    it('shows a failed auto-save before sending as an action error', async () => {
+      m.update.mockRejectedValueOnce(badRequest('Template not found'));
+      renderDetail('job1');
+      await screen.findByRole('button', { name: 'View All 30 Recipients' });
+
+      const [send] = screen
+        .getAllByRole('button', { name: /^Send Campaign/ })
+        .filter(el => !el.hasAttribute('aria-expanded'));
+      fireEvent.click(send);
+
+      expect(await screen.findByTestId('email-job-action-error')).toHaveTextContent('Template not found');
+      expect(m.send).not.toHaveBeenCalled();
+    });
+
+    it('clears an action error once a refetch moves the job to another status', async () => {
+      m.job = { ...draftJob(), status: EmailJobStatus.SCHEDULED };
+      m.cancel.mockRejectedValue(badRequest('Job is not scheduled'));
+      const view = renderDetail('job1');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel Schedule' }));
+      await screen.findByTestId('email-job-action-error');
+
+      m.job = { ...draftJob(), status: EmailJobStatus.CANCELLED };
+      view.rerender(
+        <CssVarsProvider theme={appTheme}>
+          <EmailJobDetail jobId="job1" onBack={() => {}} />
+        </CssVarsProvider>
+      );
+
+      expect(screen.queryByTestId('email-job-action-error')).toBeNull();
     });
 
     it('shows a rejected send as an action error', async () => {

@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
     refetch: vi.fn(),
   },
   lastParams: undefined as unknown,
+  cancel: vi.fn(),
+  clone: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/data/emailMarketing', () => ({
@@ -20,8 +22,8 @@ vi.mock('@client/app/hooks/data/emailMarketing', () => ({
     mocks.lastParams = params;
     return mocks.jobs;
   },
-  useCancelEmailJob: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useCloneEmailJob: () => ({ mutateAsync: vi.fn(), isPending: false }),
+  useCancelEmailJob: () => ({ mutateAsync: mocks.cancel, isPending: false }),
+  useCloneEmailJob: () => ({ mutateAsync: mocks.clone, isPending: false }),
 }));
 vi.mock('./EmailJobDetail', () => ({
   default: ({ jobId }: { jobId?: string }) => <div data-testid="email-job-detail-stub" data-job-id={jobId ?? 'new'} />,
@@ -64,6 +66,8 @@ describe('EmailJobsPanel', () => {
   beforeEach(() => {
     Object.assign(mocks.jobs, { data: pageOf([]), isLoading: false, isError: false, isPlaceholderData: false });
     mocks.jobs.refetch.mockClear();
+    mocks.cancel.mockReset();
+    mocks.clone.mockReset();
   });
 
   it('starts with a toolbar row that holds only the filters and new campaign buttons', () => {
@@ -207,5 +211,15 @@ describe('EmailJobsPanel', () => {
     fireEvent.click(screen.getByTestId('filter-campaigns-btn'));
     setStartDate('2026-01-01');
     expect(mocks.lastParams).toMatchObject({ page: 1, startDate: '2026-01-01' });
+  });
+
+  it('shows a failed row clone inline instead of rejecting unhandled', async () => {
+    mocks.jobs.data = pageOf([job]);
+    mocks.clone.mockRejectedValue(new Error('Network Error'));
+    renderPanel();
+
+    fireEvent.click(screen.getByTestId('clone-job-j1'));
+
+    expect(await screen.findByTestId('email-campaigns-action-error')).toHaveTextContent('Network Error');
   });
 });
