@@ -77,7 +77,10 @@ vi.mock('@client/app/hooks/data/feedback', () => ({
     userId,
   ],
 }));
-vi.mock('@client/app/hooks/data/useModelInfo', () => ({ useModelInfo: () => ({ data: [] }) }));
+vi.mock('@client/app/hooks/data/useModelInfo', async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useModelInfo: () => ({ data: [] }),
+}));
 vi.mock('@client/app/hooks/data/settings', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   useSettingsFromServer: () => ({ data: [] }),

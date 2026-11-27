@@ -1384,14 +1384,16 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   const markdownComponents = useMemo(() => createMarkdownComponents({ highlightText }), [highlightText]);
 
   const codeComponent = useMemo(() => createCodeComponent(), []);
-  const [approvedImageSources] = useState(() => new Set<string>());
-  // A new attempt at the same quest rewrites the reply rather than extending it; its images need their own approval.
-  const previousReplyRef = useRef(reply ?? '');
-  // eslint-disable-next-line react-hooks/refs -- an effect would clear after this render's images mounted approved
-  if (!(reply ?? '').startsWith(previousReplyRef.current)) approvedImageSources.clear();
-  useEffect(() => {
-    previousReplyRef.current = reply ?? '';
-  }, [reply]);
+  const currentReply = reply ?? '';
+  const [imageApproval, setImageApproval] = useState(() => ({
+    reply: currentReply,
+    sources: new Set<string>(),
+  }));
+  // A rewritten reply needs a new set identity so memoized image blocks also reset their approval.
+  const approvedImageSources = currentReply.startsWith(imageApproval.reply) ? imageApproval.sources : new Set<string>();
+  if (currentReply !== imageApproval.reply) {
+    setImageApproval({ reply: currentReply, sources: approvedImageSources });
+  }
   // Callers may pass a fresh onSendMessage each render; a stable wrapper keeps markdownImage, and with it
   // replyComponents, from changing every frame and re-rendering every settled block.
   const onSendMessageRef = useRef(onSendMessage);

@@ -93,4 +93,23 @@ describe('PromptReplies keeps an approved image through completion when the repl
     expect(screen.getByTestId('reply-image-load-btn')).toBeTruthy();
     expect(screen.queryByTestId('reply-image-loaded')).toBeNull();
   });
+
+  it.each(['running', 'stopped', 'done'])(
+    'requires a fresh approval after a same-position, same-URL rewrite from %s',
+    status => {
+      const first = 'Intro one.\n\n![chart](https://example.com/c.png)\n\nTail.';
+      const rewritten = 'Intro two.\n\n![chart](https://example.com/c.png)\n\nTail.';
+      const { rerender } = render(<Reply text={first} status="running" />);
+      fireEvent.click(screen.getByTestId('reply-image-load-btn'));
+      rerender(<Reply text={first} status={status} />);
+      rerender(<Reply text={rewritten} status="running" />);
+      expect(screen.getByTestId('reply-image-load-btn')).toBeTruthy();
+      expect(screen.queryByTestId('reply-image-loaded')).toBeNull();
+      fireEvent.click(screen.getByTestId('reply-image-load-btn'));
+      rerender(<Reply text={`${rewritten} More.`} status="running" />);
+      rerender(<Reply text={`${rewritten} More.`} status="done" />);
+      expect(screen.queryByTestId('reply-image-load-btn')).toBeNull();
+      expect(screen.getByTestId('reply-image-loaded')).toBeTruthy();
+    }
+  );
 });
