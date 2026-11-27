@@ -156,16 +156,21 @@ class DesktopAffectedTest(unittest.TestCase):
         self.assertTrue(self.changed())
 
     def test_aliased_dependency_resolves(self):
-        shapes = {'tool@2.0.0': 'tool@2.0.0',
-                  '@scope/tool@1.0.0': '@scope/tool@1.0.0',
-                  'tool@2.0.0(peer@1.0.0)': 'tool@2.0.0',
-                  'tool@2.0.0': 'tool@2.0.0'}
-        for index, (version, package) in enumerate(shapes.items()):
+        # (dependency name, specifier, lockfile version, package key, snapshot key)
+        shapes = [
+            ('tool-next-0', 'npm:tool@2.0.0', 'tool@2.0.0', 'tool@2.0.0', 'tool@2.0.0'),
+            ('tool-next-1', 'npm:@scope/tool@1.0.0', '@scope/tool@1.0.0',
+             '@scope/tool@1.0.0', '@scope/tool@1.0.0'),
+            ('tool-next-2', 'npm:tool@2.0.0', 'tool@2.0.0(peer@1.0.0)',
+             'tool@2.0.0', 'tool@2.0.0(peer@1.0.0)'),
+            ('plain-0', '^1.0.0', '1.0.0(peer@1.0.0)', 'plain-0@1.0.0',
+             'plain-0@1.0.0(peer@1.0.0)'),
+        ]
+        for index, (name, specifier, version, package, snapshot) in enumerate(shapes):
             with self.subTest(version=version):
-                name = f'tool-next-{index}'
                 self.lock['importers']['apps/desktop']['dependencies'] = {name: {
-                    'specifier': f'npm:{package}', 'version': version}}
-                self.lock['snapshots'][version] = {}
+                    'specifier': specifier, 'version': version}}
+                self.lock['snapshots'][snapshot] = {}
                 self.lock['packages'][package] = {}
                 self.write_lock()
                 self.git('add', '.')
