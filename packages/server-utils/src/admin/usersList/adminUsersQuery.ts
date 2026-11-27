@@ -149,6 +149,8 @@ export function buildAdminUsersMatch(filter: AdminUsersFilter, context: AdminUse
     );
   }
   if (filter.adminRole) conditions.push({ adminRoleIds: context.toObjectId(filter.adminRole) });
+  // The $type states the partial user_signupClientId_createdAt index's filter, which the planner needs to use it.
+  if (filter.signupClient) conditions.push({ signupClientId: { $type: 'string', $eq: filter.signupClient } });
   return conditions.length > 0 ? { $and: conditions } : {};
 }
 

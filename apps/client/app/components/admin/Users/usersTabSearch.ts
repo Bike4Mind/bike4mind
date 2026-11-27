@@ -77,6 +77,7 @@ export const USERS_FILTER_PARAMS = {
   acqConverted: 'acqConverted',
   acqWindow: 'acqWindow',
   adminRole: 'role',
+  signupClient: 'signupClient',
 } as const satisfies Partial<Record<keyof UsersListView, string>>;
 export type UsersFilterKey = keyof typeof USERS_FILTER_PARAMS;
 export const USERS_FILTER_KEYS = Object.keys(USERS_FILTER_PARAMS) as UsersFilterKey[];
@@ -144,6 +145,7 @@ export type UsersSearch = {
   acqConverted?: UsersListView['acqConverted'];
   acqWindow?: UsersListView['acqWindow'];
   role?: string;
+  signupClient?: string;
 };
 
 const parseLimit = (value: unknown): number | undefined => {
@@ -196,6 +198,12 @@ const parseAcquisitionPart = (value: unknown): string | undefined => {
   return part.length > 0 && part.length <= ACQUISITION_FOLDED_FIELD_LIMIT ? part : undefined;
 };
 
+const parseSignupClient = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const id = value.trim();
+  return /^[A-Za-z0-9_-]{1,100}$/.test(id) ? id : undefined;
+};
+
 export const USERS_SEARCH_PARSERS: {
   readonly [K in keyof UsersSearch]-?: (value: unknown, search?: Record<string, unknown>) => UsersSearch[K];
 } = {
@@ -231,6 +239,7 @@ export const USERS_SEARCH_PARSERS: {
   acqConverted: parseFlag,
   acqWindow: oneOf(USER_ACQUISITION_WINDOW_FILTERS),
   role: parseObjectId,
+  signupClient: parseSignupClient,
 };
 
 function filtersFromSearch(search: Record<string, unknown>): Pick<UsersListView, UsersFilterKey> {
@@ -260,6 +269,7 @@ function filtersFromSearch(search: Record<string, unknown>): Pick<UsersListView,
     acqConverted: USERS_SEARCH_PARSERS.acqConverted(search.acqConverted),
     acqWindow: USERS_SEARCH_PARSERS.acqWindow(search.acqWindow),
     adminRole: parseObjectId(search.role),
+    signupClient: parseSignupClient(search.signupClient),
   };
 }
 
@@ -344,6 +354,7 @@ export function usersViewToSearch(params: UsersListView): Omit<UsersSearch, type
     acqConverted: params.acqConverted,
     acqWindow: params.acqWindow,
     role: parseObjectId(params.adminRole),
+    signupClient: parseSignupClient(params.signupClient),
   };
 }
 

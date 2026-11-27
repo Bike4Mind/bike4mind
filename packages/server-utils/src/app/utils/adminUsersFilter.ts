@@ -118,6 +118,12 @@ export const AdminUsersFilterFieldsSchema = z.object({
     .regex(/^[0-9a-f]{24}$/i, 'Expected an id')
     .transform(id => id.toLowerCase())
     .optional(),
+  // Accounts that signed up through one OAuth client (its client id, b4m_<slug>_<8 hex>).
+  signupClient: z
+    .string()
+    .trim()
+    .regex(/^[A-Za-z0-9_-]{1,100}$/, 'Not a valid client id')
+    .optional(),
   // UTC days with AI activity, both ends inclusive; set together.
   activeFrom: utcDay.optional(),
   activeTo: utcDay.optional(),
