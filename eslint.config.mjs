@@ -451,6 +451,8 @@ export default defineConfig([
     '**/.sst/**',
     '**/sst-env.d.ts',
     'apps/client/public/**',
+    // Vendored third-party bundle shipped inside the iOS app.
+    'apps/ios/Bike4Mind/Resources/Artifacts/**',
     // electron-vite's build output; 'dist'/'build' above do not cover it.
     'apps/desktop/out/**',
     'packages/sdk/src/generated/**',

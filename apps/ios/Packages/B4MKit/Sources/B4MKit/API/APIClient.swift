@@ -5,7 +5,7 @@ import OpenAPIRuntime
 /// `B4MAPI` over the generated `B4MClient`: bearer injection, one 401 retry, and the mapping from
 /// generated response enums to domain models and `APIError`.
 public struct APIClient: B4MAPI {
-  private let client: Client
+  let client: Client
   private let requester: AuthorizedRequester
 
   public init(
@@ -154,7 +154,7 @@ public struct APIClient: B4MAPI {
   }
 
   /// Runs one generated call and folds every failure into `APIError`.
-  private func call<Result>(_ operation: () async throws -> Result) async throws -> Result {
+  func call<Result>(_ operation: () async throws -> Result) async throws -> Result {
     do {
       return try await operation()
     } catch let error as APIError {
