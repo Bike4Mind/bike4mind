@@ -293,7 +293,13 @@ import { endsUnread, type SessionActivity, type TurnOutcome } from './SessionAct
 import { isLinkedReplyRunning, isLinkedWebSend } from '@shared/webLinkedChat';
 import { webQuestMessageId } from '@shared/claudeImport';
 import { LinkedReplySlots, sessionTurnsEndpoint, stopSessionTurn, streamSessionTurn } from './webLinkedTurn';
-import { deriveTitle, isValidSessionId, type SessionSettingsChange, type SessionStore } from './SessionStore';
+import {
+  deriveTitle,
+  isValidSessionId,
+  type SessionSettingsChange,
+  type SessionStore,
+  unchangedSettingsDropped,
+} from './SessionStore';
 import { expandSkill, parseSkillInvocation } from './skills/expand';
 import { resolveInlineSkills } from './skills/inline';
 import { SkillsPromptCache } from './skills/prompt';
@@ -2117,15 +2123,17 @@ export class ChatService {
     const scope = this.deps.store.scopeKey();
     const session = await this.deps.store.get(sessionId);
     if (!session) return null;
+    const changed = unchangedSettingsDropped(session, settings);
+    if (Object.keys(changed).length === 0) return this.withLivePlan(summarizeSession(session));
     const isWorker = Boolean(session.workerSelection);
-    if (isWorker && settings.model !== undefined) await this.checkWorkerModelPick(session, settings.model);
-    const updated = await this.deps.store.configure(sessionId, settings, scope);
+    if (isWorker && changed.model !== undefined) await this.checkWorkerModelPick(session, changed.model);
+    const updated = await this.deps.store.configure(sessionId, changed, scope);
     if (!updated) return null;
-    if (isWorker && settings.model !== undefined) {
+    if (isWorker && changed.model !== undefined) {
       this.markTaskDecisionMutation(sessionId, scope);
       this.syncTaskDecision(updated, scope);
-    } else if (settings.model !== undefined) {
-      await this.deps.modelMemory?.record(settings.model).catch(err => {
+    } else if (changed.model !== undefined) {
+      await this.deps.modelMemory?.record(changed.model).catch(err => {
         this.deps.logger.warn(`CHAT: could not remember the model pick: ${err instanceof Error ? err.message : err}`);
       });
     }

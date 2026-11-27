@@ -1677,6 +1677,44 @@ describe('SessionStore.configure', () => {
     expect(after?.reasoningEffort).toBe(before?.reasoningEffort);
   });
 
+  it('skips a field equal to the current value, so a worker queues no new attempt', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'b4m-configure-echo-'));
+    const store = new SessionStore(directory, 'worker');
+    const child = await store.create('worker', {
+      workerSelection: { role: 'implementation', effectiveModel: 'worker', source: 'override', rootRunId: 'run' },
+      workerTask: {
+        version: 1,
+        contract: {
+          version: 1,
+          outcome: 'Bounded task',
+          rationale: 'Focused scope',
+          role: 'implementation',
+          paths: [],
+          contextReferences: [],
+          ownedChanges: [],
+          coordinationConstraints: [],
+          nonGoals: [],
+          acceptanceCriteria: ['Observed result'],
+          verification: [],
+          assumptions: [],
+          escalationConditions: [],
+        },
+        automaticUpgrades: 0,
+        resolvedDecisions: [],
+        attempts: [{ id: 'attempt', model: 'worker', startedAt: '2026-11-19', trigger: 'initial' }],
+        state: { status: 'running' },
+      },
+    });
+
+    await store.configure(child.id, { model: 'worker', reasoningEffort: 'high' }, store.scopeKey());
+
+    const after = await new SessionStore(directory, 'worker', 'launch-two').get(child.id);
+    expect(after?.reasoningEffort).toBe('high');
+    expect(after?.workerTask?.attempts).toHaveLength(1);
+    expect(after?.workerTask?.state.status).toBe('running');
+    expect(after?.workerSelection?.source).toBe('override');
+  });
+
   it('answers null for a session that does not exist', async () => {
     const { store } = await freshStore();
     expect(await store.configure('3f0c2c55-9a43-4cf6-8d0e-1b1f0a2b3c4d', { reasoningEffort: 'high' }, null)).toBeNull();

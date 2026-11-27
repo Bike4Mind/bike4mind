@@ -311,6 +311,24 @@ export type SessionSettingsChange = {
   approvalMode?: ChatApprovalMode;
 };
 
+/**
+ * The fields of `settings` that would change `session`. A patch that echoes a current value is a
+ * no-op, so a worker's unchanged model queues no new attempt and is not checked as a new pick.
+ */
+export function unchangedSettingsDropped(session: ChatSession, settings: SessionSettingsChange): SessionSettingsChange {
+  const { model, reasoningEffort, promptCacheTtl, generation, approvalMode } = settings;
+  const sameGeneration =
+    generation !== undefined &&
+    JSON.stringify(session.generation ?? null) === JSON.stringify(normalizeGeneration(generation) ?? null);
+  return {
+    ...(model !== undefined && model !== session.model ? { model } : {}),
+    ...(reasoningEffort !== undefined && reasoningEffort !== session.reasoningEffort ? { reasoningEffort } : {}),
+    ...(promptCacheTtl !== undefined && promptCacheTtl !== session.promptCacheTtl ? { promptCacheTtl } : {}),
+    ...(generation !== undefined && !sameGeneration ? { generation } : {}),
+    ...(approvalMode !== undefined && approvalMode !== session.approvalMode ? { approvalMode } : {}),
+  };
+}
+
 /*
  * One field's change each, shared by its setter and by `configure`. Each edits the session in
  * place and says whether anything changed, which is what decides the write.
@@ -1226,18 +1244,21 @@ export class SessionStore implements SessionWritesStore {
 
   /**
    * Several of the settings above in one write: each field changes as its own setter would
-   * change it, and either all of them land or, when one throws, none does. A worker session's
-   * model changes as setWorkerModel changes it. The same preferences are remembered afterwards.
+   * change it, and either all of them land or, when one throws, none does. A field equal to the
+   * current value is skipped (see unchangedSettingsDropped). A worker session's model changes as
+   * setWorkerModel changes it. The preferences of the fields that changed are remembered afterwards.
    */
   async configure(
     id: string,
     settings: SessionSettingsChange,
     expectedScope: string | null
   ): Promise<ChatSessionSummary | null> {
-    const { model, reasoningEffort, promptCacheTtl, generation, approvalMode } = settings;
+    let applied: SessionSettingsChange = {};
     const updated = await this.mutate(
       id,
       session => {
+        applied = unchangedSettingsDropped(session, settings);
+        const { model, reasoningEffort, promptCacheTtl, generation, approvalMode } = applied;
         const changes = [
           model !== undefined &&
             (session.workerSelection ? changeWorkerModel(session, model) : changeModel(session, model)),
@@ -1251,6 +1272,7 @@ export class SessionStore implements SessionWritesStore {
       expectedScope
     );
     if (!updated) return null;
+    const { promptCacheTtl, approvalMode } = applied;
     if (promptCacheTtl !== undefined) await this.promptCacheTtls?.record(promptCacheTtl);
     if (approvalMode !== undefined) await this.approvalModes?.record(approvalMode);
     return updated;
