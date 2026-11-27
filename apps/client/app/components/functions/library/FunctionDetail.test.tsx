@@ -7,8 +7,8 @@ import type { FunctionContract, ICallableFunctionPublic, ICallableFunctionShared
 
 const h = vi.hoisted(() => ({
   enabled: true,
-  mine: { data: [] as unknown[] | undefined, isPending: false },
-  shared: { data: [] as unknown[] | undefined, isPending: false },
+  mine: { data: [] as unknown[] | undefined, isPending: false, error: null as unknown },
+  shared: { data: [] as unknown[] | undefined, isPending: false, error: null as unknown },
   detail: { data: undefined as unknown, isPending: false },
   detailFor: vi.fn(),
   callsFor: vi.fn(),
@@ -101,8 +101,8 @@ const SHARED = {
 
 beforeEach(() => {
   h.enabled = true;
-  h.mine = { data: [OWN], isPending: false };
-  h.shared = { data: [SHARED], isPending: false };
+  h.mine = { data: [OWN], isPending: false, error: null };
+  h.shared = { data: [SHARED], isPending: false, error: null };
   h.detail = {
     data: { ...OWN, contract: CONTRACT, source: 'def run():\n    return {}', lastServerRun: null },
     isPending: false,
@@ -163,5 +163,21 @@ describe('FunctionDetail', () => {
     h.enabled = false;
     renderDetail('fn-own');
     expect(screen.getByTestId('function-detail-off')).toBeTruthy();
+  });
+
+  it('says the load failed, not that the function is missing, when the lists fail to load', () => {
+    h.mine = { data: undefined, isPending: false, error: new Error('boom') };
+    renderDetail('fn-own');
+    expect(screen.getByTestId('function-detail-error')).toBeTruthy();
+    expect(screen.queryByTestId('function-detail-not-found')).toBeNull();
+  });
+
+  it('shows an error when the owner detail fails to load', () => {
+    h.mine = { data: [OWN], isPending: false, error: null };
+    h.detail = { data: undefined, isPending: false };
+    renderDetail('fn-own');
+    expect(screen.getByTestId('function-detail-contract-error').textContent).toBe(
+      'Could not load its inputs and outputs.'
+    );
   });
 });

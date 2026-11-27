@@ -123,4 +123,10 @@ describe('FunctionLibrary', () => {
     expect(screen.queryByTestId('function-library')).toBeNull();
     expect(h.listEnabled).toHaveBeenCalledWith(false);
   });
+
+  it.each(['mine', 'shared'] as const)('shows an error when the %s list fails to load', which => {
+    h[which] = { data: undefined, isPending: false, error: new Error('boom') };
+    renderLibrary();
+    expect(screen.getByTestId('function-library-error')).toBeTruthy();
+  });
 });

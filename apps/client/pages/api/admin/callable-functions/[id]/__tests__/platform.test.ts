@@ -134,6 +134,24 @@ describe('/api/admin/callable-functions/:id/platform', () => {
     );
   });
 
+  it.each([{ reason: 'x'.repeat(1001) }, { reason: 42 }])('rejects an invalid reason with a 400', async (body) => {
+    const { res, promise } = run('POST', ADMIN, FUNCTION_ID, body);
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(h.setPlatformMark).not.toHaveBeenCalled();
+    expect(h.record).not.toHaveBeenCalled();
+  });
+
+  it('fails the request when the audit write fails, on mark and on clear', async () => {
+    h.record.mockRejectedValue(new Error('audit down'));
+    const marked = run('POST');
+    await expect(marked.promise).rejects.toThrow('audit down');
+    expect(marked.res._isEndCalled()).toBe(false);
+    const cleared = run('DELETE');
+    await expect(cleared.promise).rejects.toThrow('audit down');
+    expect(cleared.res._isEndCalled()).toBe(false);
+  });
+
   it('answers not found when there is no mark to clear', async () => {
     h.clearPlatformMark.mockResolvedValue(null);
     await expect(run('DELETE').promise).rejects.toBeInstanceOf(NotFoundError);

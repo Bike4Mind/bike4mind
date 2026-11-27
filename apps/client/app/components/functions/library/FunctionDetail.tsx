@@ -51,7 +51,7 @@ function OwnFunctionDetail({ fn }: { fn: ICallableFunctionPublic }) {
           </Section>
         </>
       ) : (
-        <Alert color="danger" sx={{ alignSelf: 'flex-start' }}>
+        <Alert color="danger" sx={{ alignSelf: 'flex-start' }} data-testid="function-detail-contract-error">
           Could not load its inputs and outputs.
         </Alert>
       )}
@@ -122,6 +122,13 @@ export const FunctionDetail: React.FC<{ id: string }> = ({ id }) => {
     );
   }
   if (mine.isPending || shared.isPending) return <Spinner />;
+  if (mine.error || shared.error) {
+    return (
+      <Alert color="danger" sx={{ alignSelf: 'flex-start' }} data-testid="function-detail-error">
+        Could not load this function.
+      </Alert>
+    );
+  }
   return (
     <Alert color="neutral" sx={{ alignSelf: 'flex-start' }} data-testid="function-detail-not-found">
       This function does not exist, or it is not shared with you.
