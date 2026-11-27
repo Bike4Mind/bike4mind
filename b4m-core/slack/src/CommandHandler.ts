@@ -396,6 +396,7 @@ export class CommandHandler {
 
       // Trigger AI response with context, using existing quest if provided
       const quest = await chatCompletion.invoke({
+        contributedToolNames: new Set<string>(),
         body: {
           params: {
             model: modelId,

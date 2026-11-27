@@ -359,6 +359,13 @@ export type PremiumWorkspaceGrantDisplays = Readonly<Record<string, readonly Pre
  */
 export type PremiumToolDisplayLabels = Readonly<Record<string, string>>;
 
+/**
+ * Loading copy shown while an overlay's tool runs, keyed by tool id (`copyForRunningTool`). Contributed
+ * as literal data in `b4mContributions.toolRunningCopy`, with the same shape and limits as the labels.
+ * A core tool keeps its own copy; a tool with none gets the generic "Running <name>" line.
+ */
+export type PremiumToolRunningCopy = Readonly<Record<string, string>>;
+
 /** What core hands a reply accessory about the reply it sits under. */
 export interface PremiumReplyAccessoryProps {
   /** The reply's quest id - the same key the UI side-effect bus dispatches as `dedupeKey`. */

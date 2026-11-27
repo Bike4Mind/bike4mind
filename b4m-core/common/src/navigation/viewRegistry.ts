@@ -3,6 +3,8 @@
  * Used by the navigate_view LLM tool to suggest contextual navigation.
  */
 
+import { OPTI_SURFACE } from '../surfaces';
+
 export type NavigationType = 'route' | 'tab' | 'action';
 export type ViewSection = 'opti' | 'admin' | 'global';
 
@@ -23,6 +25,12 @@ export interface NavigableView {
   keywords: string[];
   /** Only show to admin users */
   requiresAdmin?: boolean;
+  /**
+   * Workspace surface an `action` view leads into, when it is not part of the main app. Registered
+   * workspace ids come from `WORKSPACE_SURFACES`; the client uses this to tell whether a suggested
+   * action opens a workspace the user hid.
+   */
+  surface?: string;
 }
 
 /** Resolved navigation intent stored on the quest and sent to the client */
@@ -42,6 +50,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.root',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'OptiHashi Home',
     description: 'The OptiHashi Optimizer landing page showing the pattern family cards',
     navigationType: 'route',
@@ -51,6 +60,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.scheduling',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Scheduling',
     description: 'Scheduling optimization: job-shop, flow-shop, shift scheduling, makespan minimization',
     navigationType: 'action',
@@ -60,6 +70,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.scheduling.problem',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Scheduling Problem',
     description: 'Define and preview scheduling problems — job-shop matrix encoding',
     navigationType: 'action',
@@ -69,6 +80,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.scheduling.solvers',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Scheduling Solvers',
     description: 'Configure which solvers to race across a range of optimization strategies',
     navigationType: 'action',
@@ -78,6 +90,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.scheduling.results',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Race Results',
     description: 'View solver race results — progress, best schedule, makespan comparison, utilization',
     navigationType: 'action',
@@ -95,6 +108,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.scheduling.gantt',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Gantt Chart',
     description: 'Gantt chart visualization of the best scheduling solution',
     navigationType: 'action',
@@ -104,6 +118,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.scheduling.qwork',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Q/Work',
     description: 'View job history and status from the compute service',
     navigationType: 'action',
@@ -113,6 +128,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.routing',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Routing',
     description: 'Vehicle routing, TSP, logistics, delivery routes, fleet management',
     navigationType: 'action',
@@ -122,6 +138,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.routing.problem',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Routing Problem',
     description: 'Define and preview routing problems: stops, vehicles, distances',
     navigationType: 'action',
@@ -131,6 +148,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.routing.solvers',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Routing Solvers',
     description: 'Choose which solvers to race on the routing problem',
     navigationType: 'action',
@@ -140,6 +158,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.packing',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Packing',
     description: 'Bin packing, knapsack, container loading, space optimization',
     navigationType: 'action',
@@ -149,6 +168,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.packing.problem',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Packing Problem',
     description: 'Define and preview packing problems: items, bins, capacities',
     navigationType: 'action',
@@ -158,6 +178,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.packing.solvers',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Packing Solvers',
     description: 'Choose which solvers to race on the packing problem',
     navigationType: 'action',
@@ -167,6 +188,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.network',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Network Design',
     description: 'Network flow, facility location, supply chain network design',
     navigationType: 'action',
@@ -176,6 +198,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.network.problem',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Network Problem',
     description: 'Define and preview network design problems: nodes, edges, facilities',
     navigationType: 'action',
@@ -185,6 +208,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.network.solvers',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Network Solvers',
     description: 'Choose which solvers to race on the network design problem',
     navigationType: 'action',
@@ -194,6 +218,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.selection',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Selection',
     description: 'Portfolio selection, feature selection, subset optimization',
     navigationType: 'action',
@@ -203,6 +228,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.selection.problem',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Selection Problem',
     description: 'Define and preview selection problems: candidates, values, constraints',
     navigationType: 'action',
@@ -212,6 +238,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.selection.solvers',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Selection Solvers',
     description: 'Choose which solvers to race on the selection problem',
     navigationType: 'action',
@@ -221,6 +248,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.economic',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Economic',
     description: 'Resource allocation, pricing, budgeting, economic optimization',
     navigationType: 'action',
@@ -230,6 +258,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.economic.problem',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Economic Problem',
     description: 'Define and preview economic problems: resources, prices, budgets',
     navigationType: 'action',
@@ -239,6 +268,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.economic.solvers',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Economic Solvers',
     description: 'Choose which solvers to race on the economic problem',
     navigationType: 'action',
@@ -248,6 +278,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.assignment',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Assignment',
     description: 'Task assignment, matching, workforce allocation, team formation',
     navigationType: 'action',
@@ -257,6 +288,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.assignment.problem',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Assignment Problem',
     description: 'Define and preview assignment problems: agents, tasks, cost matrix',
     navigationType: 'action',
@@ -266,6 +298,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.assignment.solvers',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Assignment Solvers',
     description: 'Choose which solvers to race on the assignment problem',
     navigationType: 'action',
@@ -275,6 +308,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.partitioning',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Partitioning',
     description: 'Graph partitioning, clustering, load balancing, data partitioning',
     navigationType: 'action',
@@ -284,6 +318,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.partitioning.problem',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Partitioning Problem',
     description: 'Define and preview partitioning problems: graph, parts, balance',
     navigationType: 'action',
@@ -293,6 +328,7 @@ export const VIEW_REGISTRY: NavigableView[] = [
   {
     id: 'opti.partitioning.solvers',
     section: 'opti',
+    surface: OPTI_SURFACE,
     label: 'Partitioning Solvers',
     description: 'Choose which solvers to race on the partitioning problem',
     navigationType: 'action',

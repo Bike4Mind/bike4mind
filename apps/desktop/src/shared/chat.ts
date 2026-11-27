@@ -773,6 +773,9 @@ export interface ChatChildWaiting {
   summary?: string;
 }
 
+/** Marks a prompt the renderer drew before main stored it; main assigns the real id. */
+export const OPTIMISTIC_ID_PREFIX = 'pending-';
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;

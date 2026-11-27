@@ -209,6 +209,7 @@ async function runFullPipeline(
     ...(systemPrompt ? { extraContextMessages: [{ role: 'system' as const, content: systemPrompt }] } : {}),
   };
 
+  const contributedToolNames = new Set(Object.keys(premiumLlmTools));
   const invokeService = new ChatCompletionInvoke(chatCompletionOptions);
   const quest = await invokeService.invoke({
     body: invokeBody,
@@ -217,6 +218,7 @@ async function runFullPipeline(
     apiKeyId: sessionCtx.apiKeyId,
     fileInputsAllowed: sessionCtx.fileInputsAllowed,
     apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
+    contributedToolNames,
   });
   if (!quest) throw new Error('Voice v2: failed to create quest');
   // Surface the quest id so the handler can stop it if the client disconnects.
@@ -249,6 +251,7 @@ async function runFullPipeline(
     // executors only capture the call; ElevenLabs runs the real side effect.
     // Premium overlay tool implementations merge first so client tools win.
     externalTools: { ...premiumLlmTools, ...clientTools },
+    contributedToolNames,
     videoToolConfigResolver,
   });
 

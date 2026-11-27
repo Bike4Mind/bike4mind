@@ -111,6 +111,7 @@ export class ChatCompletionInvoke {
     adminRoleWithheld,
     fileInputsAllowed,
     visitId,
+    contributedToolNames,
   }: {
     body: z.infer<typeof ChatCompletionInvokeParamsSchema>;
     userId: string;
@@ -128,6 +129,8 @@ export class ChatCompletionInvoke {
     fileInputsAllowed?: boolean;
     /** Read by the door from the request's visit cookie - never from `body` (see QuestStartBodySchema.visitId). */
     visitId?: string;
+    /** Premium tool map keys, governed by the org tool policy beyond the built-in enum. */
+    contributedToolNames: ReadonlySet<string>;
   }) {
     // Fail at the door, not later in the worker that builds the tools.
     assertAuthOriginMatchesApiKey(authOrigin, apiKeyId);
@@ -226,7 +229,11 @@ export class ChatCompletionInvoke {
     // An API-key caller chose these tools, so it is told which ones the org disallows. Session and
     // platform (internal) turns have them dropped silently when ChatCompletionProcess assembles the list.
     if (authOrigin === 'apiKey') {
-      const disallowedTools = orgDisallowedTools(tools ?? [], readOrgModelPolicy(organization?.modelPolicy));
+      const disallowedTools = orgDisallowedTools(
+        tools ?? [],
+        readOrgModelPolicy(organization?.modelPolicy),
+        contributedToolNames
+      );
       if (disallowedTools.length > 0) {
         throw new ForbiddenError(`Tools not allowed by your organization: ${disallowedTools.join(', ')}`, {
           errorCode: ORG_TOOL_NOT_ALLOWED_ERROR_CODE,

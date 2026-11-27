@@ -1,3 +1,4 @@
+import { isLinkedChatBusy } from '@shared/webLinkedChat';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
@@ -2557,7 +2558,9 @@ export function ChatShell({
                     ? 'Sign in'
                     : unbound
                       ? 'No folder'
-                      : null
+                      : conversation.session && isLinkedChatBusy(conversation.session, turnOpen)
+                        ? 'Replying'
+                        : null
                 }
                 usage={composerUsage}
                 contextStatus={
