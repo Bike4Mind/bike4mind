@@ -17,6 +17,7 @@ export const DAILY_FREE_LIMIT_REACHED_ERROR_CODE = 'daily_free_limit_reached';
 export const UPGRADE_REQUIRED_ERROR_CODE = 'upgrade_required';
 export const SPEND_FROZEN_ERROR_CODE = 'spend_frozen';
 export const ACCOUNT_SUSPENDED_ERROR_CODE = 'account_suspended';
+export const API_KEY_EXPIRED_ERROR_CODE = 'api_key_expired';
 export const RUN_NOT_FOUND_ERROR_CODE = 'run_not_found';
 export const ORG_MODEL_NOT_ALLOWED_ERROR_CODE = 'org_model_not_allowed';
 export const ORG_TOOL_NOT_ALLOWED_ERROR_CODE = 'org_tool_not_allowed';
@@ -56,6 +57,8 @@ export const API_ERROR_CODES = [
   ACCOUNT_TRUST_REQUIRED_ERROR_CODE,
   /** The credential is valid but its owner's account is suspended; the body carries `suspension` (category, terms, appeal). Not retryable. */
   ACCOUNT_SUSPENDED_ERROR_CODE,
+  /** The secret is a real MCP key past its `expiresAt`; the body may carry `renewal.renew_url`. Remediation is minting a replacement key. */
+  API_KEY_EXPIRED_ERROR_CODE,
   /** An admin paused new metered spend for the user, organization or API key; the body carries `frozenScope` and `frozenAt`, never the reason. Not retryable. */
   SPEND_FROZEN_ERROR_CODE,
   /** The user owns as many agents as their tier allows; remediation is deleting one or upgrading. */

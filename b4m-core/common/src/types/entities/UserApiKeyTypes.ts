@@ -666,6 +666,8 @@ export interface IUserApiKey {
    * scopes it holds. Chosen at mint (never inferred from the scope set) and not updatable.
    */
   explicitScopeOnly?: boolean;
+  /** When the expiry reminder for this key was claimed; set once so a re-run never emails twice. */
+  expiryReminderSentAt?: Date;
   /** Widest audience an `explicitScopeOnly` key may publish or share to. Set at mint by a session caller, never updatable. */
   exposureCeiling?: ApiKeyExposureCeiling;
   /** Optional white-label config for an embed key (see {@link IEmbedBranding}). */
@@ -792,6 +794,14 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
    * revokeIfNotDisabled.
    */
   findDisabledByKeyPrefix?: (keyPrefix: string) => Promise<IUserApiKeyDocument[]>;
+  /** ACTIVE MCP keys whose `expiresAt` is after `now` and no later than `until` and that have no reminder claimed. */
+  findExpiringExplicitScopeOnly: (now: Date, until: Date) => Promise<IUserApiKeyDocument[]>;
+  /** Marks the expiry reminder claimed. True only for the one call that claimed it, so overlapping runs send once. */
+  claimExpiryReminder: (id: string, claimedAt: Date) => Promise<boolean>;
+  /** Undoes a claim after a failed send, only if it is still the one stamped `claimedAt`, so the next run retries. */
+  releaseExpiryReminder: (id: string, claimedAt: Date) => Promise<void>;
+  /** ACTIVE MCP keys under a prefix whose `expiresAt` has passed, so an expired key can be told how to renew. */
+  findExpiredExplicitScopeOnlyByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument[]>;
   deactivateAllByUserId: (userId: string) => Promise<void>;
   /**
    * Disables the key and stamps revokedAt/revokedBy/revokedReason, only if it is not already DISABLED.

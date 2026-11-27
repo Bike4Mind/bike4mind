@@ -19,6 +19,7 @@ import {
   DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
   UPGRADE_REQUIRED_ERROR_CODE,
   ACCOUNT_SUSPENDED_ERROR_CODE,
+  API_KEY_EXPIRED_ERROR_CODE,
   RUN_NOT_FOUND_ERROR_CODE,
   RUN_BUDGET_EXHAUSTED_ERROR_CODE,
   RUN_BUDGET_NOT_RAISED_ERROR_CODE,
@@ -101,6 +102,7 @@ describe('API_ERROR_CODES', () => {
     // DAILY_FREE_LIMIT_REACHED_ERROR_CODE likewise; proven by packages/server-utils/src/billing/freeTierDailyCapGate.test.ts.
     // UPGRADE_REQUIRED_ERROR_CODE likewise; proven by packages/server-utils/src/middlewares/clientVersionGate.test.ts.
     // ACCOUNT_SUSPENDED_ERROR_CODE likewise; proven by packages/server-utils/src/auth/assertAccountStateUsable.test.ts.
+    // API_KEY_EXPIRED_ERROR_CODE likewise; proven by apps/client/server/middlewares/apiKeyAuth.test.ts.
     // RUN_NOT_FOUND_ERROR_CODE likewise; proven by apps/client/server/chatCompletion/external/sseRoute.test.ts.
     // ORG_MODEL_NOT_ALLOWED_ERROR_CODE likewise; proven by services/src/llm/modelAdmission.test.ts.
     // ORG_TOOL_NOT_ALLOWED_ERROR_CODE likewise; proven by the ChatCompletionInvoke org tool policy test.
@@ -129,6 +131,7 @@ describe('API_ERROR_CODES', () => {
       DAILY_FREE_LIMIT_REACHED_ERROR_CODE,
       UPGRADE_REQUIRED_ERROR_CODE,
       ACCOUNT_SUSPENDED_ERROR_CODE,
+      API_KEY_EXPIRED_ERROR_CODE,
       RUN_NOT_FOUND_ERROR_CODE,
       ORG_MODEL_NOT_ALLOWED_ERROR_CODE,
       ORG_TOOL_NOT_ALLOWED_ERROR_CODE,

@@ -16,6 +16,7 @@ import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 const {
   validateUserApiKeyMock,
   findOwnerOfDisabledUserApiKeyMock,
+  isExpiredExplicitScopeOnlyKeyMock,
   findByIdMock,
   resolveUntrustedKeyLimitsMock,
   isApiKeyAccessAllowedMock,
@@ -25,6 +26,7 @@ const {
   recordSideAppRefusalMock: vi.fn(),
   validateUserApiKeyMock: vi.fn(),
   findOwnerOfDisabledUserApiKeyMock: vi.fn(),
+  isExpiredExplicitScopeOnlyKeyMock: vi.fn(async () => false),
   findByIdMock: vi.fn(),
   resolveUntrustedKeyLimitsMock: vi.fn(async (_owner: unknown, key: { rateLimit: unknown }) => ({
     rateLimit: key.rateLimit,
@@ -43,6 +45,7 @@ vi.mock('@bike4mind/services', async importOriginal => ({
   userApiKeyService: {
     validateUserApiKey: validateUserApiKeyMock,
     findOwnerOfDisabledUserApiKey: findOwnerOfDisabledUserApiKeyMock,
+    isExpiredExplicitScopeOnlyKey: isExpiredExplicitScopeOnlyKeyMock,
   },
 }));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
@@ -755,6 +758,56 @@ describe('apiKeyAuth suspended owner', () => {
     await run([ApiKeyScope.AI_CHAT], makeReq());
 
     expect(findOwnerOfDisabledUserApiKeyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('apiKeyAuth with an expired MCP key', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    validateUserApiKeyMock.mockResolvedValue({ isValid: false, reason: 'not_found' });
+    findOwnerOfDisabledUserApiKeyMock.mockResolvedValue(null);
+    isExpiredExplicitScopeOnlyKeyMock.mockResolvedValue(false);
+  });
+
+  it('answers a matching expired MCP key with api_key_expired and a renewal link', async () => {
+    isExpiredExplicitScopeOnlyKeyMock.mockResolvedValue(true);
+    vi.stubEnv('APP_URL', 'https://app.example.com');
+    try {
+      const { passed, error } = await run([ApiKeyScope.ME_READ], makeReq());
+      expect(passed).toBe(false);
+      expect(error).toBeInstanceOf(UnauthorizedError);
+      expect(error?.message).toBe('API key expired');
+      expect(isExpiredExplicitScopeOnlyKeyMock).toHaveBeenCalledWith(KEY, expect.anything());
+      expect((error as UnauthorizedError).additionalInfo).toEqual({
+        errorCode: 'api_key_expired',
+        renewal: { renew_url: 'https://app.example.com/profile?tab=api-keys' },
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('omits the renewal link when the deployment has no app URL', async () => {
+    isExpiredExplicitScopeOnlyKeyMock.mockResolvedValue(true);
+    vi.stubEnv('APP_URL', '');
+    try {
+      const { error } = await run([ApiKeyScope.ME_READ], makeReq());
+      expect((error as UnauthorizedError).additionalInfo).toEqual({ errorCode: 'api_key_expired' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('keeps the generic 401 for any other unknown key', async () => {
+    const { error } = await run([ApiKeyScope.ME_READ], makeReq());
+    expect(error).toBeInstanceOf(UnauthorizedError);
+    expect(error?.message).toBe('Invalid API key');
+  });
+
+  it('keeps the generic 401 when the lookup fails', async () => {
+    isExpiredExplicitScopeOnlyKeyMock.mockRejectedValue(new Error('db down'));
+    const { error } = await run([ApiKeyScope.ME_READ], makeReq());
+    expect(error?.message).toBe('Invalid API key');
   });
 });
 

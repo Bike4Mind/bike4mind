@@ -40,6 +40,7 @@ import { registerDataLakeCleanupQueue } from './dataLakeCleanupQueue';
 import { registerTelemetryCleanup } from './telemetryCleanup';
 import { registerSignupIpRetention } from './signupIpRetention';
 import { registerApiKeyBaselineCalculation } from './apiKeyBaselineCalculation';
+import { registerApiKeyExpiryReminder } from './apiKeyExpiryReminder';
 import { registerLakeInconsistencySweep } from './lakeInconsistencySweep';
 import { registerCreditLotSweep } from './creditLotSweep';
 import { registerSpendReconciliation } from './spendReconciliation';
@@ -158,6 +159,7 @@ async function main() {
   registerTelemetryCleanup(worker);
   registerSignupIpRetention(worker);
   registerApiKeyBaselineCalculation(worker);
+  registerApiKeyExpiryReminder(worker);
   registerLakeInconsistencySweep(worker);
   registerCreditLotSweep(worker);
   registerSpendReconciliation(worker);

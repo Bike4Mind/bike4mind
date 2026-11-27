@@ -231,6 +231,24 @@ export const findOwnerOfDisabledUserApiKey = async (
 };
 
 /**
+ * Whether `key` is the full secret of an MCP key that has expired, so the caller can be told to renew it
+ * rather than given a bare "Invalid API key". The secret must match, so a guessed prefix learns nothing.
+ */
+export const isExpiredExplicitScopeOnlyKey = async (
+  key: string,
+  adapters: { db: { userApiKeys: Pick<IUserApiKeyRepository, 'findExpiredExplicitScopeOnlyByKeyPrefix'> } }
+): Promise<boolean> => {
+  if (!key.startsWith('b4m_live_')) return false;
+  const candidates = await adapters.db.userApiKeys.findExpiredExplicitScopeOnlyByKeyPrefix(
+    key.substring(0, KEY_PREFIX_LENGTH)
+  );
+  for (const candidate of candidates) {
+    if (await matchStoredSecret(key, candidate)) return true;
+  }
+  return false;
+};
+
+/**
  * Validate a key located BY ID - the embed session-token path holds the keyId but
  * not the raw secret, so there is no prefix lookup or bcrypt. It shares the exact
  * post-lookup gates (expiry, status, last-used) with validateUserApiKey via
