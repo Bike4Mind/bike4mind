@@ -17,6 +17,7 @@
  *   app/premium-generated/premiumWorkspaceCopyEntitlements.generated.ts - workspace copy grants
  *   app/premium-generated/premiumWorkspaceGrantDisplays.generated.ts - how a grant shows its workspace
  *   app/premium-generated/premiumToolDisplayLabels.generated.ts - overlay tool display names
+ *   app/premium-generated/premiumToolRunningCopy.generated.ts - overlay tool loading copy
  *   server/premium-generated/premiumContracts.generated.ts - API contract contributions
  *   server/premium-generated/deploymentOpenApi.generated.ts - deployment spec patch (null form)
  *
@@ -770,37 +771,56 @@ function generateWorkspaceCopyEntitlements(packages) {
 const TOOL_ID_RE = /^[a-z0-9][a-z0-9_.-]*$/i;
 
 function generateToolDisplayLabels(packages) {
-  const outPath = join(GENERATED_DIR, 'premiumToolDisplayLabels.generated.ts');
-  const typeImport = `import type { PremiumToolDisplayLabels } from '../premiumContract';`;
+  generateToolStringMap(packages, {
+    key: 'toolDisplayLabels',
+    file: 'premiumToolDisplayLabels.generated.ts',
+    typeName: 'PremiumToolDisplayLabels',
+    exportName: 'premiumToolDisplayLabels',
+  });
+}
+
+// Loading copy shown while an overlay tool runs (b4mContributions.toolRunningCopy), same shape and limits.
+function generateToolRunningCopy(packages) {
+  generateToolStringMap(packages, {
+    key: 'toolRunningCopy',
+    file: 'premiumToolRunningCopy.generated.ts',
+    typeName: 'PremiumToolRunningCopy',
+    exportName: 'premiumToolRunningCopy',
+  });
+}
+
+function generateToolStringMap(packages, { key, file, typeName, exportName }) {
+  const outPath = join(GENERATED_DIR, file);
+  const typeImport = `import type { ${typeName} } from '../premiumContract';`;
 
   // tool id -> { label, from }
   const merged = new Map();
   for (const pkg of packages) {
-    const declared = pkg.contributions.toolDisplayLabels;
+    const declared = pkg.contributions[key];
     if (declared === undefined) continue;
     if (!isPlainObject(declared)) {
       throw new Error(
-        `[codegen] invalid toolDisplayLabels from package "${pkg.name}": ` +
+        `[codegen] invalid ${key} from package "${pkg.name}": ` +
           `expected an object of tool id -> label, got ${JSON.stringify(declared)}`
       );
     }
     for (const [toolId, label] of Object.entries(declared)) {
       if (!TOOL_ID_RE.test(toolId)) {
         throw new Error(
-          `[codegen] invalid toolDisplayLabels tool id from package "${pkg.name}": ` +
+          `[codegen] invalid ${key} tool id from package "${pkg.name}": ` +
             `${JSON.stringify(toolId)} is not of [A-Za-z0-9_.-]`
         );
       }
       if (typeof label !== 'string' || label.length > GRANT_LABEL_MAX || !GRANT_LABEL_RE.test(label)) {
         throw new Error(
-          `[codegen] invalid toolDisplayLabels label for "${toolId}" from package "${pkg.name}": ` +
+          `[codegen] invalid ${key} label for "${toolId}" from package "${pkg.name}": ` +
             `${JSON.stringify(label)} must be one trimmed line of at most ${GRANT_LABEL_MAX} characters`
         );
       }
       const prior = merged.get(toolId);
       if (prior && prior.label !== label) {
         throw new Error(
-          `[codegen] toolDisplayLabels names "${toolId}" differently in packages "${prior.from}" and ` +
+          `[codegen] ${key} names "${toolId}" differently in packages "${prior.from}" and ` +
             `"${pkg.name}"; declare its label in one.`
         );
       }
@@ -813,7 +833,7 @@ function generateToolDisplayLabels(packages) {
 
   writeFile(
     outPath,
-    `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumToolDisplayLabels: PremiumToolDisplayLabels = ${body};\n`
+    `${GENERATED_BANNER}\n${typeImport}\n\nexport const ${exportName}: ${typeName} = ${body};\n`
   );
 }
 
@@ -2326,6 +2346,7 @@ generateLocalStorageKeyPrefixes(packages);
 generateWorkspaceCopyEntitlements(packages);
 generateWorkspaceDeniedTools(packages);
 generateToolDisplayLabels(packages);
+generateToolRunningCopy(packages);
 generateEntitlementGrants(packages);
 generateApiKeyScopes(packages);
 generateInfraResources(packages);
