@@ -1,4 +1,4 @@
-import type { APIRequest, APIRequestContext, APIResponse, BrowserContext, Page } from '@playwright/test';
+import type { APIRequest, APIRequestContext, APIResponse, BrowserContext, Route } from '@playwright/test';
 
 const WAF_BYPASS_HEADER = 'x-e2e-waf-bypass';
 const SCOPED_METHODS = new Set(['fetch', 'get', 'post', 'put', 'patch', 'delete', 'head']);
@@ -22,17 +22,84 @@ export function wafBypassHeaders(): Record<string, string> {
  * Adds the header to every browser request on the API origin (pages, static assets, API calls)
  * and nowhere else. A context-wide extraHTTPHeaders would also reach third-party origins and
  * break their CORS preflights. Traces record it, so e2e-run.yml scrubs the token from test
- * output before upload. Install it before other routes: later handlers run first and must
+ * output before upload. It is a context route, so page routes (turnstile.ts) run first and must
  * route.fallback() to reach it.
  */
-export async function installWafBypass(target: Page | BrowserContext): Promise<void> {
+export async function installWafBypass(context: BrowserContext): Promise<void> {
   const headers = wafBypassHeaders();
   if (!headers[WAF_BYPASS_HEADER]) return;
   const origin = apiOrigin();
-  await target.route(
+  await context.route(
     url => url.origin === origin,
-    route => route.continue({ headers: { ...route.request().headers(), ...headers } })
+    route => continueWithBypass(route, origin, headers)
   );
+}
+
+/**
+ * route.fetch() with the header for a request on the API origin, following no redirect: headers
+ * given to route.fetch or route.continue also ride every redirect the request takes, whatever
+ * its origin.
+ */
+export async function fetchWithWafBypass(route: Route): Promise<APIResponse> {
+  const bypass = wafBypassHeaders();
+  const onOrigin = new URL(route.request().url()).origin === apiOrigin();
+  return route.fetch({ headers: { ...route.request().headers(), ...(onOrigin ? bypass : {}) }, maxRedirects: 0 });
+}
+
+function redirectMethod(status: number, method: string): { method: string; dropBody: boolean } {
+  const toGet =
+    ((status === 301 || status === 302) && method === 'POST') || (status === 303 && !['GET', 'HEAD'].includes(method));
+  return toGet ? { method: 'GET', dropBody: true } : { method, dropBody: false };
+}
+
+const BODY_HEADERS = ['content-type', 'content-length', 'content-encoding'];
+
+/**
+ * Sends a browser request through route.fetch with the header and follows same-origin redirects
+ * itself, so no off-origin hop sees the token. A navigation gets its redirect back to follow (the
+ * address bar must show the real URL; its next hop goes without the header). A subresource's
+ * off-origin hop is fetched here without the header, since Chromium fails both a fulfilled
+ * redirect and a cross-origin route.continue url on one.
+ */
+async function continueWithBypass(route: Route, origin: string, bypass: Record<string, string>): Promise<void> {
+  const request = route.request();
+  let url = request.url();
+  let method = request.method();
+  let headers: Record<string, string> = { ...request.headers(), ...bypass };
+  let postData: Buffer | undefined = request.postDataBuffer() ?? undefined;
+  try {
+    for (let followed = 0; ; followed++) {
+      const response = await route.fetch({ url, method, headers, postData, maxRedirects: 0 });
+      const status = response.status();
+      const location = response.headers()['location'];
+      if (
+        !REDIRECT_STATUSES.has(status) ||
+        !location ||
+        request.isNavigationRequest() ||
+        followed >= DEFAULT_MAX_REDIRECTS
+      ) {
+        return await route.fulfill({ response });
+      }
+      const next = new URL(location, url);
+      const hop = redirectMethod(status, method);
+      method = hop.method;
+      if (hop.dropBody) {
+        postData = undefined;
+        headers = withoutHeaders(headers, BODY_HEADERS) as Record<string, string>;
+      }
+      await response.dispose();
+      if (next.origin !== origin) {
+        const offOrigin = withoutHeaders(headers, [WAF_BYPASS_HEADER]) as Record<string, string>;
+        return await route.fulfill({
+          response: await route.fetch({ url: next.href, method, postData, headers: offOrigin }),
+        });
+      }
+      url = next.href;
+    }
+  } catch {
+    // The page closed or the network failed mid-request; fail the request, never send it bare.
+    await route.abort().catch(() => {});
+  }
 }
 
 function withoutHeaders(headers: FetchOptions['headers'], names: string[]): FetchOptions['headers'] {
@@ -50,9 +117,10 @@ async function sendWithBypass(
   bypass: Record<string, string>,
   initialMethod: string,
   url: string,
-  options: FetchOptions = {}
+  options: FetchOptions = {},
+  defaultMaxRedirects = DEFAULT_MAX_REDIRECTS
 ): Promise<APIResponse> {
-  const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
+  const maxRedirects = options.maxRedirects ?? defaultMaxRedirects;
   let method = initialMethod;
   let current: FetchOptions = { ...options };
   let target = url;
@@ -69,16 +137,13 @@ async function sendWithBypass(
     const next = new URL(location, new URL(response.url()));
     if (next.origin !== origin) return response;
 
-    const status = response.status();
+    const hop = redirectMethod(response.status(), method);
     let headers = withoutHeaders(current.headers, ['cookie']);
     current = { ...current, params: undefined };
-    if (
-      ((status === 301 || status === 302) && method === 'POST') ||
-      (status === 303 && !['GET', 'HEAD'].includes(method))
-    ) {
-      method = 'GET';
+    method = hop.method;
+    if (hop.dropBody) {
       current = { ...current, data: undefined, form: undefined, multipart: undefined };
-      headers = withoutHeaders(headers, ['content-type', 'content-length', 'content-encoding']);
+      headers = withoutHeaders(headers, BODY_HEADERS);
     }
     current.headers = headers;
     await response.dispose();
@@ -89,9 +154,10 @@ async function sendWithBypass(
 /**
  * Wraps an APIRequestContext so calls to a string URL on the API origin carry the header;
  * Request objects and other origins pass through untouched, and caller headers win. Returns
- * `ctx` itself when the token is unset.
+ * `ctx` itself when the token is unset. `defaultMaxRedirects` mirrors the context's own
+ * maxRedirects, which Playwright applies to calls that set none.
  */
-export function scopeWafBypass(ctx: APIRequestContext): APIRequestContext {
+export function scopeWafBypass(ctx: APIRequestContext, defaultMaxRedirects = DEFAULT_MAX_REDIRECTS): APIRequestContext {
   const bypass = wafBypassHeaders();
   if (!bypass[WAF_BYPASS_HEADER]) return ctx;
   const origin = apiOrigin();
@@ -105,7 +171,7 @@ export function scopeWafBypass(ctx: APIRequestContext): APIRequestContext {
           return value.call(target, urlOrRequest, options);
         }
         const method = prop === 'fetch' ? (options?.method ?? 'GET').toUpperCase() : prop.toUpperCase();
-        return sendWithBypass(target, origin, bypass, method, urlOrRequest, options);
+        return sendWithBypass(target, origin, bypass, method, urlOrRequest, options, defaultMaxRedirects);
       };
     },
   });
@@ -115,5 +181,5 @@ export async function newWafRequestContext(
   factory: APIRequest,
   options?: Parameters<APIRequest['newContext']>[0]
 ): Promise<APIRequestContext> {
-  return scopeWafBypass(await factory.newContext(options));
+  return scopeWafBypass(await factory.newContext(options), options?.maxRedirects ?? DEFAULT_MAX_REDIRECTS);
 }

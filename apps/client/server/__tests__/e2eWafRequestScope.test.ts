@@ -184,4 +184,14 @@ describe('scopeWafBypass', () => {
     await scoped.get('/api/x');
     expect(fake.calls[0].options?.headers).toEqual({ 'x-e2e-waf-bypass': 'waf-token' });
   });
+
+  it('applies the context-level maxRedirects to calls that set none', async () => {
+    const fake = createFakeContext([
+      { status: 302, location: '/api/a' },
+      { status: 302, location: '/api/b' },
+    ]);
+    const newContext = vi.fn().mockResolvedValue(fake.ctx);
+    const scoped = await newWafRequestContext({ newContext } as unknown as APIRequest, { maxRedirects: 1 });
+    await expect(scoped.get('/api/start')).rejects.toThrow('Max redirect count exceeded');
+  });
 });

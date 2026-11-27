@@ -1,6 +1,7 @@
 import { existsSync } from 'fs';
 import path from 'path';
 import { Resource } from 'sst';
+import { wafBypassHeaders } from './helpers/waf-bypass';
 
 // Age cutoff for the orphan sweep, in minutes. 6h is far above the longest CI run
 // (ai-latency cells allow 90 min) so a concurrent suite is never in range.
@@ -40,7 +41,8 @@ export default async function globalSetup() {
 
   const response = await fetch(cleanupUrl, {
     method: 'DELETE',
-    headers: { 'x-e2e-cleanup-secret': secret },
+    headers: { ...wafBypassHeaders(), 'x-e2e-cleanup-secret': secret },
+    redirect: 'manual',
   });
 
   if (response.ok) {

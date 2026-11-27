@@ -4,7 +4,7 @@ import { TEAMS_INVITEE_KEY, TEAMS_MANAGER_KEY, TEAMS_MEMBER_KEY, TIMEOUTS } from
 import { getTestUsers, type TestUser } from './helpers/test-users';
 import { apiAddTeamMember, apiDeleteGrantedTeam, apiGetTeam, apiGrantTeam, apiRevokeTeamGrant } from './helpers/api';
 import { AdminPage } from './pages/AdminPage';
-import { newWafRequestContext, wafBypassHeaders } from './helpers/waf-bypass';
+import { fetchWithWafBypass, newWafRequestContext } from './helpers/waf-bypass';
 import { ALL_TEAM_TABS, TeamsPage } from './pages/TeamsPage';
 
 /**
@@ -111,7 +111,7 @@ test.describe('Teams', () => {
     // Stubbed rather than toggled: enableTeamPlan is a shared admin setting, and flipping it on a
     // shared env would close team purchases for real users for the length of the test.
     await page.route('**/api/settings/fetch', async route => {
-      const response = await route.fetch({ headers: { ...route.request().headers(), ...wafBypassHeaders() } });
+      const response = await fetchWithWafBypass(route);
       const settings: { settingName: string; settingValue: unknown }[] = await response.json();
       const rest = settings.filter(s => s.settingName !== 'enableTeamPlan');
       await route.fulfill({ response, json: [...rest, { settingName: 'enableTeamPlan', settingValue: 'false' }] });

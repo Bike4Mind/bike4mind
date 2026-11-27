@@ -3,9 +3,9 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'fs';
 import path from 'path';
 
-// Every Playwright page, context and request call that reaches the stage origin must carry the WAF bypass header, or the
-// edge rate rules can block an e2e run. waf-test.ts covers the `context` and `request` fixtures;
-// anything built outside them has to opt in itself. Selfhost specs run against no stage.
+// Calls that reach the stage origin must carry the WAF bypass header, or the edge rate rules can
+// block an e2e run. waf-test.ts covers the `context` and `request` fixtures; this guard flags the
+// shapes that bypass them (below). Selfhost specs run against no stage.
 const E2E_DIR = path.join(__dirname, '..', '..', 'e2e');
 
 function listSources(dir: string): string[] {
@@ -26,11 +26,19 @@ function importsRuntimeTest(source: string): boolean {
   return false;
 }
 
+// A page's or context's own .request and route.fetch() skip the routes; route.fetch() goes through
+// fetchWithWafBypass. A node fetch() must spread wafBypassHeaders().
 function unscopedRequestCalls(source: string): string[] {
-  return [...source.matchAll(/(?:page\.request\.\w+\(|route\.fetch\()[^;]*/g)]
-    .map(([call]) => call)
-    .filter(call => !call.includes('wafBypassHeaders()'));
+  const raw = [...source.matchAll(/\b\w+\.request\.(?:fetch|get|post|put|patch|delete|head)\(|\broute\.fetch\(/g)];
+  const nodeFetch = [...source.matchAll(/(?<![\w.])fetch\([^;]*/g)].filter(
+    ([call]) => !call.includes('wafBypassHeaders()')
+  );
+  return [...raw, ...nodeFetch].map(([call]) => call);
 }
+
+const HELPER = path.join('helpers', 'waf-bypass.ts');
+// Posts to a Slack webhook, never the stage.
+const OFF_STAGE_FETCH = path.join('helpers', 'slack.ts');
 
 const READS_TEST_INFO_ONLY = path.join('helpers', 'api.ts');
 
@@ -65,7 +73,7 @@ describe('e2e WAF bypass coverage', () => {
 
   it('builds request contexts through newWafRequestContext', () => {
     const offenders = files
-      .filter(f => f.rel !== path.join('helpers', 'waf-bypass.ts'))
+      .filter(f => f.rel !== HELPER)
       .filter(f => /request\.newContext\(/.test(f.source))
       .map(f => f.rel);
     expect(offenders).toEqual([]);
@@ -73,13 +81,19 @@ describe('e2e WAF bypass coverage', () => {
 
   it('installs the bypass on every browser context it opens', () => {
     const offenders = files
-      .filter(f => count(f.source, /await browser\.newContext\(/g) > count(f.source, /installWafBypass\(context\)/g))
+      .filter(
+        f =>
+          count(f.source, /^(?!\s*\/\/).*\bbrowser\.newPage\(/gm) > 0 ||
+          count(f.source, /^(?!\s*\/\/).*\bbrowser\.newContext\(/gm) > count(f.source, /\binstallWafBypass\(\w+\)/g)
+      )
       .map(f => f.rel);
     expect(offenders).toEqual([]);
   });
 
-  it('adds the header to page.request and route.fetch calls, which skip the routes', () => {
-    const offenders = files.flatMap(f => unscopedRequestCalls(f.source).map(call => `${f.rel}: ${call.slice(0, 60)}`));
+  it('scopes request, route.fetch and node fetch calls, which skip the routes', () => {
+    const offenders = files
+      .filter(f => ![HELPER, OFF_STAGE_FETCH].includes(f.rel) && !path.basename(f.rel).startsWith('selfhost-'))
+      .flatMap(f => unscopedRequestCalls(f.source).map(call => `${f.rel}: ${call.slice(0, 60)}`));
     expect(offenders).toEqual([]);
   });
 
@@ -89,7 +103,12 @@ describe('e2e WAF bypass coverage', () => {
     expect(importsRuntimeTest("import type { test } from '@playwright/test';")).toBe(false);
     expect(importsRuntimeTest("import { expect, type TestInfo } from '@playwright/test';")).toBe(false);
     expect(unscopedRequestCalls("await page.request.get('/api/x', { headers: {} });")).toHaveLength(1);
-    expect(unscopedRequestCalls('await route.fetch();')).toHaveLength(1);
-    expect(unscopedRequestCalls('await route.fetch({ headers: { ...wafBypassHeaders() } });')).toHaveLength(0);
+    expect(unscopedRequestCalls("await context.request.post('/api/x');")).toHaveLength(1);
+    expect(unscopedRequestCalls("await scopeWafBypass(this.page.request).get('/api/x');")).toHaveLength(0);
+    expect(unscopedRequestCalls('await route.fetch({ headers: { ...wafBypassHeaders() } });')).toHaveLength(1);
+    expect(unscopedRequestCalls('await fetchWithWafBypass(route);')).toHaveLength(0);
+    expect(unscopedRequestCalls("await fetch(url, { method: 'DELETE' });")).toHaveLength(1);
+    expect(unscopedRequestCalls('await fetch(url, { headers: { ...wafBypassHeaders() } });')).toHaveLength(0);
+    expect(unscopedRequestCalls('await ctx.fetch(url);')).toHaveLength(0);
   });
 });

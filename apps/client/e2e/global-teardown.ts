@@ -3,6 +3,7 @@ import path from 'path';
 import { Resource } from 'sst';
 import { notifyCreditsReport, CREDITS_THRESHOLD } from './helpers/slack';
 import { readCreditsData } from './helpers/credits-store';
+import { wafBypassHeaders } from './helpers/waf-bypass';
 
 // Restore allowOpenRegistration to its pre-test value if core.setup enabled it. Runs before
 // cleanup (needs the still-valid setup admin token) and only when the marker says it was off,
@@ -18,8 +19,9 @@ async function restoreOpenRegistration(baseURL: string): Promise<void> {
       if (adminToken) {
         const r = await fetch(`${baseURL}/api/settings/update`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+          headers: { ...wafBypassHeaders(), 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
           body: JSON.stringify({ key: 'allowOpenRegistration', value: false }),
+          redirect: 'manual',
         });
         console.log(r.ok ? 'Restored allowOpenRegistration=false' : `Restore failed (${r.status})`);
       }
@@ -60,7 +62,8 @@ export default async function globalTeardown() {
 
   const response = await fetch(cleanupUrl, {
     method: 'DELETE',
-    headers: { 'x-e2e-cleanup-secret': secret },
+    headers: { ...wafBypassHeaders(), 'x-e2e-cleanup-secret': secret },
+    redirect: 'manual',
   });
 
   // Log results but don't fail the suite
