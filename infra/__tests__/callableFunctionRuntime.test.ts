@@ -54,8 +54,17 @@ describe('callable function runtime isolation', () => {
   it('links nothing and holds no secrets, permissions, or environment', () => {
     expect(source).not.toMatch(/\blink\b/);
     expect(source).not.toMatch(/\bsecrets\b/);
-    // Only the callers' handle at the end names permissions: the grant to invoke this function.
-    expect(source.slice(0, source.indexOf('type RuntimeGrant'))).not.toMatch(/\bpermissions\s*:/);
+    // Only the callers' handle (and its type) names permissions: the grant to invoke this function.
+    const handleAt = source.indexOf('export const callableFunctionRuntimeForCallers');
+    expect(handleAt, 'callableFunctionRuntimeForCallers not found').toBeGreaterThan(-1);
+    const handle = source.slice(handleAt, source.indexOf(';\n', handleAt) + 1);
+    const grantType = `type RuntimeGrant = ${balanced(source, source.indexOf('type RuntimeGrant'), '{', '}')}`;
+    expect(handle).toMatch(/\bpermissions\s*:/);
+    const stray = source
+      .replace(grantType, '')
+      .replace(handle, '')
+      .match(/^.*\bpermissions\s*:.*$/m)?.[0];
+    expect(stray, 'permissions: outside callableFunctionRuntimeForCallers').toBeUndefined();
     expect(source).not.toMatch(/DEFAULT_LAMBDA_ENVIRONMENT/);
     expect(fn).not.toMatch(/\benvironment\s*:/);
   });
