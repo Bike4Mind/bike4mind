@@ -17,9 +17,9 @@ import {
   assertFunctionsEnabled,
   functionsRateLimit,
   invokeAnswer,
-  loadLiveFunction,
   syncTimeoutError,
 } from '@server/callableFunctions/publicFunctions';
+import { loadLiveFunctionForCall } from '@server/callableFunctions/restRefusals';
 
 const handler = nextRouteForContract(invokeFunctionContract, {
   maxBodySize: FUNCTION_INVOKE_MAX_BODY_BYTES,
@@ -27,7 +27,11 @@ const handler = nextRouteForContract(invokeFunctionContract, {
 }).post(async (req, res) => {
   const startedAt = Date.now();
   await assertFunctionsEnabled(req.user);
-  const fn = await loadLiveFunction(req.user, req.validatedParams.id);
+  const fn = await loadLiveFunctionForCall(req.validatedParams.id, {
+    user: req.user,
+    apiKeyId: req.apiKeyInfo?.keyId,
+    logger: req.logger,
+  });
   const request = {
     caller: { id: req.user.id },
     functionId: fn.id,

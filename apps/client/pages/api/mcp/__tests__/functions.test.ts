@@ -313,6 +313,37 @@ describe('route wiring', () => {
   it('uses its own per-user rate-limit bucket', () => {
     expect(rateLimitBuckets).toEqual(['/api/mcp/functions']);
   });
+
+  it('names Bearer in the challenge on a 401', () => {
+    expect(h.baseApiOptions[0]?.authChallenge).toBe('Bearer');
+  });
+});
+
+describe('rate cost', () => {
+  const skip = h.baseApiOptions[0]?.skipApiKeyRateLimit as (req: { body: unknown }) => boolean;
+
+  it('leaves the handshake out of the key limit and charges the messages that do work', () => {
+    expect(skip({ body: { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} } })).toBe(true);
+    expect(skip({ body: { jsonrpc: '2.0', method: 'notifications/initialized' } })).toBe(true);
+    expect(skip({ body: { jsonrpc: '2.0', id: 2, method: 'tools/call', params: {} } })).toBe(false);
+    expect(skip({ body: { jsonrpc: '2.0', id: 3, method: 'tools/list' } })).toBe(false);
+    expect(skip({ body: [{ method: 'initialize' }] })).toBe(false);
+    expect(skip({ body: undefined })).toBe(false);
+  });
+
+  it('leaves the handshake out of the per-user limit too', async () => {
+    h.limited.value = true;
+    const init = await post({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } },
+    });
+    expect(init.status).toBe(200);
+    expect(
+      (await post({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'beam_midspan_deflection' } })).status
+    ).toBe(429);
+  });
 });
 
 describe('tools/list', () => {
@@ -407,8 +438,26 @@ describe('tools/call', () => {
     const result = callResult(
       await client.callTool({ name: 'beam_midspan_deflection', arguments: { load: 2, span: 'four' } })
     );
-    expect(result).toEqual({ isError: true, content: [{ type: 'text', text: 'Input span must be a number.' }] });
+    expect(result).toEqual({
+      isError: true,
+      content: [{ type: 'text', text: 'Input span must be a number.' }],
+      _meta: { problems: [{ path: 'span', message: 'must be a number' }] },
+    });
     expect(h.runner).not.toHaveBeenCalled();
+    await client.close();
+  });
+
+  it('carries every problem in the error data, as the REST 422 does', async () => {
+    const client = await connect();
+    const result = callResult(
+      await client.callTool({ name: 'beam_midspan_deflection', arguments: { load: 'heavy', span: -1 } })
+    );
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/\(and 1 more\)\.$/);
+    expect(result._meta?.problems).toEqual([
+      { path: 'load', message: 'must be a number' },
+      { path: 'span', message: expect.any(String) },
+    ]);
     await client.close();
   });
 

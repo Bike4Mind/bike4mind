@@ -40,10 +40,13 @@ import { resolveOrgApiKeyReach } from '@server/organizations/orgApiKeyReach';
 
 type ScopeForbiddenDetail = Pick<z.infer<typeof ScopeForbiddenErrorSchema>, 'required_scopes' | 'also_required_scopes'>;
 
+/** Comma-separated scopes of the API key that authenticated the request, on every response past key validation. */
+export const API_KEY_SCOPES_HEADER = 'X-Api-Key-Scopes';
+
 /**
  * The typed members of the scope 403 (ScopeForbiddenErrorSchema). Names only what the
- * route requires - never the key's held scopes, which the caller already knows and a
- * leaked key should not enumerate. A confined key on a scope-less route gets neither.
+ * route requires; the key's own scopes ride in API_KEY_SCOPES_HEADER. A confined key on a
+ * scope-less route gets neither.
  */
 function scopeForbiddenDetail(
   requiredScopes: ApiKeyScopeValue[] | undefined,
@@ -127,6 +130,10 @@ export const apiKeyAuth = (
         if (validation.reason === 'not_found') await refuseIfSuspendedOwner(apiKey, req.logger);
         throw new UnauthorizedError('Invalid API key');
       }
+
+      // Set before the scope gate so its 403 carries it too: the one read of its own scopes open to every key,
+      // confined ones included. The CLI's MCP server reads it (packages/cli/src/mcp/b4mApiClient.ts).
+      res.setHeader(API_KEY_SCOPES_HEADER, (validation.scopes ?? []).join(','));
 
       // Check required scopes (OR / "any of" semantics): the key must hold at
       // least one of the required scopes. Matches the CLI verifyApiKey convention

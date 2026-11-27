@@ -30,6 +30,7 @@ const h = vi.hoisted(() => ({
   functions: [] as Record<string, unknown>[],
   artifacts: [] as { id: string; userId: string; version: number; deletedAt: Date | null }[],
   calls: [] as Record<string, unknown>[],
+  recordFails: { value: false },
   runner: vi.fn(),
   runnerConfigured: { value: true },
   limitMs: { value: 30_000 },
@@ -136,6 +137,7 @@ vi.mock('@bike4mind/database', async () => ({
   },
   callableFunctionCallRepository: {
     record: async (row: Record<string, unknown>) => {
+      if (h.recordFails.value) throw new Error('db down');
       h.calls.push(row);
       // A 24-hex id, as Mongo would give, so the poll route reads it.
       return { ...row, id: `6c${String(h.calls.length).padStart(22, '0')}` };
@@ -285,6 +287,7 @@ beforeEach(() => {
   h.sent = [];
   h.sendFails.value = false;
   h.calls = [];
+  h.recordFails.value = false;
   h.functions = [
     fnDoc(LIVE_ID),
     fnDoc(DRAFT_ID, { slug: 'beam_draft', state: 'draft', trustLabel: undefined }),
@@ -448,6 +451,35 @@ describe('not found', () => {
     expect(await call(getRoute, { query: { id } })).toEqual(missing);
     expect(await invoke(id, { input: { load: 1, span: 2 } })).toEqual(missing);
     expect(h.runner).not.toHaveBeenCalled();
+  });
+
+  it('writes one refused row per invoke of a function the caller cannot see, without inputs or outputs', async () => {
+    await invoke(OTHERS_ID, { input: { load: 1, span: 2 } });
+    await invoke(DRAFT_ID, { input: { load: 1, span: 2 } });
+    await invoke('not-an-id', { input: { load: 1, span: 2 } });
+    expect(h.calls).toHaveLength(3);
+    for (const row of h.calls) {
+      expect(row).toMatchObject({ callerUserId: 'u1', surface: 'rest', apiKeyId: 'k1', outcome: 'refused' });
+      expect(row).not.toHaveProperty('inputs');
+      expect(row).not.toHaveProperty('outputs');
+    }
+    expect(h.calls.map(row => [row.functionId, row.reason, row.ownerUserId])).toEqual([
+      ['unknown', 'not_found', undefined],
+      [DRAFT_ID, 'not_live', 'u1'],
+      ['unknown', 'not_found', undefined],
+    ]);
+  });
+
+  it('still answers the 404 when the refusal row cannot be written', async () => {
+    h.recordFails.value = true;
+    const res = await invoke(DRAFT_ID, { input: { load: 1, span: 2 } });
+    expect(res).toEqual({ status: 404, body: { error: 'Function not found' } });
+    expect(logger.warn).toHaveBeenCalledWith('[functions] refusal row not written', { message: 'db down' });
+  });
+
+  it('writes no row for a read of a function the caller cannot see', async () => {
+    await call(getRoute, { query: { id: OTHERS_ID } });
+    expect(h.calls).toHaveLength(0);
   });
 
   it('answers a turned-off function and one whose artifact was deleted with the same 404 on read and invoke', async () => {
