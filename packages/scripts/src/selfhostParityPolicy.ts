@@ -318,7 +318,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'function:infra/secretsAtRestKeyAccess.ts:SecretsAtRestUnwrapProbe',
-    '55e63d020abbe89054763b16c8e0a549073956db57e4f56779a37fc425f7a4a7',
+    'dcaf3449efdf5f42c022e2691e87bdd4448411cb7ced16daa0ae6615a506145a',
     'Manual check that a VPC function reaches KMS; self-host has no KMS key or VPC.'
   ),
   gap(
@@ -1329,7 +1329,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    '9e847b73021376718441c015057ecd8599e2beca62960c464de16be4068d0827',
+    'b9163f7011d2ab55b80affad5148b37bb258eb77cd00edcb371ddc4f14161aa1',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gapBecause(
