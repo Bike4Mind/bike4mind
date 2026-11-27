@@ -17,6 +17,9 @@ const h = vi.hoisted(() => ({
   artifactCreate: vi.fn(),
   artifactUpdate: vi.fn(),
   artifactDelete: vi.fn(),
+  summary: { value: { since: new Date(0), total: 0, outcomes: {}, recent: [] } as Record<string, unknown> },
+  runTests: vi.fn(),
+  promote: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -64,6 +67,12 @@ vi.mock('@bike4mind/server-utils/callableFunctions/access', async () => {
 vi.mock('@bike4mind/services', () => ({
   artifactService: { create: h.artifactCreate, update: h.artifactUpdate, delete: h.artifactDelete },
 }));
+
+// The sandbox, object store, and fetch behind these operations are not under test: the routes and their mappers are.
+const detailOf = async (actor: { id: string }, id: string) => {
+  const { getCallableFunction } = await import('@bike4mind/server-utils/callableFunctions/registry');
+  return getCallableFunction(actor, id);
+};
 
 type Owner = { ownerType: string; ownerKey: string };
 const mine = (id: string, owner: Owner) => h.functions.find(fn => fn.id === id && fn.ownerKey === owner.ownerKey);
@@ -113,7 +122,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
     deleteForFunctionExceptUsers: async () => undefined,
   },
   callableFunctionCallRepository: {
-    summarizeForOwner: async () => ({ since: new Date(0), total: 0, outcomes: {}, recent: [] }),
+    summarizeForOwner: async () => h.summary.value,
   },
   artifactRepository: {
     find: async (filter: { id: { $in: string[] }; userId: string }) =>
@@ -130,6 +139,24 @@ vi.mock('@bike4mind/database', async importOriginal => ({
 vi.mock('@bike4mind/server-utils/callableFunctions/dataPins', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/server-utils/callableFunctions/dataPins')>()),
   deleteCallableFunctionDataObjects: async () => undefined,
+  pinCallableFunctionData: async (actor: { id: string }, id: string) => detailOf(actor, id),
+  unpinCallableFunctionData: async (actor: { id: string }, id: string) => detailOf(actor, id),
+}));
+vi.mock('@bike4mind/server-utils/callableFunctions/sources', () => ({
+  setCallableFunctionSources: async (actor: { id: string }, id: string) => detailOf(actor, id),
+}));
+// The owner read stays real, so a function that is not the caller's is refused as it is in production.
+vi.mock('@bike4mind/server-utils/callableFunctions/testRun', () => ({
+  runCallableFunctionTests: async (actor: { id: string }, id: string) => {
+    await detailOf(actor, id);
+    return h.runTests();
+  },
+}));
+vi.mock('@bike4mind/server-utils/callableFunctions/promote', () => ({
+  promoteCallableFunction: async (actor: { id: string }, id: string) => {
+    await detailOf(actor, id);
+    return h.promote();
+  },
 }));
 
 const { default: collectionRoute } = await import('@pages/api/v1/functions/index');
@@ -388,10 +415,140 @@ describe("authoring the key owner's own function", () => {
     expect(res.body.code).toBe('not_live');
   });
 
-  it('answers 403 on every authoring route while callable functions are off', async () => {
-    h.enabled.value = false;
-    const res = await call(sourceRoute, { query: { id: OWNED_ID } });
-    expect(res.status).toBe(403);
+  it.each([
+    ['create', collectionRoute, { method: 'POST', body: { code: CODE, contract: CONTRACT } }],
+    ['read code', sourceRoute, {}],
+    ['save code', codeRoute, { method: 'PUT', body: { code: CODE, contract: CONTRACT, pin_version: 3 } }],
+    ['turn off', functionRoute, { method: 'PATCH', body: { enabled: false } }],
+    ['delete', functionRoute, { method: 'DELETE' }],
+    ['set examples', examplesRoute, { method: 'PUT', body: { examples: [] } }],
+    ['run tests', testRunsRoute, { method: 'POST', body: {} }],
+    ['pin data', dataRoute, { method: 'POST', body: { file_id: 'f2', name: 'more.csv' } }],
+    ['unpin data', dataNameRoute, { method: 'DELETE', query: { name: 'table.csv' } }],
+    ['set sources', sourcesRoute, { method: 'PUT', body: { sources: [] } }],
+    ['promote', promoteRoute, { method: 'POST', body: {} }],
+    ['read share', shareRoute, {}],
+    ['share', shareRoute, { method: 'PUT', body: { visibility: 'private', user_ids: ['u3'] } }],
+    ['unshare', shareRoute, { method: 'DELETE' }],
+    ['look up a recipient', recipientRoute, { query: { email: 'three@example.com' } }],
+    ['read calls', callsRoute, {}],
+    ['list mine', mineRoute, {}],
+  ] as [string, unknown, { method?: string; query?: Record<string, string>; body?: unknown }][])(
+    'answers 403 on %s while callable functions are off, writing nothing',
+    async (_action, route, options) => {
+      h.enabled.value = false;
+      const res = await call(route, { ...options, query: { id: OWNED_ID, ...options.query } });
+      expect(res.status).toBe(403);
+      expect(h.writes).toEqual([]);
+      expect(h.artifactCreate).not.toHaveBeenCalled();
+      expect(h.artifactUpdate).not.toHaveBeenCalled();
+    }
+  );
+});
+
+describe("the owner's other authoring operations answer with the mapped body", () => {
+  const serverRun = {
+    at: T0,
+    passed: 1,
+    failed: 0,
+    results: [{ name: 'unit span', kind: 'test', passed: true, outcome: 'ok', durationMs: 12, callId: 'call-1' }],
+  };
+
+  it('runs tests, mapping a case that did not run beside one that passed', async () => {
+    h.runTests.mockResolvedValue({
+      functionId: OWNED_ID,
+      passed: 1,
+      failed: 0,
+      notRun: 1,
+      results: [
+        { name: 'unit span', passed: true, outcome: 'ok', mismatch: null, durationMs: 12, callId: 'call-1' },
+        { name: 'late case', passed: false, outcome: 'not_run', reason: 'budget' },
+      ],
+    });
+    const res = await call(testRunsRoute, { method: 'POST', query: { id: OWNED_ID }, body: {} });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({
+      function_id: OWNED_ID,
+      passed: 1,
+      not_run: 1,
+      results: [
+        { name: 'unit span', passed: true, duration_ms: 12, call_id: 'call-1' },
+        { name: 'late case', passed: false, outcome: 'not_run', reason: 'budget', mismatch: null },
+      ],
+    });
+  });
+
+  it('promotes, returning the live function and the run that proved it', async () => {
+    h.promote.mockResolvedValue({ function: await detailOf({ id: 'u1' }, OWNED_ID), run: serverRun });
+    const res = await call(promoteRoute, { method: 'POST', query: { id: OWNED_ID }, body: {} });
+    expect(res.status).toBe(200);
+    const data = res.body.data as { function: { state: string }; run: { results: { duration_ms: number }[] } };
+    expect(data.function.state).toBe('live');
+    expect(data.run.results[0]!.duration_ms).toBe(12);
+  });
+
+  it.each([
+    ['pins a data file', dataRoute, { method: 'POST', body: { file_id: 'f2', name: 'more.csv' } }],
+    ['unpins a data file', dataNameRoute, { method: 'DELETE', query: { name: 'table.csv' } }],
+    ['sets live sources', sourcesRoute, { method: 'PUT', body: { sources: [] } }],
+  ] as [string, unknown, { method: string; query?: Record<string, string>; body?: unknown }][])(
+    '%s and returns the function',
+    async (_action, route, options) => {
+      const res = await call(route, { ...options, query: { id: OWNED_ID, ...options.query } });
+      expect(res.status).toBe(200);
+      expect(res.body.data).toMatchObject({ id: OWNED_ID, slug: CONTRACT.name, state: 'live' });
+    }
+  );
+
+  it('turns its function approval mode, then deletes it', async () => {
+    const patched = await call(functionRoute, {
+      method: 'PATCH',
+      query: { id: OWNED_ID },
+      body: { approval: 'always_ask' },
+    });
+    expect(patched.status).toBe(200);
+    expect(patched.body.data).toMatchObject({ id: OWNED_ID, approval: 'always_ask' });
+    const deleted = await call(functionRoute, { method: 'DELETE', query: { id: OWNED_ID } });
+    expect(deleted.status).toBe(204);
+    expect(h.writes).toContain('delete');
+  });
+
+  it('reads its share with the people it names', async () => {
+    const res = await call(shareRoute, { query: { id: SHARED_ID } });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({
+      share: { visibility: 'private', user_ids: ['u2'] },
+      people: [{ id: 'u2' }],
+    });
+  });
+
+  it('reads its calls, the owner and recipients', async () => {
+    h.summary.value = {
+      since: T0,
+      total: 1,
+      outcomes: { ok: 1 },
+      recent: [
+        { id: 'call-1', startedAt: T0, outcome: 'ok', surface: 'api', byRecipient: false, pinSeq: 1, durationMs: 9 },
+      ],
+    };
+    const res = await call(callsRoute, { query: { id: OWNED_ID } });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({
+      since: T0.toISOString(),
+      total: 1,
+      outcomes: { ok: 1 },
+      recent: [
+        {
+          id: 'call-1',
+          started_at: T0.toISOString(),
+          outcome: 'ok',
+          surface: 'api',
+          by_recipient: false,
+          pin_seq: 1,
+          duration_ms: 9,
+        },
+      ],
+    });
   });
 });
 
