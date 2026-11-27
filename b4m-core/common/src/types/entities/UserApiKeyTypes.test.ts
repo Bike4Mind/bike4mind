@@ -2,9 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   ApiKeyScope,
   CONFINED_API_KEY_SCOPES,
+  EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES,
   PUBLIC_DOC_API_KEY_SCOPES,
   UNDOCUMENTED_API_KEY_SCOPES,
   isBuiltInApiKeyScope,
+  isMintableConfinedScopeSet,
   isWellFormedApiKeyScope,
 } from './UserApiKeyTypes';
 
@@ -83,6 +85,26 @@ describe('CONFINED_API_KEY_SCOPES', () => {
 
   it('never confines admin:* (broad by design)', () => {
     expect(CONFINED_API_KEY_SCOPES).not.toContain(ApiKeyScope.ADMIN);
+  });
+});
+
+describe('isMintableConfinedScopeSet', () => {
+  const FUNCTIONS = [ApiKeyScope.FUNCTIONS_INVOKE, ApiKeyScope.FUNCTIONS_AUTHOR];
+
+  it('keeps a functions scope alone with the other one on a key a person creates', () => {
+    expect(isMintableConfinedScopeSet(FUNCTIONS)).toBe(true);
+    expect(isMintableConfinedScopeSet([ApiKeyScope.FUNCTIONS_INVOKE, ApiKeyScope.AI_GENERATE])).toBe(false);
+  });
+
+  it('lets an exchange key hold the functions scopes beside unconfined ones, and no other confined scope', () => {
+    expect(EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES).toEqual(FUNCTIONS);
+    const exchangeKey = { exchangeKey: true };
+    expect(isMintableConfinedScopeSet([ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ, ...FUNCTIONS], exchangeKey)).toBe(
+      true
+    );
+    expect(isMintableConfinedScopeSet([ApiKeyScope.FUNCTIONS_INVOKE], exchangeKey)).toBe(true);
+    expect(isMintableConfinedScopeSet([ApiKeyScope.FUNCTIONS_INVOKE, ApiKeyScope.EMBED_CHAT], exchangeKey)).toBe(false);
+    expect(isMintableConfinedScopeSet([ApiKeyScope.AI_GENERATE, ApiKeyScope.SLACK_POST], exchangeKey)).toBe(false);
   });
 });
 
