@@ -113,6 +113,15 @@ describe.each(MODALITIES)(
       expect(mutateAsync).not.toHaveBeenCalled();
     });
 
+    it('keeps the staged toggle and shows the error when the save fails', async () => {
+      mutateAsync.mockRejectedValue(new Error('Try again'));
+      renderSetting({});
+      fireEvent.click(switchFor(firstId));
+      fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+      await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('was not saved: Try again'));
+      expect(switchFor(firstId).checked).toBe(!defaultEnabled);
+    });
+
     it('disables the switches until the stored settings have loaded', () => {
       authedSettingsLoaded = false;
       renderSetting({});

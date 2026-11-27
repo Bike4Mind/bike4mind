@@ -98,6 +98,15 @@ describe('AdminOperationsModelSetting', () => {
     expect(api.put).toHaveBeenCalledWith('/api/admin/operations-model', { ...config, ...change });
   });
 
+  it('keeps the staged change and shows the error when the save fails', async () => {
+    api.put.mockRejectedValue(new Error('Try again'));
+    renderSetting();
+    await chooseTextModel('Text B');
+    fireEvent.click(screen.getByTestId('admin-save-confirm-btn'));
+    expect(await screen.findByText('Operations models was not saved: Try again.')).toBeTruthy();
+    expect(screen.getByTestId('admin-save-bar').textContent).toContain('1 unsaved change');
+  });
+
   it('blocks saving while a model id is missing', async () => {
     api.get.mockResolvedValue({ data: { modelId: 'text-a', imageModelId: 'image-a', speechModelId: '' } });
     renderSetting();
