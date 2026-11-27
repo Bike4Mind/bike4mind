@@ -254,7 +254,7 @@ export type SoundEffectJobPayload = {
   /** As SpeechJobPayload.saveToFiles. */
   saveToFiles: boolean;
   sessionId?: string;
-  /** The client a public API request came from (cli, desktop, api), stamped on its ledger row and usage event. */
+  /** The client a public API request came from (cli, desktop, mcp, api), stamped on its ledger row and usage event. */
   usageSource?: CompletionSource;
   output?: AudioJobOutput;
 };

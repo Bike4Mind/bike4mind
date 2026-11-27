@@ -996,7 +996,7 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
         },
         { $limit: 3 },
       ],
-      // Usage breakdown by request surface (web/cli/api/agent/system) for the
+      // Usage breakdown by request surface (web/cli/desktop/mcp/api/agent/system) for the
       // current period. Reads `metadata.source` set by completion-emitting
       // events (Model Started, Completion API Completed/Failed). Events
       // without `metadata.source` (legacy or non-AI counters) are excluded so

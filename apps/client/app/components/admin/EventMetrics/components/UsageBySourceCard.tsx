@@ -36,7 +36,7 @@ const sourceColor = (source: string) => SOURCE_COLORS[source] ?? FALLBACK_COLOR;
 
 /**
  * Admin widget: completion activity grouped by request surface
- * (web / cli / desktop / api / agent / system), as event counts and distinct users.
+ * (web / cli / desktop / mcp / api / agent / system), as event counts and distinct users.
  *
  * Sources `metadata.source` on CounterLog. Buckets without a source (legacy
  * events pre-instrumentation) are excluded server-side.

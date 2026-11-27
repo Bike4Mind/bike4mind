@@ -5,7 +5,7 @@ import { Fact, RelativeTime, SectionCard, formatUtc } from '../../../shared';
 import { CLIENT_SURFACE_LABELS, type AdminUserProfile } from '../userProfileModel';
 
 /**
- * Which clients (web, desktop app, CLI, API) the user has called from, per `user.clientUsage`.
+ * Which clients (web, desktop app, CLI, MCP host, API) the user has called from, per `user.clientUsage`.
  * A dash means not seen since recording began, not "never used": older use was not backfilled.
  */
 export const ClientsCard: React.FC<{ user: AdminUserProfile }> = ({ user }) => (

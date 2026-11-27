@@ -38,7 +38,7 @@ The toolbar is kept in the page URL (`range`, `start`, `end`, `compare`, `signup
 | **New signups**        | Signups in the range (real only, or all, per the Signups toggle), with the number of suspected signups underneath                                                                                                                               |
 | **Activation rate**    | The share of judged signups that came back, per the [activation funnel](#activation-funnel), with a points comparison against the previous period. Shows a dash when the range is longer than 93 days or every signup in it is too new to judge |
 
-A user is active on a day when they make at least one successful AI request that UTC day, from the web app, the CLI, Desktop or an agent run. Requests made through the public API and internal system traffic do not make a user active, so a user active only through the API is not counted in daily, weekly or monthly active users.
+A user is active on a day when they make at least one successful AI request that UTC day, from the web app, the CLI, Desktop, an MCP host or an agent run. MCP-host requests count even though they use the API key path; other requests made through the public API and internal system traffic do not make a user active, so a user active only through the API is not counted in daily, weekly or monthly active users.
 
 The tiles cover complete days only. When the range ends today, today is still counting, so it is left out of the tiles and comparisons. With **Compare** on, each tile compares against the same number of days right before the range.
 
