@@ -103,9 +103,13 @@ private struct GalleryContent: View {
   private var content: some View {
     switch (model.state, model.items.isEmpty) {
     case (.idle, true), (.loading, true):
-      ProgressView("Loading media")
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityIdentifier("media-loading")
+      SkeletonContainer(label: "Loading media") {
+        LazyVGrid(columns: columns, spacing: 2) {
+          ForEach(0..<12, id: \.self) { _ in SkeletonTile() }
+        }
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+      .accessibilityIdentifier("media-loading")
     case (.failed(let error), true):
       ContentUnavailableView {
         Label("Couldn't load your media", systemImage: "wifi.exclamationmark")
