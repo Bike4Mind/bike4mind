@@ -1,3 +1,4 @@
+import '@bike4mind/server-utils/lib/settings/registerContributedSettings';
 import {
   DEFAULT_SESSION_TURN_HISTORY_COUNT,
   NotFoundError,
