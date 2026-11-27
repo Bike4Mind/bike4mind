@@ -3009,6 +3009,11 @@ UserSchema.index(
   { nextBlockBriefAt: 1 },
   { partialFilterExpression: { nextBlockBriefAt: { $type: 'date' } }, name: 'user_nextBlockBriefAt' }
 );
+// Serves the per-client sign-up counts and the admin users filter; partial because almost every user has no client.
+UserSchema.index(
+  { signupClientId: 1, createdAt: -1 },
+  { partialFilterExpression: { signupClientId: { $type: 'string' } }, name: 'user_signupClientId_createdAt' }
+);
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
 UserSchema.index(
   { 'releasedPlatformEmailAddresses.address': 1 },
