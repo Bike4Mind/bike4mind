@@ -79,7 +79,7 @@ import {
   SubSessionsIcon,
 } from './icons';
 import { foldedParents, toggleFolded, useFoldedParents, useNestedSessions } from './nestedSessions';
-import { orchestratorLabels, toggledOrchestratorLabel } from './orchestratorIds';
+import { orchestratorLabels, toggledOrchestratorLabel } from '@shared/orchestratorLabels';
 import { matchSessionShortcut } from './rail/shortcuts';
 import { ResizeHandle } from './ResizeHandle';
 import { SectionNameDialog, type SectionNameRequest } from './SectionNameDialog';

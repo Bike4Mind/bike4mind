@@ -900,8 +900,10 @@ describe('orchestrate mode in the chat shell', () => {
 
     await clickSessionRow(noTools.title);
     expect(el('chat-session-title').textContent).toBe(noTools.title);
-    expect(query('chat-surface-toggle-orchestrate')).toBeNull();
-    expect(query('orchestrator-stage')).toBeNull();
+    // Still an orchestrator, so its Agent View matches the sidebar icon; the empty stage says why
+    // no agent can start, and there is no Orchestrate toggle to turn on.
+    expect(query('orchestrator-stage')).not.toBeNull();
+    expect(el('orchestrator-empty-state').textContent).toContain('This session cannot start agents.');
     expect(query('composer-orchestrate-toggle')).toBeNull();
   });
 

@@ -552,7 +552,7 @@ describe('ChatService', () => {
     // gets one, and the loop.
     expect(post.mock.calls[0][1].options.tools).toEqual([
       expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'todo_write' }) }),
-      expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'session_orchestrator_label' }) }),
+      expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'orchestrator_label' }) }),
       expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'web_search' }) }),
       expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'web_fetch' }) }),
       expect.objectContaining({ toolSchema: expect.objectContaining({ name: 'ask_user' }) }),

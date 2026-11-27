@@ -153,7 +153,7 @@ describe('ChatService generation tools', () => {
 
     expect(declaredTools()).toEqual([
       'todo_write',
-      'session_orchestrator_label',
+      'orchestrator_label',
       'generate_image',
       'generate_speech',
       'generate_sound_effect',
@@ -186,7 +186,7 @@ describe('ChatService generation tools', () => {
 
     expect(declaredTools()).toEqual([
       'todo_write',
-      'session_orchestrator_label',
+      'orchestrator_label',
       'web_search',
       'web_fetch',
       'ask_user',
@@ -324,7 +324,7 @@ describe('ChatService generation tools', () => {
     const request = local.mock.calls.find(([request]) => request.tools?.length)?.[0];
     expect(request?.tools?.map(entry => (entry.toolSchema as { name: string }).name)).toEqual([
       'todo_write',
-      'session_orchestrator_label',
+      'orchestrator_label',
       'generate_image',
       'generate_speech',
       'generate_sound_effect',

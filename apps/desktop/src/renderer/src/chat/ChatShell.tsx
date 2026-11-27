@@ -927,7 +927,6 @@ export function ChatShell({
     session: orchestrationSession,
     hasAgents,
     hasArchivedAgents,
-    orchestrateCapable,
   });
   const orchestrating = orchestratorPrefs.surface === 'orchestrate' && agentsSurfaceAvailable;
   // Presenter mode redacts the stage (orchestrator/presenter.ts). Around it, the header names the root as

@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
-import { isOrchestratorSession, type ChatSessionSummary } from '@shared/chat';
+import { isOrchestratorSession, MAX_SPAWN_DEPTH, type ChatSessionSummary } from '@shared/chat';
 import { archivedAgentsOf } from '@shared/spawnTree';
 import { agentStates } from './roster';
 import { agentsSurfaceAvailable } from './agentsSurface';
 import { readSurface } from './orchestratorPrefs';
-import { orchestratorLabels } from '../orchestratorIds';
+import { orchestratorLabels } from '@shared/orchestratorLabels';
 
 const NOW = '2026-11-26T00:00:00.000Z';
 
@@ -27,12 +27,11 @@ const child = (id: string, parentId: string, extra: Partial<ChatSessionSummary> 
   session(id, { origin: { parentSessionId: parentId, depth: 1, seedPrompt: 'go' }, ...extra });
 
 /** What ChatShell asks, from the same inputs it has: the session list and the root. */
-function surfaceFor(sessions: ChatSessionSummary[], rootId: string, orchestrateCapable = true): boolean {
+function surfaceFor(sessions: ChatSessionSummary[], rootId: string): boolean {
   return agentsSurfaceAvailable({
     session: sessions.find(candidate => candidate.id === rootId),
     hasAgents: agentStates(sessions, new Map(), rootId).length > 0,
     hasArchivedAgents: archivedAgentsOf(sessions, rootId).length > 0,
-    orchestrateCapable,
   });
 }
 
@@ -61,7 +60,6 @@ describe('agentsSurfaceAvailable', () => {
   it('keeps it for a session whose agents were started without Orchestrate and then archived', () => {
     const sessions = [session('root'), child('a', 'root', { archived: true })];
     expect(surfaceFor(sessions, 'root')).toBe(true);
-    expect(surfaceFor(sessions, 'root', false), 'archived agents need no spawn capability').toBe(true);
   });
 
   it('still opens such a session on chat: availability does not pick the view', () => {
@@ -89,12 +87,16 @@ describe('agentsSurfaceAvailable', () => {
     expect(surfaceFor([session('root'), child('a', 'root')], 'root')).toBe(true);
   });
 
-  it('gives no empty stage to an orchestrator that could start no agent', () => {
-    expect(surfaceFor([session('root', { orchestrator: true })], 'root', false)).toBe(false);
+  it('gives no stage to an orchestrator at the depth cap with no agents', () => {
+    const capped = session('root', {
+      orchestrator: true,
+      origin: { parentSessionId: 'p', depth: MAX_SPAWN_DEPTH, seedPrompt: 'go' },
+    });
+    expect(surfaceFor([capped], 'root')).toBe(false);
   });
 
-  it("offers it to a session labelled 'on' before any agent exists, even with no spawn capability", () => {
-    expect(surfaceFor([session('root', { orchestratorLabel: 'on' })], 'root', false)).toBe(true);
+  it("offers it to a session labelled 'on' before any agent exists", () => {
+    expect(surfaceFor([session('root', { orchestratorLabel: 'on' })], 'root')).toBe(true);
   });
 
   it("takes it away from a session labelled 'off', live agents and all", () => {
@@ -106,6 +108,12 @@ describe('agentsSurfaceAvailable', () => {
     const cases: ChatSessionSummary[][] = [
       [session('root')],
       [session('root', { orchestrator: true })],
+      [
+        session('root', {
+          orchestrator: true,
+          origin: { parentSessionId: 'p', depth: MAX_SPAWN_DEPTH, seedPrompt: 'go' },
+        }),
+      ],
       [session('root'), child('a', 'root')],
       [session('root'), child('a', 'root', { archived: true })],
       [
@@ -129,7 +137,6 @@ describe('agentsSurfaceAvailable', () => {
         session: undefined,
         hasAgents: false,
         hasArchivedAgents: false,
-        orchestrateCapable: true,
       })
     ).toBe(false);
   });

@@ -113,7 +113,7 @@ describe('ChatService tool loop', () => {
       'bash_list',
       'bash_kill',
       'todo_write',
-      'session_orchestrator_label',
+      'orchestrator_label',
       'explore',
       'web_search',
       'web_fetch',
