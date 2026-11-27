@@ -88,6 +88,30 @@ describe('SharedFunctionsSection', () => {
     expect(screen.queryByTestId('shared-function-review-card')).toBeNull();
   });
 
+  it('lists a function offered to everyone signed in after the ones shared with this person', () => {
+    const offered: ICallableFunctionShared = {
+      ...SHARED,
+      id: 'fn-2',
+      slug: 'beam_offered',
+      sharedVia: 'signed_in',
+      trustLabel: 'platform',
+      dataPins: [],
+      sources: [],
+    };
+    h.shared = [offered, SHARED];
+    renderSection();
+    const rows = screen.getAllByTestId('shared-function-row');
+    expect(rows.map(row => within(row).getByTestId('shared-function-summary').textContent)).toEqual([
+      'Shared with you by Avery Owner, promotion 2. It cannot be called until you review it.',
+      'Offered to everyone signed in by Avery Owner, promotion 2. It cannot be called until you review it.',
+    ]);
+    fireEvent.click(within(rows[1]!).getByTestId('shared-function-open-btn'));
+    expect(within(rows[1]!).getByTestId('shared-function-label').textContent).toBe(
+      'Platform: curated and checked by Bike4Mind.'
+    );
+    expect(within(rows[1]!).getByTestId('shared-function-data').textContent).toBe('Data it readsNone.');
+  });
+
   it('says what the platform label means', () => {
     h.shared = [{ ...SHARED, trustLabel: 'platform' }];
     renderSection();

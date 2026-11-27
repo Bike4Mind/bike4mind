@@ -5,6 +5,7 @@ import {
   NotFoundError,
   diffFunctionContracts,
   effectiveCallableFunctionStatus,
+  isOfferedToEverySignedInPerson,
   recipientCallableFunction,
   reviewHash,
   toCallableFunctionPublic,
@@ -67,14 +68,21 @@ async function isOrganizationMember(userId: string, organizationId: string): Pro
  * How `caller` reaches `fn`, or null when they do not: the owner; while the function is live or keeps a promotion,
  * a person named in the grants; a member of the granted project; or a member of the granted organization while that
  * organization has callable functions on. A project or organization grant holds only while the owner is still a
- * member of it.
+ * member of it. Failing those, any signed-in person while an admin offers the live record to everyone.
  */
 export async function canCallFunction(
   caller: { id: string },
   fn: Pick<ICallableFunction, 'ownerType' | 'ownerKey' | 'grants' | 'state'> &
-    Partial<Pick<ICallableFunction, 'promoted'>>
+    Partial<Pick<ICallableFunction, 'promoted' | 'trustLabel' | 'platform'>>
 ): Promise<CallableFunctionAccess | null> {
   if (fn.ownerType === 'user' && fn.ownerKey === caller.id) return 'owner';
+  return (await grantedAccess(caller, fn)) ?? (isOfferedToEverySignedInPerson(fn) ? 'signed_in' : null);
+}
+
+async function grantedAccess(
+  caller: { id: string },
+  fn: Pick<ICallableFunction, 'ownerKey' | 'grants' | 'state'> & Partial<Pick<ICallableFunction, 'promoted'>>
+): Promise<Exclude<CallableFunctionAccess, 'owner' | 'signed_in'> | null> {
   const grants = fn.grants;
   // A repin returns the function to draft and keeps its grants: recipients keep the last promotion meanwhile.
   if (!grants || (fn.state !== 'live' && !fn.promoted?.pin)) return null;
@@ -194,13 +202,22 @@ export async function shareCallableFunction(
     });
   }
 
-  // A reviewer the new grants still cover keeps their review; anyone else starts at pending if added back.
-  const reviews = await callableFunctionReviewRepository.find({ functionId: saved.id }, { userId: 1 });
-  const reviewers = [...new Set(reviews.map(review => review.userId))];
-  const covered = await Promise.all(reviewers.map(userId => canCallFunction({ id: userId }, saved)));
-  const kept = reviewers.filter((_userId, index) => covered[index] !== null);
-  await callableFunctionReviewRepository.deleteForFunctionExceptUsers(saved.id, [...kept, actor.id]);
+  await dropUncoveredCallableFunctionReviews(saved);
   return toCallableFunctionPublic(saved, await readHead(actor, saved.pin.artifactId));
+}
+
+/**
+ * Deletes the review of every person `fn` no longer reaches, after its grants or its audience change: a reviewer
+ * still covered keeps theirs, and anyone else starts at pending if covered again.
+ */
+export async function dropUncoveredCallableFunctionReviews(
+  fn: Parameters<typeof canCallFunction>[1] & { id: string }
+): Promise<void> {
+  const reviews = await callableFunctionReviewRepository.find({ functionId: fn.id }, { userId: 1 });
+  const reviewers = [...new Set(reviews.map(review => review.userId))];
+  const covered = await Promise.all(reviewers.map(userId => canCallFunction({ id: userId }, fn)));
+  const kept = reviewers.filter((_userId, index) => covered[index] !== null);
+  await callableFunctionReviewRepository.deleteForFunctionExceptUsers(fn.id, kept);
 }
 
 /**

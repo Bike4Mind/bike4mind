@@ -302,11 +302,31 @@ export const CONFINED_API_KEY_SCOPE_FAMILIES: readonly (readonly ApiKeyScope[])[
 ];
 
 /**
- * The mint half of confinement: a key holding a confined scope holds nothing else, or only scopes of that one
- * {@link CONFINED_API_KEY_SCOPE_FAMILIES} entry.
+ * Confined scopes an OAuth exchange key may hold beside its other scopes. The runtime gate confines every exchange
+ * key whatever it holds (`decideScopeGate`'s `exchangeKey`), so these add only the routes that name them.
  */
-export function isMintableConfinedScopeSet(scopes: readonly string[]): boolean {
-  const confined = scopes.some(scope => (CONFINED_API_KEY_SCOPES as readonly string[]).includes(scope));
+export const EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES: readonly ApiKeyScope[] = [
+  ApiKeyScope.FUNCTIONS_INVOKE,
+  ApiKeyScope.FUNCTIONS_AUTHOR,
+];
+
+/**
+ * The mint half of confinement: a key holding a confined scope holds nothing else, or only scopes of that one
+ * {@link CONFINED_API_KEY_SCOPE_FAMILIES} entry. An exchange key may also hold
+ * {@link EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES} beside unconfined scopes.
+ */
+export function isMintableConfinedScopeSet(
+  scopes: readonly string[],
+  options: { exchangeKey?: boolean } = {}
+): boolean {
+  const isConfined = (scope: string) => (CONFINED_API_KEY_SCOPES as readonly string[]).includes(scope);
+  if (options.exchangeKey) {
+    const rest = scopes.filter(
+      scope => !(EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES as readonly string[]).includes(scope)
+    );
+    if (rest.length < scopes.length) return !rest.some(isConfined);
+  }
+  const confined = scopes.some(isConfined);
   if (!confined || scopes.length <= 1) return true;
   return CONFINED_API_KEY_SCOPE_FAMILIES.some(family =>
     scopes.every(scope => (family as readonly string[]).includes(scope))

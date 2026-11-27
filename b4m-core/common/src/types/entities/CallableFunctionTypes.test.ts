@@ -7,6 +7,7 @@ import {
   CallableFunctionGrantVisibilitySchema,
   callableFunctionTrustLabel,
   effectiveCallableFunctionStatus,
+  isOfferedToEverySignedInPerson,
   recipientCallableFunction,
   shownCallableFunctionTrustLabel,
   toCallableFunctionDetail,
@@ -318,5 +319,21 @@ describe('the platform label', () => {
     expect(shownCallableFunctionTrustLabel(recipientCallableFunction({ ...draft, platform: undefined })!)).toBe(
       'verified'
     );
+  });
+
+  it('offers to every signed-in person only a live, marked record with the audience, never a kept promotion', () => {
+    const offered = { ...mark, audience: 'signed_in' as const };
+    expect(isOfferedToEverySignedInPerson(live({ platform: offered }))).toBe(true);
+    expect(isOfferedToEverySignedInPerson(live())).toBe(false);
+    expect(isOfferedToEverySignedInPerson(live({ platform: undefined }))).toBe(false);
+    expect(isOfferedToEverySignedInPerson(live({ platform: offered, trustLabel: 'unverified' }))).toBe(false);
+    expect(isOfferedToEverySignedInPerson(live({ platform: offered, state: 'draft' }))).toBe(false);
+    const view = toCallableFunctionShared(live({ platform: offered }), 'signed_in', {
+      ownerName: 'Owner',
+      reviewHash: 'h',
+      review: null,
+    });
+    expect(view).toMatchObject({ sharedVia: 'signed_in', trustLabel: 'platform', status: 'pending_review' });
+    expect(JSON.stringify(view)).not.toContain('audience');
   });
 });

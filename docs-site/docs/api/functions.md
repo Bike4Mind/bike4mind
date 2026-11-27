@@ -12,6 +12,8 @@ A function is a Python artifact you saved as a function and promoted to live aft
 
 In your profile, open the API keys tab, choose **New key**, and pick the **Functions** access level. The key holds the `functions:invoke` scope: it reaches only the calling routes on this page and the [MCP endpoint](./functions-mcp.md). Tick **Also write, test, promote, and share your functions** to add `functions:author`, which reaches only the [authoring routes](#author-a-function). The two may share a key, and a request to mint either together with any other scope is refused. `functions:author` calls nothing, and `functions:invoke` authors nothing. The Functions level appears only while callable functions are turned on for your account.
 
+An app that signs you in with Bike4Mind can hold the same two scopes on the short-lived key its server exchanges for you, once an admin grants them to the app and you approve them on its consent screen. That key may also hold `ai:generate` and `me:read`, and it reaches the routes on this page and those its other scopes name, nothing else. See [Building on B4M](../developers/building-on-b4m.md), section 5.
+
 Each call answers for the key's owner. A key reaches the live functions its owner owns and the live functions other people shared with them. A draft, a turned-off function, a function whose artifact was deleted, and another person's function that was not shared with you all answer `404`, the same as an id that does not exist.
 
 ## List your live functions
@@ -25,13 +27,15 @@ The response is `{ "data": [...], "next_cursor": ... }`. Each entry has `id`, `s
 
 `group` says whose the function is:
 
-| Group      | Meaning                                                                              |
-| ---------- | ------------------------------------------------------------------------------------ |
-| `own`      | You own it.                                                                          |
-| `shared`   | Another person shared it with you, by name or through a project or organization.     |
-| `platform` | Reserved for a function the platform publishes to everyone. No entry carries it now. |
+| Group      | Meaning                                                                                                       |
+| ---------- | ------------------------------------------------------------------------------------------------------------- |
+| `own`      | You own it.                                                                                                   |
+| `shared`   | Shared with you by name, project, or organization.                                                            |
+| `platform` | [Offered to everyone signed in](#functions-offered-to-everyone-signed-in), and not shared with you otherwise. |
 
-`review_status` is `null` on your own functions. On a function shared with you it is `needs_review` until you allow it, `allowed` once you have, and `withdrawn` after you take the allow back. A function whose interface changed since you allowed it reads `needs_review` again. Only an `allowed` function can be called. When two functions you reach have the same name, the shared one's `slug` ends in `_` and the last six characters of its id.
+A function both shared with you and offered to everyone signed in lists as `shared`, and stays listed when the offer ends. Your own function is always `own`.
+
+`review_status` is `null` on your own functions. On a `shared` or `platform` function it is `needs_review` until you allow it, `allowed` once you have, and `withdrawn` after you take the allow back. A function whose interface changed since you allowed it reads `needs_review` again. Only an `allowed` function can be called. When two functions you reach have the same name, the shared one's `slug` ends in `_` and the last six characters of its id.
 
 ### Trust labels
 
@@ -44,6 +48,10 @@ The response is `{ "data": [...], "next_cursor": ... }`. Each entry has `id`, `s
 | `unverified` | No cited worked example was checked when the function was promoted.         |
 
 Only a Bike4Mind admin gives the `platform` label, and only to a live, `verified` function. The label is never read from a function's name or description. Changing the function's code, data files, or sources returns it to draft and removes the label, and so does a promotion or examples change that leaves it `unverified`. Promoting it again, even as `verified`, does not bring the label back; only an admin can.
+
+### Functions offered to everyone signed in
+
+An admin can offer a `platform` function to everyone signed in. Every person then finds it under **Shared with me**, the same as a function shared with them, and reviews it before their first call. Over the API it lists and reads with `group: "platform"` and `shared_via: "signed_in"` before and after the review, and calls once reviewed. If it is also shared with you, it lists and reads as that share instead, with `group: "shared"`. The offer needs the label: it ends at once when an admin withdraws it or removes the label, or when an edit removes the label. When an admin withdraws the offer or removes the label, a person the offer alone reached starts at review again if it is offered again. An offer shows you the function's inputs and outputs only, never its code, its calls, or its data files, not even their names: a call's `stamp` lists each data file by its hash and size with an empty `name`. It does not add you to any project or organization.
 
 ## Find your functions in the app
 
@@ -62,7 +70,7 @@ curl https://app.bike4mind.com/api/v1/functions/<function-id> \
   -H 'Authorization: Bearer <your-api-key>'
 ```
 
-The response is `{ "data": { ... } }` with the list fields plus `input_schema` and `output_schema`, the JSON Schemas of the function's inputs and outputs, and three fields about a share: `shared_by` (the `name` of who shared it), `shared_via` (`person`, `project`, or `organization`), and `review_hash`. All three are `null` on your own functions. A function shared with you reads the same before and after you review it. The pinned code, its data files, and its sources are never returned.
+The response is `{ "data": { ... } }` with the list fields plus `input_schema` and `output_schema`, the JSON Schemas of the function's inputs and outputs, and three fields about a share: `shared_by` (the `name` of who shared it), `shared_via` (`person`, `project`, `organization`, or `signed_in` for a [function offered to everyone signed in](#functions-offered-to-everyone-signed-in)), and `review_hash`. All three are `null` on your own functions. A function shared with you reads the same before and after you review it. The pinned code, its data files, and its sources are never returned.
 
 ## Review a function shared with you
 

@@ -44,7 +44,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | [type] | 5 | 0 | 4 | 1 | 0 | 0 | 0 |
 | account | 1 | 0 | 0 | 1 | 0 | 0 | 0 |
 | activities | 1 | 0 | 1 | 0 | 0 | 0 | 0 |
-| admin | 377 | 0 | 196 | 174 | 0 | 7 | 70 |
+| admin | 377 | 0 | 195 | 175 | 0 | 7 | 70 |
 | agent-executions | 2 | 0 | 2 | 0 | 0 | 0 | 0 |
 | agent-quest | 1 | 0 | 0 | 0 | 0 | 1 | 1 |
 | agents | 10 | 0 | 10 | 0 | 0 | 0 | 0 |
@@ -234,7 +234,7 @@ Regenerate with `pnpm --filter @bike4mind/scripts api-routes:inventory`.
 | `/api/admin/audit-log/summary` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/data/adminAuditLog.ts` |
 | `/api/admin/billing-overview` | GET | jwt | `admin:*` | GET: ? | no | - | 1: `hooks/data/adminBillingOverview.ts` |
 | `/api/admin/bulk-create-users` | POST | jwt+key | `admin:*` | POST: `settings:manage` | no | - | 1: `components/admin/InviteCenter/BulkInvite/BulkInviteTab.tsx` |
-| `/api/admin/callable-functions/[id]/platform` | POST, DELETE | jwt+key | `admin:*` | POST: `models:curate`; DELETE: `models:curate` | no | - | 0 |
+| `/api/admin/callable-functions/[id]/platform` | POST, PATCH, DELETE | jwt | `admin:*` | POST: `models:curate`; PATCH: `models:curate`; DELETE: `models:curate` | no | - | 0 |
 | `/api/admin/campaign-watches` | GET, POST | jwt | - | GET: `support:read`; POST: `users:moderate` | no | - | 1: `hooks/data/campaignWatches.ts` |
 | `/api/admin/campaign-watches/[id]` | GET, PATCH | jwt | - | GET: `support:read`; PATCH: `users:moderate` | no | - | 1: `hooks/data/campaignWatches.ts` |
 | `/api/admin/context-telemetry` | GET | jwt+key | `admin:*` | GET: `support:read` | no | - | 1: `hooks/useContextTelemetry.ts` |

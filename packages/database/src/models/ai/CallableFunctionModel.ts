@@ -6,6 +6,7 @@ import {
   CALLABLE_FUNCTION_GRANT_LIMITS,
   CALLABLE_FUNCTION_LIMITS,
   CALLABLE_FUNCTION_OWNER_TYPES,
+  CALLABLE_FUNCTION_PLATFORM_AUDIENCES,
   CALLABLE_FUNCTION_PROMOTION_TRUST_LABELS,
   CALLABLE_FUNCTION_PROTECTED_FIELDS,
   CALLABLE_FUNCTION_SLUG_PATTERN,
@@ -23,6 +24,7 @@ import {
   type CallableFunctionExample,
   type CallableFunctionNewPin,
   type CallableFunctionOwner,
+  type CallableFunctionPlatformAudience,
   type CallableFunctionPlatformMark,
   type CallableFunctionPromote,
   type CallableFunctionRepin,
@@ -195,7 +197,11 @@ const CallableFunctionSchema = new Schema<ICallableFunctionDocument>(
     trustLabel: { type: String, enum: CALLABLE_FUNCTION_PROMOTION_TRUST_LABELS },
     platform: {
       type: new Schema(
-        { setBy: { type: String, required: true }, setAt: { type: Date, required: true } },
+        {
+          setBy: { type: String, required: true },
+          setAt: { type: Date, required: true },
+          audience: { type: String, enum: CALLABLE_FUNCTION_PLATFORM_AUDIENCES },
+        },
         { _id: false }
       ),
     },
@@ -232,10 +238,11 @@ CallableFunctionSchema.pre('validate', function () {
 
 // Its owner prefix serves the owner's list. One artifact may hold several tools, each under its own name.
 CallableFunctionSchema.index({ ownerType: 1, ownerKey: 1, slug: 1 }, { unique: true, name: 'callablefn_owner_slug' });
-// The three arms of listSharedWith.
+// The four arms of listSharedWith.
 CallableFunctionSchema.index({ 'grants.userIds': 1 }, { name: 'callablefn_grant_users' });
 CallableFunctionSchema.index({ 'grants.organizationId': 1, state: 1 }, { name: 'callablefn_grant_org_state' });
 CallableFunctionSchema.index({ 'grants.projectId': 1 }, { name: 'callablefn_grant_project' });
+CallableFunctionSchema.index({ 'platform.audience': 1 }, { name: 'callablefn_platform_audience', sparse: true });
 
 export interface ICallableFunctionModel extends Model<ICallableFunctionDocument & IMongoDocument> {}
 export const CallableFunction: ICallableFunctionModel =
@@ -534,9 +541,29 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     const result = await this.model.findOneAndUpdate(
       { _id: id, state: 'live', trustLabel: 'verified' },
-      { $set: { platform: { setBy: mark.setBy, setAt: mark.setAt } } },
+      // Field by field, so marking again keeps the audience.
+      { $set: { 'platform.setBy': mark.setBy, 'platform.setAt': mark.setAt } },
       { new: true, runValidators: true }
     );
+    return result?.toJSON() ?? null;
+  }
+
+  async setPlatformAudience(
+    id: string,
+    audience: CallableFunctionPlatformAudience | null
+  ): Promise<ICallableFunctionDocument | null> {
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    const result = audience
+      ? await this.model.findOneAndUpdate(
+          { _id: id, state: 'live', trustLabel: 'verified', platform: { $exists: true } },
+          { $set: { 'platform.audience': audience } },
+          { new: true, runValidators: true }
+        )
+      : await this.model.findOneAndUpdate(
+          { _id: id, 'platform.audience': { $exists: true } },
+          { $unset: { 'platform.audience': 1 } },
+          { new: true, runValidators: true }
+        );
     return result?.toJSON() ?? null;
   }
 
@@ -587,6 +614,8 @@ class CallableFunctionRepository extends BaseRepository<FunctionDoc> implements 
                 { 'grants.userIds': reach.userId },
                 { 'grants.visibility': 'project', 'grants.projectId': { $in: reach.projectIds } },
                 { 'grants.visibility': 'organization', 'grants.organizationId': { $in: reach.organizationIds } },
+                // `isOfferedToEverySignedInPerson`: the record itself, never a kept promotion.
+                { 'platform.audience': 'signed_in', state: 'live', trustLabel: 'verified' },
               ],
             },
           ],

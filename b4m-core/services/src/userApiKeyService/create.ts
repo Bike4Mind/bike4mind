@@ -266,8 +266,10 @@ const mintUserApiKey = async (
   // but risk. Checked before the embed-specific rules below so a mixed request like
   // ['embed:chat','notebooks:read'] reports this real reason, not a downstream missing
   // agentId. Same constant the runtime gate reads, so mint and runtime state one rule.
-  // The one exception is a family of confined scopes that serve one flow (CONFINED_API_KEY_SCOPE_FAMILIES).
-  if (!isMintableConfinedScopeSet(params.scopes)) {
+  // The one exception is a family of confined scopes that serve one flow (CONFINED_API_KEY_SCOPE_FAMILIES), and
+  // on an exchange key, which the gate confines whatever it holds, the functions scopes beside the chat ones.
+  const isExchangeKey = params.metadata.createdFrom === 'oauth-exchange';
+  if (!isMintableConfinedScopeSet(params.scopes, { exchangeKey: isExchangeKey })) {
     throw new BadRequestError(
       `A confined scope (${CONFINED_API_KEY_SCOPES.join(', ')}) must be the only scope on a key, except ${CONFINED_API_KEY_SCOPE_FAMILIES.map(family => family.join(' with ')).join('; ')}`
     );
@@ -340,7 +342,6 @@ const mintUserApiKey = async (
   // Exchange keys sit outside the standard cap only because they are short-lived and
   // tagged to one relying party (pages/api/oauth/ai-token.ts keeps one per (user, client)).
   // Refuse one that is neither, so the separate pool can't mint an unbounded long-lived key.
-  const isExchangeKey = params.metadata.createdFrom === 'oauth-exchange';
   if (isExchangeKey && (!params.expiresAt || !params.metadata.oauthClientId)) {
     throw new BadRequestError('An oauth-exchange key requires expiresAt and metadata.oauthClientId');
   }
