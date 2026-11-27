@@ -65,7 +65,7 @@ const renderTab = () => {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.currentUser = { id: 'admin1' };
-  mocks.oauthApps.mockReturnValue({ data: undefined, isLoading: true });
+  mocks.oauthApps.mockReturnValue({ data: undefined, isPending: true });
 });
 
 // Covered by InterventionHolds.test.tsx; its own queries would shift this file's api mocks.
@@ -104,19 +104,37 @@ describe('OverviewTab signed up via', () => {
     return screen.getByTestId('user-profile-fact-signup-client');
   };
 
-  it('names the client for an attributed account, and falls back to the raw id until it resolves', () => {
+  it('shows the standard empty value, not the raw id, while the client name loads', () => {
+    const fact = show({ signupClientId: 'b4m_alpha_11111111' });
+    expect(fact).not.toHaveTextContent('b4m_alpha_11111111');
+    expect(fact).toHaveTextContent('-');
+  });
+
+  it('falls back to the raw id when the lookup fails or the client has no name', () => {
+    mocks.oauthApps.mockReturnValue({ data: undefined, isPending: false, isError: true });
+    expect(show({ signupClientId: 'b4m_alpha_11111111' })).toHaveTextContent('b4m_alpha_11111111');
+  });
+
+  it('falls back to the raw id when the resolved name is null', () => {
+    mocks.oauthApps.mockReturnValue({
+      isPending: false,
+      data: { signupClient: { clientId: 'b4m_alpha_11111111', name: null }, apps: [] },
+    });
     expect(show({ signupClientId: 'b4m_alpha_11111111' })).toHaveTextContent('b4m_alpha_11111111');
   });
 
   it('shows the resolved client name', () => {
     mocks.oauthApps.mockReturnValue({
+      isPending: false,
       data: { signupClient: { clientId: 'b4m_alpha_11111111', name: 'Alpha' }, apps: [] },
     });
     expect(show({ signupClientId: 'b4m_alpha_11111111' })).toHaveTextContent('Alpha');
   });
 
-  it('says Unknown for an unattributed account', () => {
-    expect(show({ signupClientId: null })).toHaveTextContent('Unknown');
+  it('shows the standard empty value for an unattributed account', () => {
+    const fact = show({ signupClientId: null });
+    expect(fact).not.toHaveTextContent('Unknown');
+    expect(fact).toHaveTextContent('-');
   });
 });
 

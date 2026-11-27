@@ -4,6 +4,7 @@ import {
   ADMIN_USERS_PAGE_SIZES,
   ADMIN_USERS_SORT_FIELDS,
   isUtcDay,
+  SIGNUP_CLIENT_ID_PATTERN,
   USER_FUNNEL_STEP_FILTERS,
   USER_PLAN_FILTERS,
   USER_RISK_FILTERS,
@@ -201,7 +202,7 @@ const parseAcquisitionPart = (value: unknown): string | undefined => {
 const parseSignupClient = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined;
   const id = value.trim();
-  return /^[A-Za-z0-9_-]{1,100}$/.test(id) ? id : undefined;
+  return SIGNUP_CLIENT_ID_PATTERN.test(id) ? id : undefined;
 };
 
 export const USERS_SEARCH_PARSERS: {

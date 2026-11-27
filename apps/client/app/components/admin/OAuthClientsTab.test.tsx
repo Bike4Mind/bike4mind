@@ -25,6 +25,7 @@ const { api, copy, adminSettings, navigate } = vi.hoisted(() => ({
     fetchOAuthClients: vi.fn(),
     fetchOAuthClientStats: vi.fn(),
     OAUTH_CLIENTS_QUERY_KEY: 'admin-oauth-clients',
+    OAUTH_CLIENT_STATS_QUERY_KEY: 'admin-oauth-client-stats',
     createOAuthClient: vi.fn(),
     updateOAuthClient: vi.fn(),
     rotateOAuthClientSecret: vi.fn(),
@@ -540,7 +541,7 @@ describe('OAuthClientsTab usage columns', () => {
     fireEvent.click(await screen.findByTestId(`oauth-client-signups-link-${client.clientId}`));
     expect(navigate).toHaveBeenCalledWith({
       to: '/admin',
-      search: expect.objectContaining({ tab: 'users', signupClient: client.clientId }),
+      search: expect.objectContaining({ tab: 'users', signupClient: client.clientId, signedUp: 'month' }),
     });
   });
 });

@@ -111,4 +111,24 @@ describe('GET /api/admin/users/[userId]/oauth-apps', () => {
     await promise;
     expect(res._getJSONData()).toEqual({ signupClient: null, apps: [] });
   });
+
+  it('returns null names without looking clients up for a moderator lacking support:read', async () => {
+    mocks.listByUser.mockResolvedValue([row(OTHER_CLIENT, '2026-11-01T00:00:00.000Z', '2026-11-20T00:00:00.000Z')]);
+    const moderator = { id: 'u3', isAdmin: false, adminPermissions: ['users:moderate'] };
+    const { res, promise } = call({}, moderator);
+    await promise;
+    const body = res._getJSONData() as { signupClient: { name: string | null }; apps: { name: string | null }[] };
+    expect(mocks.findByClientIds).not.toHaveBeenCalled();
+    expect(body.signupClient).toEqual({ clientId: SIGNUP_CLIENT, name: null });
+    expect(body.apps[0].name).toBeNull();
+  });
+
+  it('resolves names for a delegate holding support:read', async () => {
+    mocks.findByClientIds.mockResolvedValue(new Map([[SIGNUP_CLIENT, { name: 'Alpha' }]]));
+    const delegate = { id: 'u4', isAdmin: false, adminPermissions: ['users:moderate', 'support:read'] };
+    const { res, promise } = call({}, delegate);
+    await promise;
+    expect(mocks.findByClientIds).toHaveBeenCalledTimes(1);
+    expect((res._getJSONData() as { signupClient: { name: string } }).signupClient.name).toBe('Alpha');
+  });
 });

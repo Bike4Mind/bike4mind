@@ -43,6 +43,7 @@ import {
 } from '@bike4mind/common';
 import {
   OAUTH_CLIENTS_QUERY_KEY as QUERY_KEY,
+  OAUTH_CLIENT_STATS_QUERY_KEY,
   fetchOAuthClients,
   fetchOAuthClientStats,
   createOAuthClient,
@@ -706,7 +707,7 @@ export default function OAuthClientsTab() {
   } = useQuery({ queryKey: [QUERY_KEY], queryFn: fetchOAuthClients });
   // Separate from the list so a stats failure never breaks the tab; it shows dashes instead.
   const { data: usage, isError: usageFailed } = useQuery({
-    queryKey: [QUERY_KEY, 'stats'],
+    queryKey: [OAUTH_CLIENT_STATS_QUERY_KEY],
     queryFn: fetchOAuthClientStats,
   });
   const invalidate = () => queryClient.invalidateQueries({ queryKey: [QUERY_KEY] });
@@ -870,7 +871,12 @@ export default function OAuthClientsTab() {
             component="button"
             type="button"
             level="body-sm"
-            onClick={() => navigate({ to: '/admin', search: usersTabLinkSearch({ signupClient: client.clientId }) })}
+            onClick={() =>
+              navigate({
+                to: '/admin',
+                search: usersTabLinkSearch({ signupClient: client.clientId, signedUp: 'month' }),
+              })
+            }
             data-testid={`oauth-client-signups-link-${client.clientId}`}
           >
             {`${counts.signups7d} / ${counts.signups30d}`}

@@ -1,4 +1,5 @@
 import { ApiKeyStatus } from '@bike4mind/common';
+import { signupClientIdMatch } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import {
   RISK_BAND,
@@ -149,8 +150,7 @@ export function buildAdminUsersMatch(filter: AdminUsersFilter, context: AdminUse
     );
   }
   if (filter.adminRole) conditions.push({ adminRoleIds: context.toObjectId(filter.adminRole) });
-  // The $type states the partial user_signupClientId_createdAt index's filter, which the planner needs to use it.
-  if (filter.signupClient) conditions.push({ signupClientId: { $type: 'string', $eq: filter.signupClient } });
+  if (filter.signupClient) conditions.push(signupClientIdMatch(filter.signupClient));
   return conditions.length > 0 ? { $and: conditions } : {};
 }
 

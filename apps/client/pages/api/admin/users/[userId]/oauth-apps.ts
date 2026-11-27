@@ -1,5 +1,5 @@
 import { oauthClientRepository, oauthClientSignInRepository, userRepository } from '@bike4mind/database';
-import { ApiKeyScope, MODERATION_PAGE_READ, type AdminUserOAuthApps } from '@bike4mind/common';
+import { ApiKeyScope, MODERATION_PAGE_READ, hasAdminPermission, type AdminUserOAuthApps } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 
@@ -19,9 +19,13 @@ const handler = adminApi({
 
   const rows = await oauthClientSignInRepository.listByUser(user.id);
   const signupClientId = user.signupClientId ?? null;
-  const clients = await oauthClientRepository.findByClientIds([
-    ...new Set([...(signupClientId ? [signupClientId] : []), ...rows.map(row => row.clientId)]),
-  ]);
+  // The route admits moderators; client names are the OAuth clients list's data, so they need its permission.
+  const canSeeNames = hasAdminPermission(req.user, 'support:read');
+  const clients = canSeeNames
+    ? await oauthClientRepository.findByClientIds([
+        ...new Set([...(signupClientId ? [signupClientId] : []), ...rows.map(row => row.clientId)]),
+      ])
+    : new Map<string, { name: string }>();
   const nameOf = (clientId: string) => clients.get(clientId)?.name ?? null;
 
   const body: AdminUserOAuthApps = {

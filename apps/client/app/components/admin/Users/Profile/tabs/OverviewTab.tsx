@@ -16,7 +16,7 @@ import { useUserTimeline } from '@client/app/hooks/data/adminUserTimeline';
 import { useAdminUserOAuthApps } from '@client/app/hooks/data/adminUserOAuthApps';
 import { AuditEntryDrawer } from '@client/app/components/admin/AuditLog/shared';
 import { SubscriptionSummaryList } from '../../../Subscriptions/SubscriptionSummaryList';
-import { Fact, SectionCard, StatusChip, ToggleChipGroup, formatUtc } from '../../../shared';
+import { Fact, SectionCard, StatusChip, ToggleChipGroup, formatUtcDay } from '../../../shared';
 import { typesOfCategories } from '../activitySearch';
 import { CATEGORY_OPTIONS } from './ActivityTab';
 import type { ProfileAction } from '../actions/profileActions';
@@ -67,7 +67,7 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
   const oauthApps = useAdminUserOAuthApps(user.id);
   const signupParts = [
     user.acquisition?.signupMethod,
-    user.createdAt && formatUtc(new Date(user.createdAt)).split(',')[0],
+    user.createdAt && formatUtcDay(new Date(user.createdAt)),
     network?.country,
   ].filter(Boolean);
 
@@ -90,7 +90,9 @@ const AccountCard: React.FC<{ user: AdminUserProfile; onAction: (action: Profile
       </Fact>
       <Fact label="Signup">{signupParts.length > 0 ? signupParts.join(' \u00b7 ') : null}</Fact>
       <Fact label="Signed up via" data-testid="user-profile-fact-signup-client">
-        {user.signupClientId ? (oauthApps.data?.signupClient?.name ?? user.signupClientId) : 'Unknown'}
+        {user.signupClientId && !oauthApps.isPending
+          ? (oauthApps.data?.signupClient?.name ?? user.signupClientId)
+          : null}
       </Fact>
       <Fact label="Two-factor" data-testid="user-profile-fact-mfa">
         {user.mfa?.totpEnabled || user.mfa?.passkeyEnabled ? (

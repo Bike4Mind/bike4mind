@@ -60,4 +60,25 @@ describe('OAuthAppsCard', () => {
     expect(screen.getByTestId('user-profile-oauth-apps-retry-btn')).toBeInTheDocument();
     expect(screen.queryByTestId('user-profile-oauth-apps-empty')).not.toBeInTheDocument();
   });
+
+  it('keeps the list and offers no reload when a refetch fails but data is present', () => {
+    mocks.useApps.mockReturnValue({
+      isError: true,
+      refetch: vi.fn(),
+      data: {
+        signupClient: null,
+        apps: [
+          {
+            clientId: 'b4m_beta_22222222',
+            name: 'Beta',
+            firstSignInAt: '2026-11-01T10:00:00.000Z',
+            lastSignInAt: '2026-11-20T10:00:00.000Z',
+          },
+        ],
+      },
+    });
+    renderCard();
+    expect(screen.getByTestId('user-profile-oauth-app-b4m_beta_22222222')).toBeInTheDocument();
+    expect(screen.queryByTestId('user-profile-oauth-apps-retry-btn')).not.toBeInTheDocument();
+  });
 });

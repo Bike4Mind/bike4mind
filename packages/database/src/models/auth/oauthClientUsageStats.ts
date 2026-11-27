@@ -1,7 +1,7 @@
 import type { OAuthClientUsageStats } from '@bike4mind/common';
 import { OAuthClientModel } from './OAuthClientModel';
 import { OAuthClientSignInModel } from './OAuthClientSignInModel';
-import { User } from './UserModel';
+import { User, signupClientIdMatch } from './UserModel';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -19,9 +19,8 @@ const windowedCounts = (groupBy: string, timeField: string, since7d: Date) => ({
   },
 });
 
-// The explicit $type states the partial index's filter, which the planner needs to pick that index.
 export const signupsMatch = (clientIds: string[], since: Date) => ({
-  $match: { signupClientId: { $type: 'string', $in: clientIds }, createdAt: { $gte: since } },
+  $match: { ...signupClientIdMatch({ $in: clientIds }), createdAt: { $gte: since } },
 });
 
 export const signInsMatch = (clientIds: string[], since: Date) => ({
