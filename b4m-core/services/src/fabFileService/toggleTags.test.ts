@@ -728,20 +728,30 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
   // publication change a mere file-share recipient must not be able to force onto a lake they do
   // not manage. Stats still get corrected (so they don't drift forever), just never the
   // activation.
-  it('corrects stats but never activates on a prefix-arm join by an actor who cannot manage the lake', async () => {
-    const adapters = makeAdapters([{ id: 'f1', userId: 'owner', tags: [] }], lake({ status: 'draft' }));
-    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([lake({ createdByUserId: 'owner', status: 'draft' })]);
+  it('refuses a prefix-arm join by an actor who cannot manage the lake', async () => {
+    const adapters = makeAdapters([{ id: 'f1', userId: 'owner', tags: [] }]);
+    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([lake({ createdByUserId: 'owner' })]);
     adapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'editor', isAdmin: false });
 
-    const runAs = (userId: string, params: unknown) => toggleTags(userId, params, adapters as any);
-    await runAs('editor', { ids: ['f1'], tags: ['lk:invoices'] });
+    await expect(toggleTags('editor', { ids: ['f1'], tags: ['lk:invoices'] }, adapters as never)).rejects.toThrow(
+      'You do not have permission to add files to this data lake'
+    );
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+  });
 
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
-      fileCount: 3,
-      totalSizeBytes: 99,
-      totalChunkedChars: 0,
-    });
-    expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
+  it('refuses a prefix-arm join by the creator once ownership has moved to someone else', async () => {
+    const adapters = makeAdapters([{ id: 'f1', userId: 'owner', tags: [] }]);
+    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([lake({ createdByUserId: 'owner' })]);
+    (adapters.db as Record<string, unknown>).dataLakeAccessGrants = {
+      listActiveByLakes: vi
+        .fn()
+        .mockResolvedValue([{ dataLakeId: 'lake1', principalType: 'user', principalId: 'new-owner', role: 'owner' }]),
+    };
+
+    await expect(toggleTags('owner', { ids: ['f1'], tags: ['lk:invoices'] }, adapters as never)).rejects.toThrow(
+      'You do not have permission to add files to this data lake'
+    );
   });
 
   it('recomputes a shared lake once for a batch where every file leaves it', async () => {
