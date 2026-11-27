@@ -333,6 +333,8 @@ export {
   isSlackUserValidationError,
   isSlackUserValidationErrorCode,
   isSlackUserValidationErrorByMessage,
+  getSlackApiErrorCode,
+  isExpectedSlackWorkspaceError,
   SLACK_USER_ERROR_MESSAGE_PATTERNS,
 } from './slack-export-errors';
 export type { SlackUserValidationError, SlackErrorType, SlackErrorMetadata } from './slack-export-errors';

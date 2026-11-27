@@ -68,3 +68,61 @@ describe('SlackClient.sendMessage', () => {
     expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ unfurl_links: false, unfurl_media: false }));
   });
 });
+
+describe('SlackClient expected workspace errors', () => {
+  const platformError = (code: string) =>
+    Object.assign(new Error(`An API error occurred: ${code}`), {
+      code: 'slack_webapi_platform_error',
+      data: { ok: false, error: code },
+    });
+
+  const clientWith = (failure: Error) => {
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    WebClientCtor.mockImplementationOnce(function () {
+      return {
+        chat: { postMessage: vi.fn().mockRejectedValue(failure) },
+        conversations: { history: vi.fn().mockRejectedValue(failure) },
+        on: vi.fn(),
+      };
+    });
+    return { client: new SlackClient('xoxb-test-token', log as never), log };
+  };
+
+  it('sendMessage logs not_in_channel at warn with the method and code, and returns null', async () => {
+    const { client, log } = clientWith(platformError('not_in_channel'));
+
+    await expect(client.sendMessage({ channel: 'C1', text: 'hi' })).resolves.toBeNull();
+
+    expect(log.error).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('not_in_channel'), {
+      method: 'sendMessage',
+      slackErrorCode: 'not_in_channel',
+    });
+  });
+
+  it('fetchChannelHistory logs channel_not_found at warn and returns no messages', async () => {
+    const { client, log } = clientWith(platformError('channel_not_found'));
+
+    await expect(client.fetchChannelHistory('C1')).resolves.toEqual([]);
+
+    expect(log.error).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('channel_not_found'), {
+      method: 'fetchChannelHistory',
+      slackErrorCode: 'channel_not_found',
+    });
+  });
+
+  it.each([
+    ['an unknown platform error', platformError('internal_error')],
+    ['an HTTP 5xx error', Object.assign(new Error('HTTP 503'), { code: 'slack_webapi_http_error' })],
+  ])('keeps %s at error for both methods', async (_label, failure) => {
+    const send = clientWith(failure);
+    await send.client.sendMessage({ channel: 'C1', text: 'hi' });
+    expect(send.log.error).toHaveBeenCalledWith('Error sending Slack message:', failure);
+
+    const history = clientWith(failure);
+    await history.client.fetchChannelHistory('C1');
+    expect(history.log.error).toHaveBeenCalledWith('Error fetching Slack channel history:', failure);
+    expect(history.log.warn).not.toHaveBeenCalled();
+  });
+});
