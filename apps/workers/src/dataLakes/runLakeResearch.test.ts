@@ -1439,6 +1439,18 @@ describe('runLakeResearch', () => {
         expectStoppedForAuthor((await runWithPort()).result);
       });
 
+      it('leaves the proposal pending when the author account is blocked', async () => {
+        h.findConfig.mockResolvedValue(liveConfig({ createdByUserId: 'curator-1' }));
+        h.findUserById.mockImplementation(async (id: string) =>
+          id === 'curator-1' ? { id, organizationId: null, isBanned: true } : { id }
+        );
+        h.loadActiveLakeGrants.mockResolvedValue([
+          { principalType: 'user', principalId: 'curator-1', role: 'curator' },
+        ]);
+
+        expectStoppedForAuthor((await runWithPort()).result);
+      });
+
       it('admits while the author still holds a curator grant', async () => {
         h.findConfig.mockResolvedValue(liveConfig({ createdByUserId: 'curator-1' }));
         h.findUserById.mockImplementation(async (id: string) => ({ id, organizationId: null }));

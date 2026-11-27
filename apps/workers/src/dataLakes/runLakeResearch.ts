@@ -451,7 +451,7 @@ export async function runLakeResearch(
     ): Promise<boolean> => {
       const authorId = config.lastUpdatedByUserId || config.createdByUserId;
       const author = authorId ? await userRepository.findById(authorId) : null;
-      if (!author) return false;
+      if (!author || aiAccessDeniedMessage(author)) return false;
       const administeredOrgIds = await organizationRepository.findIdsWithAdminRights(author.id);
       return dataLakeService.canManageLake(
         lake,
