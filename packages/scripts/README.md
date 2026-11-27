@@ -393,3 +393,43 @@ or database failures exit unsuccessfully and log `[signup-cohort-sweep] failed`.
 `curated:v2 [--check | --bump]` regenerates `curated-v2.json` from the `v2Channel` of `catalog/model-hub/curated-v3.json`; edit v3 and regenerate rather than editing v2 by hand. When the v2 content changes, add a `v2Channel.changelog` item for the next sequence and run `--bump`, which moves `v2Channel` to that sequence and records the new content hash.
 
 If the live list no longer verifies (corrupt bytes, or its key was dropped from `keys.json`), `curated:publish` refuses everything except a recovery-signed list: co-sign the replacement with the recovery key and give it a sequence above the one the live `latest.json.sig` names, which the script prints as a warning otherwise.
+
+## Database state snapshot
+
+`db:state` records a database's structural state to a JSON file and diffs two such files. Run a
+snapshot before and after maintenance or a large migration, then compare them. It is read-only:
+it connects with `autoIndex`/`autoCreate` off and sends only the read commands listed in
+`src/dbState/readOnlyGuard.ts`; any other command fails the run (exit 3) before the file is
+written. The connection string comes from `MONGODB_URI` (SST resource under `sst shell`, else the
+environment) and is never printed. The snapshot file holds no document data, but keep it out of
+the repo.
+
+```bash
+pnpm --filter @bike4mind/scripts db:state snapshot --out /tmp/before.json
+pnpm --filter @bike4mind/scripts db:state compare /tmp/before.json /tmp/after.json
+```
+
+`snapshot` writes: server version and replica set member count; per collection the type and
+options, estimated document count, every index with all of its options, and the search and
+vector search indexes (or why the server could not list them). Checks: TTL indexes whose
+`expireAfterSeconds` is not a finite number between 0 and 2147483647, and indexes declared in the
+Mongoose schemas but missing from the database, present but undeclared, or present with different
+options. Two snapshots of an unchanged database differ only in `takenAt`.
+
+| `snapshot` flag | Meaning |
+|---|---|
+| `--out <file>` | Required. Where to write the snapshot (mode 0600). |
+| `--exact-counts` | Also count every document per collection. Slow on large collections. |
+| `--no-schema-check` | Skip loading the Mongoose models and the schema-versus-database index check. |
+| `--undefined-scan <off\|top-level\|nested>` | Count documents holding a BSON `undefined` value. `off` by default; `top-level` counts on the server, `nested` walks every document. Reads from a secondary. |
+| `--scan-time-limit-ms <n>` | Time limit per collection for the undefined scan (default 60000). Collections that do not finish are listed as unfinished. |
+
+`compare` prints added (`+`), removed (`-`) and changed (`~`) collections, indexes, search
+indexes, count changes and check findings, then every finding in the after snapshot. Server
+version and differing snapshot settings are printed as notes. Exit code: 0 no differences, 1
+differences, 2 error.
+
+| `compare` flag | Meaning |
+|---|---|
+| `--count-tolerance <n>` | Ignore a document count change of up to `n` documents (default 0). |
+| `--count-tolerance-percent <p>` | Ignore a document count change of up to `p` percent of the before count (default 0). A change within either tolerance is ignored. |
