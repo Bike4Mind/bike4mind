@@ -203,6 +203,14 @@ describe('notes and tags route boundaries', () => {
     const res = await call('PATCH', 'PATCH', { before, tags: ['Partner-Beta', 'pilot'] }, ['settings:manage']);
     expect(res._getJSONData()).toEqual({ tags: ['Partner-Beta', 'pilot'] });
   });
+  it('refuses a delegate re-spelling a padded stored lake gate tag', async () => {
+    const before = [' partner-beta '];
+    mocks.findById.mockReturnValue({ select: () => ({ lean: async () => ({ tags: before }) }) });
+    await expect(call('PATCH', 'PATCH', { before, tags: ['partner-beta'] }, ['settings:manage'])).rejects.toMatchObject(
+      { statusCode: 403 }
+    );
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
   it('lets a full admin add and remove lake gate tags', async () => {
     const res = await call('PATCH', 'PATCH', { before: ['old'], tags: ['partner-beta'] }, [], true);
     expect(res._getJSONData()).toEqual({ tags: ['partner-beta'] });

@@ -44,17 +44,21 @@ export async function assertCanChangeLakeGateTags(
   }
 }
 
-/** assertCanChangeLakeGateTags over the tags a write adds or removes going from `before` to `after`. */
+/**
+ * assertCanChangeLakeGateTags over the tags a write adds or removes going from `before` to `after`.
+ * Tags are diffed by exact spelling: lake gates match user tags without trimming, so re-spelling a
+ * padded stored tag can change what it grants.
+ */
 export async function assertCanChangeLakeGateTagsBetween(
   user: Parameters<typeof isFullAdmin>[0],
   before: readonly string[] | null | undefined,
   after: readonly string[] | null | undefined
 ): Promise<void> {
   if (isFullAdmin(user)) return;
-  const beforeSet = new Set((before ?? []).map(normalizeTag));
-  const afterSet = new Set((after ?? []).map(normalizeTag));
+  const beforeSet = new Set(before ?? []);
+  const afterSet = new Set(after ?? []);
   await assertCanChangeLakeGateTags(user, [
-    ...(after ?? []).filter(tag => !beforeSet.has(normalizeTag(tag))),
-    ...(before ?? []).filter(tag => !afterSet.has(normalizeTag(tag))),
+    ...(after ?? []).filter(tag => !beforeSet.has(tag)),
+    ...(before ?? []).filter(tag => !afterSet.has(tag)),
   ]);
 }

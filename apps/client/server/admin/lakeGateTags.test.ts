@@ -5,7 +5,7 @@ import { DATA_LAKES, ForbiddenError } from '@bike4mind/common';
 const findGateValues = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({ dataLakeRepository: { findGateValues } }));
 
-import { assertCanChangeLakeGateTags, lakeGateTagsIn } from './lakeGateTags';
+import { assertCanChangeLakeGateTags, assertCanChangeLakeGateTagsBetween, lakeGateTagsIn } from './lakeGateTags';
 
 const delegate = { isAdmin: false, adminPermissions: ['settings:manage'] };
 const fullAdmin = { isAdmin: true };
@@ -51,5 +51,19 @@ describe('assertCanChangeLakeGateTags', () => {
   it('allows a lake gate tag for a full admin without a lookup', async () => {
     await expect(assertCanChangeLakeGateTags(fullAdmin, ['Partner-Beta'])).resolves.toBeUndefined();
     expect(findGateValues).not.toHaveBeenCalled();
+  });
+});
+
+describe('assertCanChangeLakeGateTagsBetween', () => {
+  it('treats a re-spelled lake gate tag as a change', async () => {
+    await expect(
+      assertCanChangeLakeGateTagsBetween(delegate, [' partner-beta ', 'old'], ['partner-beta', 'old'])
+    ).rejects.toThrow(ForbiddenError);
+  });
+
+  it('allows a delegate to keep a lake gate tag spelled exactly as stored', async () => {
+    await expect(
+      assertCanChangeLakeGateTagsBetween(delegate, ['Partner-Beta', 'old'], ['Partner-Beta', 'pilot'])
+    ).resolves.toBeUndefined();
   });
 });
