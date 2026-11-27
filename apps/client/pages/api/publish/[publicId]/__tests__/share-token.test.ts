@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { Types } from 'mongoose';
+import { TooManyRequestsError } from '@bike4mind/common';
 
 const { mockLoad, mockFindOneAndUpdate, mockCurrent, mockUpdateOne, mockSelect } = vi.hoisted(() => ({
   mockSelect: vi.fn(), // the field list passed to the lost-race findOne(...).select(...)
@@ -59,6 +60,11 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@server/services/publish', () => ({ generateShareToken: () => 'TESTTOKEN' }));
 
+// The limiter itself (tiers, window, Retry-After) is pinned against real Mongo in
+// publishRateLimit.e2e.test.ts; here only "charged or not, refunded or not" is asserted.
+const { mockConsume, mockRefund } = vi.hoisted(() => ({ mockConsume: vi.fn(), mockRefund: vi.fn() }));
+vi.mock('@server/services/publish/publishRateLimit', () => ({ consumePublishAction: mockConsume }));
+
 import handler from '../share-token';
 
 const LIVE_MATCH = { revokedAt: null, __notExpired: true };
@@ -111,6 +117,8 @@ beforeEach(() => {
   mockCurrent.mockReset().mockResolvedValue({ shareTokens: [entry('TESTTOKEN')] });
   mockSelect.mockReset();
   mockUpdateOne.mockReset().mockResolvedValue({ matchedCount: 1 });
+  mockRefund.mockReset().mockResolvedValue(undefined);
+  mockConsume.mockReset().mockResolvedValue({ refund: mockRefund });
 });
 
 type ShareEntry = { _id?: unknown; token?: string; createdAt?: Date; revokedAt?: Date | null; viewCount?: number };
@@ -834,5 +842,94 @@ describe('share-link expiry', () => {
     const body = res._getJSONData();
     expect(body.shareLinks.map((l: { shareToken: string }) => l.shareToken)).toEqual(['KEPT']);
     expect(body.shareLinks[0].expiresAt).toBe(expiresAt.toISOString());
+  });
+});
+
+describe('publish allowance on share-link mints', () => {
+  const live = () => ({ publicId: 'pub1', ownerId: 'owner1', shareTokens: [entry('LIVE')] });
+
+  it.each([
+    ['a first mint', {}, () => ({ publicId: 'pub1', ownerId: 'owner1', shareTokens: [] })],
+    ['a rotate', { regenerate: true }, live],
+    ['an additional link', { additional: true }, live],
+  ])('charges %s once, for the caller, and keeps the charge', async (_label, body, loaded) => {
+    mockLoad.mockResolvedValue(loaded());
+    const user = { id: 'owner1', isAdmin: false, createdAt: new Date('2026-01-01T00:00:00.000Z') };
+    const { res, promise } = run({ body, user });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockConsume).toHaveBeenCalledOnce();
+    expect(mockConsume).toHaveBeenCalledWith(user);
+    expect(mockRefund).not.toHaveBeenCalled();
+  });
+
+  it('does not charge the idempotent return of a live link', async () => {
+    mockLoad.mockResolvedValue(live());
+    const { res, promise } = run();
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockConsume).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an invalid expiry', { expiresAt: 'tomorrow' }],
+    ['a conflicting mint mode', { regenerate: true, additional: true }],
+  ])('does not charge a request refused for %s', async (_label, body) => {
+    const { res, promise } = run({ body });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockConsume).not.toHaveBeenCalled();
+  });
+
+  it('does not charge an additional mint refused at the live-link ceiling', async () => {
+    mockLoad.mockResolvedValue({
+      publicId: 'pub1',
+      ownerId: 'owner1',
+      shareTokens: Array.from({ length: 20 }, (_, n) => entry(`L${n}`)),
+    });
+    const { res, promise } = run({ body: { additional: true } });
+    await promise;
+    expect(res._getJSONData().code).toBe('SHARE_LINK_LIMIT');
+    expect(mockConsume).not.toHaveBeenCalled();
+  });
+
+  it('does not charge a caller who may not manage the link', async () => {
+    const { res, promise } = run({ user: { id: 'someone-else' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockConsume).not.toHaveBeenCalled();
+  });
+
+  it('propagates the 429 and writes nothing when the allowance is used up', async () => {
+    const limited = new TooManyRequestsError('limited', { code: 'publish_rate_limited', retryAfter: 60 });
+    mockConsume.mockRejectedValue(limited);
+    const { promise } = run();
+    await expect(promise).rejects.toBe(limited);
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refunds a mint that lost the compare-and-set', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(null);
+    const { res, promise } = run();
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockRefund).toHaveBeenCalledOnce();
+  });
+
+  it('refunds a mint whose write failed, and rethrows', async () => {
+    const dbDown = new Error('db down');
+    mockFindOneAndUpdate.mockRejectedValue(dbDown);
+    const { promise } = run();
+    await expect(promise).rejects.toBe(dbDown);
+    expect(mockRefund).toHaveBeenCalledOnce();
+  });
+
+  it('never charges GET or DELETE', async () => {
+    mockLoad.mockResolvedValue(live());
+    for (const method of ['GET', 'DELETE'] as const) {
+      const { promise } = run({ method });
+      await promise;
+    }
+    expect(mockConsume).not.toHaveBeenCalled();
   });
 });

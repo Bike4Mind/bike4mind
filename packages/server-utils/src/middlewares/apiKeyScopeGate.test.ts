@@ -324,6 +324,16 @@ describe('getApiKeyLegacyStatus', () => {
     });
   });
 
+  it('never reports an MCP key as legacy', () => {
+    expect(
+      getApiKeyLegacyStatus(
+        { ...ACTIVE, createdAt: before, scopes: [ApiKeyScope.ME_READ], explicitScopeOnly: true },
+        midWindow,
+        window
+      ).legacy
+    ).toBe(false);
+  });
+
   it('never reports a confined or exchange key as legacy, as the gate never grandfathers one', () => {
     expect(
       getApiKeyLegacyStatus({ ...ACTIVE, createdAt: before, scopes: [ApiKeyScope.EMBED_CHAT] }, midWindow, window)
@@ -458,10 +468,10 @@ describe('exchange keys', () => {
   const held = [ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ];
 
   it('denies an exchange key on a scope-less route, staged or not', () => {
-    expect(decideScopeGate(undefined, held, NONE, undefined, { exchangeKey: true })).toEqual({ outcome: 'deny' });
+    expect(decideScopeGate(undefined, held, NONE, undefined, { explicitScopeOnly: true })).toEqual({ outcome: 'deny' });
     expect(
       decideScopeGate([ApiKeyScope.READ_NOTEBOOKS], held, new Set([ApiKeyScope.READ_NOTEBOOKS]), undefined, {
-        exchangeKey: true,
+        explicitScopeOnly: true,
       })
     ).toEqual({
       outcome: 'deny',
@@ -469,7 +479,7 @@ describe('exchange keys', () => {
   });
 
   it('allows an exchange key on a route that names one of its scopes', () => {
-    expect(decideScopeGate([ApiKeyScope.ME_READ], held, NONE, undefined, { exchangeKey: true })).toEqual({
+    expect(decideScopeGate([ApiKeyScope.ME_READ], held, NONE, undefined, { explicitScopeOnly: true })).toEqual({
       outcome: 'allow',
     });
   });
@@ -480,7 +490,7 @@ describe('exchange keys', () => {
 
   it('denies an exchange key on a grandfathered route, whatever it holds', () => {
     const required = [ApiKeyScope.READ_NOTEBOOKS];
-    expect(decideScopeGate(required, held, NONE, undefined, { exchangeKey: true, grandfathered: true })).toEqual({
+    expect(decideScopeGate(required, held, NONE, undefined, { explicitScopeOnly: true, grandfathered: true })).toEqual({
       outcome: 'deny',
     });
     expect(decideScopeGate(required, held, NONE, undefined, { grandfathered: true })).toEqual({
@@ -494,12 +504,12 @@ describe('exchange keys', () => {
     expect(isMintableConfinedScopeSet(both, { exchangeKey: true })).toBe(true);
     for (const contract of [invokeFunctionContract, createFunctionContract, chatContract]) {
       expect(
-        decideScopeGate([...contract.scopes], both, NONE, undefined, { exchangeKey: true }),
+        decideScopeGate([...contract.scopes], both, NONE, undefined, { explicitScopeOnly: true }),
         contract.path
       ).toEqual({ outcome: 'allow' });
     }
-    expect(decideScopeGate(undefined, both, NONE, undefined, { exchangeKey: true })).toEqual({ outcome: 'deny' });
-    expect(decideScopeGate([ApiKeyScope.READ_NOTEBOOKS], both, NONE, undefined, { exchangeKey: true })).toEqual({
+    expect(decideScopeGate(undefined, both, NONE, undefined, { explicitScopeOnly: true })).toEqual({ outcome: 'deny' });
+    expect(decideScopeGate([ApiKeyScope.READ_NOTEBOOKS], both, NONE, undefined, { explicitScopeOnly: true })).toEqual({
       outcome: 'deny',
     });
     // A dashboard key keeps the stricter rule: a functions scope shares a key only with the other one.
@@ -511,8 +521,41 @@ describe('exchange keys', () => {
 
   it('allows an exchange key that explicitly matches on a grandfathered route', () => {
     expect(
-      decideScopeGate([ApiKeyScope.ME_READ], held, NONE, undefined, { exchangeKey: true, grandfathered: true })
+      decideScopeGate([ApiKeyScope.ME_READ], held, NONE, undefined, { explicitScopeOnly: true, grandfathered: true })
     ).toEqual({ outcome: 'allow' });
+  });
+
+  it('confines an MCP key the same way: only a route naming a held scope admits it', () => {
+    const mcp = [ApiKeyScope.ME_READ, ApiKeyScope.READ_NOTEBOOKS];
+    const options = { explicitScopeOnly: true };
+    expect(decideScopeGate(undefined, mcp, NONE, undefined, options)).toEqual({ outcome: 'deny' });
+    expect(decideScopeGate([ApiKeyScope.ME_READ], mcp, NONE, undefined, options)).toEqual({ outcome: 'allow' });
+    expect(decideScopeGate([ApiKeyScope.READ_FILES], mcp, NONE, undefined, options)).toEqual({ outcome: 'deny' });
+    // Staged and grandfathered routes never admit it.
+    expect(
+      decideScopeGate([ApiKeyScope.READ_FILES], mcp, new Set([ApiKeyScope.READ_FILES]), undefined, options)
+    ).toEqual({ outcome: 'deny' });
+    expect(
+      decideScopeGate([ApiKeyScope.READ_FILES], mcp, NONE, undefined, { ...options, grandfathered: true })
+    ).toEqual({ outcome: 'deny' });
+    // The AND scope is still checked first.
+    expect(decideScopeGate([ApiKeyScope.ME_READ], mcp, NONE, [ApiKeyScope.READ_FILES], options)).toEqual({
+      outcome: 'deny',
+    });
+  });
+
+  it('holdsApiKeyScope honors the MCP flag on the request', () => {
+    // A staged scope is where the flag changes the answer: an ordinary key rides the window, an MCP key never does.
+    vi.stubEnv(SCOPE_STAGING_ENV_VAR, ApiKeyScope.READ_NOTEBOOKS);
+    try {
+      const mcp = { keyId: 'k', scopes: [ApiKeyScope.ME_READ], explicitScopeOnly: true };
+      const ordinary = { keyId: 'k', scopes: [ApiKeyScope.ME_READ] };
+      expect(holdsApiKeyScope({ apiKeyInfo: mcp }, [ApiKeyScope.ME_READ])).toBe(true);
+      expect(holdsApiKeyScope({ apiKeyInfo: mcp }, [ApiKeyScope.READ_NOTEBOOKS])).toBe(false);
+      expect(holdsApiKeyScope({ apiKeyInfo: ordinary }, [ApiKeyScope.READ_NOTEBOOKS])).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   describe('in-handler check', () => {

@@ -200,9 +200,11 @@ export type PublishQuotaScope = keyof typeof PUBLISH_QUOTAS;
 /**
  * Per-user daily publish allowance: how many publish actions one user may take in any rolling
  * `windowMs`, counted across the publish write routes (upload-url, reply, fabfile, revise,
- * restore). finalize is not counted, since every draft it promotes came from a counted upload-url.
- * An action that fails or is refused after it was counted, before anything is published, is
- * handed back, except that a revise attempt that reaches the model keeps its count. Accounts younger than `newAccount.maxAgeMs` (by the user's `createdAt`) get the lower
+ * restore, an artifact PATCH that widens exposure, a share-link mint including rotate and
+ * additional). finalize is not counted, since every draft it promotes came from a counted
+ * upload-url. An action that fails or is refused after it was counted, before anything is
+ * published, is handed back, except that a revise attempt that reaches the model keeps its count.
+ * Accounts younger than `newAccount.maxAgeMs` (by the user's `createdAt`) get the lower
  * `newAccount.maxActions`. API-key callers count toward the key owner's allowance. Admins are
  * exempt. Enforced by apps/client/server/services/publish/publishRateLimit.ts.
  */

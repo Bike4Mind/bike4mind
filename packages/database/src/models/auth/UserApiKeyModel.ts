@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { softDeletePlugin } from '../../utils/mongo';
 import {
+  API_KEY_EXPOSURE_CEILINGS,
   ApiKeyCapPool,
   type ApiKeyScopeValue,
   ApiKeyStoredSecret,
@@ -92,6 +93,7 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       ...(createdBefore ? { createdAt: { $lt: createdBefore } } : {}),
       scopes: { $nin: [...excludeScopes] },
       'metadata.createdFrom': { $ne: 'oauth-exchange' },
+      explicitScopeOnly: { $ne: true },
       $or: [{ expiresAt: { $gt: now } }, { expiresAt: null }],
     };
     const [keys, total, owners] = await Promise.all([
@@ -561,6 +563,9 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
       default: CreditHolderType.User,
     },
     organizationId: { type: String },
+    // MCP key (see IUserApiKey.explicitScopeOnly): a security property read on every request, so top-level.
+    explicitScopeOnly: { type: Boolean },
+    exposureCeiling: { type: String, enum: API_KEY_EXPOSURE_CEILINGS },
     // Embed key (epic #41): agent this key is bound to (required when scopes includes EMBED_CHAT),
     // its https origin allow-list, and optional white-label branding. See IUserApiKey / IEmbedBranding.
     // `default: undefined` on both so a non-embed key does not materialize an empty
