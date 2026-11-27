@@ -59,7 +59,9 @@ const BODY_HEADERS = ['content-type', 'content-length', 'content-encoding'];
  * itself, so no off-origin hop sees the token. A navigation gets its redirect back to follow (the
  * address bar must show the real URL; its next hop goes without the header). A subresource's
  * off-origin hop is fetched here without the header, since Chromium fails both a fulfilled
- * redirect and a cross-origin route.continue url on one.
+ * redirect and a cross-origin route.continue url on one. timeout 0 leaves timing to the browser;
+ * route.fetch would otherwise abort anything slower than 30s. Bodies are buffered, so a stream
+ * reaches the page only once it ends.
  */
 async function continueWithBypass(route: Route, origin: string, bypass: Record<string, string>): Promise<void> {
   const request = route.request();
@@ -69,7 +71,7 @@ async function continueWithBypass(route: Route, origin: string, bypass: Record<s
   let postData: Buffer | undefined = request.postDataBuffer() ?? undefined;
   try {
     for (let followed = 0; ; followed++) {
-      const response = await route.fetch({ url, method, headers, postData, maxRedirects: 0 });
+      const response = await route.fetch({ url, method, headers, postData, maxRedirects: 0, timeout: 0 });
       const status = response.status();
       const location = response.headers()['location'];
       if (
@@ -89,9 +91,13 @@ async function continueWithBypass(route: Route, origin: string, bypass: Record<s
       }
       await response.dispose();
       if (next.origin !== origin) {
-        const offOrigin = withoutHeaders(headers, [WAF_BYPASS_HEADER]) as Record<string, string>;
+        // A browser drops authorization on a cross-origin redirect too.
+        const offOrigin = withoutHeaders(headers, [WAF_BYPASS_HEADER, 'authorization', 'cookie']) as Record<
+          string,
+          string
+        >;
         return await route.fulfill({
-          response: await route.fetch({ url: next.href, method, postData, headers: offOrigin }),
+          response: await route.fetch({ url: next.href, method, postData, headers: offOrigin, timeout: 0 }),
         });
       }
       url = next.href;

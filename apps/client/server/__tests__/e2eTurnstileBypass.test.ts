@@ -9,7 +9,14 @@ vi.mock('sst', () => ({ Resource: { E2E_CLEANUP_SECRET: resourceSecret } }));
 type UrlMatcher = Parameters<Page['route']>[0];
 type RouteHandler = Parameters<Page['route']>[1];
 type Reply = { status: number; location?: string };
-type Sent = { url: string; method: string; headers: Record<string, string>; postData?: unknown; maxRedirects?: number };
+type Sent = {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  postData?: unknown;
+  maxRedirects?: number;
+  timeout?: number;
+};
 
 // Models Playwright's dispatch: page routes before context routes, each list newest first, header
 // overrides carried by fallback. route.fetch answers from `replies` by URL (200 when unlisted) and
@@ -208,6 +215,30 @@ describe('E2E Turnstile request bypass', () => {
       ]);
       expect(result.sent[1].headers).toHaveProperty('x-existing-header', 'preserved');
       expect(result.fulfilled).toEqual({ status: 200 });
+    });
+
+    it('drops authorization and cookie on an off-origin hop, as a browser does', async () => {
+      const harness = createRoutingHarness({ [`${A}/api/files/1/content`]: { status: 302, location: OFF } });
+      await installWafBypass(harness.context);
+      await harness.page.route(
+        url => url.origin === A,
+        route =>
+          route.fallback({
+            headers: { ...route.request().headers(), authorization: 'Bearer jwt', cookie: 'session=1' },
+          })
+      );
+      const result = await harness.send(`${A}/api/files/1/content`);
+      expect(result.sent[0].headers).toMatchObject({ authorization: 'Bearer jwt', cookie: 'session=1' });
+      expect(result.sent[1].headers).not.toHaveProperty('authorization');
+      expect(result.sent[1].headers).not.toHaveProperty('cookie');
+    });
+
+    it('lifts the route.fetch timeout on every hop it sends', async () => {
+      const result = await send(
+        { [`${A}/a`]: { status: 307, location: '/b' }, [`${A}/b`]: { status: 302, location: OFF } },
+        `${A}/a`
+      );
+      expect(result.sent.map(s => s.timeout)).toEqual([0, 0, 0]);
     });
 
     it('keeps the header on a same-origin hop of a subresource', async () => {
