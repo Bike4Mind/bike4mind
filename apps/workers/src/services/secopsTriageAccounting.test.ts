@@ -84,6 +84,44 @@ describe('SecOps accounting recovery', () => {
     await expect(recoverSecopsTriageAccounting(context)).rejects.toMatchObject({ reason: 'recovery_pending' });
   });
 
+  it('allows durable unresolved receipts only for a completed business execution without erasing them', async () => {
+    const { context, recover, diagnostics } = harness();
+    const pending = {
+      attempts: [],
+      total: 2,
+      byState: { registered: 1, dispatched: 0, usage_known: 0, unresolved: 1 },
+    };
+    diagnostics.mockResolvedValue(pending);
+    await expect(recoverSecopsTriageAccounting(context)).rejects.toMatchObject({ reason: 'recovery_pending' });
+    recover.mockResolvedValue({ recorded: 0, unresolved: 1, failed: [] });
+    await expect(recoverSecopsTriageAccounting(context, true)).resolves.toBeUndefined();
+    expect(diagnostics).toHaveBeenLastCalledWith({ limit: 1, executionId: context.attribution.executionId });
+  });
+
+  it.each(['dispatched', 'usage_known', 'failed recovery'])(
+    'still rejects %s for a completed business execution',
+    async state => {
+      const { context, recover, diagnostics } = harness();
+      diagnostics.mockResolvedValue({
+        attempts: [],
+        total: 2,
+        byState: {
+          registered: 0,
+          dispatched: state === 'dispatched' ? 1 : 0,
+          usage_known: state === 'usage_known' ? 1 : 0,
+          unresolved: 1,
+        },
+      });
+      if (state === 'failed recovery')
+        recover.mockResolvedValue({
+          recorded: 0,
+          unresolved: 1,
+          failed: [{ providerCallId: 'call', code: 'persistence_pending' }],
+        });
+      await expect(recoverSecopsTriageAccounting(context, true)).rejects.toMatchObject({ reason: 'recovery_pending' });
+    }
+  );
+
   it('does not expose a repository error as an accounting reason', async () => {
     const { context, recover } = harness();
     recover.mockRejectedValueOnce(new Error('private transport detail'));

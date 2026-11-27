@@ -78,12 +78,11 @@ export class PlatformCompletionMeter {
       const pending = await context.accounting.diagnostics({ limit: 1000, executionId: attribution.executionId });
       if (pending.nextCursor) throw new Error('Platform accounting execution exceeds its attempt limit');
       const existing = pending.attempts.find(item => item.providerCallId === providerCallId);
-      if (existing && existing.state !== 'registered')
-        throw new Error('Platform provider attempt was already dispatched');
+      if (existing && existing.state !== 'registered') throw this.createError('admission_refused', providerCallId);
       const leaseExpiresAt = existing?.leaseExpiresAt ?? new Date(context.deadlineAt);
       cutoff = Math.min(cutoff, leaseExpiresAt.getTime() - reserve);
       if (Date.now() >= cutoff || cutoff - Date.now() > 2_147_483_647)
-        throw new Error('Platform provider deadline exhausted');
+        throw this.createError('admission_refused', providerCallId);
       attempt = await context.accounting.register({
         providerCallId,
         attribution,
@@ -91,11 +90,12 @@ export class PlatformCompletionMeter {
         model: frozenModel.id,
         leaseExpiresAt,
       });
-      if (Date.now() >= cutoff) throw new Error('Platform provider deadline exhausted');
+      if (Date.now() >= cutoff) throw this.createError('admission_refused', providerCallId);
       dispatchedAt = new Date();
       if (!(await context.accounting.claimDispatch(providerCallId, dispatchedAt)))
-        throw new Error('Platform provider attempt was already dispatched');
+        throw this.createError('admission_refused', providerCallId);
     } catch (error) {
+      if (isPlatformCompletionAccountingError(error) && error.reason === 'admission_refused') throw error;
       throw this.createError('admission_failed', providerCallId, { cause: error });
     }
 

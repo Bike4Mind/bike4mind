@@ -19,7 +19,13 @@
 import crypto from 'crypto';
 import { z } from 'zod';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { getLlmByModel, getAvailableModels, resolveDeprecatedModelId } from '@bike4mind/llm-adapters';
+import {
+  getLlmByModel,
+  getAvailableModels,
+  resolveDeprecatedModelId,
+  federatedSharedKeyProviders,
+  withFederatedSharedKeys,
+} from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import {
   apiKeyService,
@@ -209,14 +215,17 @@ async function initializeLLM(
     throw new PlatformCompletionAccountingError('invalid_operation');
   const dbAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames };
   const coreKeys = await apiKeyService.getEffectiveLLMApiKeys('system', dbAdapters);
-  const apiKeyTable = {
-    openai: coreKeys.openai || undefined,
-    anthropic: coreKeys.anthropic || undefined,
-    gemini: coreKeys.gemini || undefined,
-    bfl: coreKeys.bfl || undefined,
-    ollama: coreKeys.ollama || undefined,
-    xai: coreKeys.xai || undefined,
-  };
+  const apiKeyTable = withFederatedSharedKeys(
+    {
+      openai: coreKeys.openai || undefined,
+      anthropic: coreKeys.anthropic || undefined,
+      gemini: coreKeys.gemini || undefined,
+      bfl: coreKeys.bfl || undefined,
+      ollama: coreKeys.ollama || undefined,
+      xai: coreKeys.xai || undefined,
+    },
+    apiKeyService.sharedAdminKeyProviders(coreKeys)
+  );
 
   const resolvedModelId = resolveDeprecatedModelId(modelId, 'secopsTriageService');
   const availableModels = await getAvailableModels(apiKeyTable);
@@ -224,6 +233,19 @@ async function initializeLLM(
 
   if (!modelInfo) {
     throw new Error(`Configured model ${resolvedModelId} not available`);
+  }
+
+  const directProvider = modelInfo.backend === 'openai' || modelInfo.backend === 'anthropic';
+  const supportedFamily =
+    !modelInfo.adapterFamily ||
+    (modelInfo.backend === 'openai' && ['openai-chat', 'openai-responses'].includes(modelInfo.adapterFamily)) ||
+    (modelInfo.backend === 'anthropic' && modelInfo.adapterFamily === 'anthropic-messages');
+  if (
+    !directProvider ||
+    !supportedFamily ||
+    federatedSharedKeyProviders(apiKeyTable)?.[modelInfo.backend as 'openai' | 'anthropic']
+  ) {
+    throw new Error('Unsupported provider transport for optional enrichment');
   }
 
   const llm = getLlmByModel(apiKeyTable, { modelInfo, logger });
@@ -821,7 +843,37 @@ function buildSlackSummaryBlocks(
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 export function createSecopsTriageService(logger: Logger, accounting?: PlatformCompletionAccountingContext) {
+  let prepared = false;
+  let llmInit: LLMInit | null = null;
+  async function prepare(config: SecopsTriageConfig): Promise<boolean> {
+    if (!prepared) {
+      if (config.llmEnrichment && config.modelId) {
+        try {
+          llmInit = await initializeLLM(config.modelId, logger, accounting);
+          logger.info('[SECOPS-TRIAGE] LLM enrichment enabled', { modelId: llmInit.resolvedModelId });
+        } catch (err) {
+          if (isPlatformCompletionAccountingError(err)) throw err;
+          logger.warn('[SECOPS-TRIAGE] LLM initialization failed - enrichment disabled for this run', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      prepared = true;
+    }
+    return llmInit !== null;
+  }
+  function disableOptionalEnrichment(error: unknown): void {
+    if (
+      !isPlatformCompletionAccountingError(error) ||
+      !['provider_usage_unresolved', 'deadline_exhausted', 'admission_refused'].includes(error.reason)
+    ) {
+      throw error;
+    }
+    llmInit = null;
+    logger.warn('[SECOPS-TRIAGE] LLM enrichment disabled for the remaining run', { reason: error.reason });
+  }
   return {
+    prepare,
     async run(
       payload: SecopsTriagePayload,
       githubService: GitHubService,
@@ -852,23 +904,20 @@ export function createSecopsTriageService(logger: Logger, accounting?: PlatformC
 
       const issueBaseUrl = `https://github.com/${repo}/issues`;
 
-      // 0. Initialize LLM if enrichment is enabled
-      let llmInit: LLMInit | null = null;
-      if (config.llmEnrichment && config.modelId) {
-        try {
-          llmInit = await initializeLLM(config.modelId, logger, accounting);
-          logger.info('[SECOPS-TRIAGE] LLM enrichment enabled', { modelId: llmInit.resolvedModelId });
-        } catch (err) {
-          if (isPlatformCompletionAccountingError(err)) throw err;
-          logger.warn('[SECOPS-TRIAGE] LLM initialization failed — enrichment disabled for this run', {
-            error: err instanceof Error ? err.message : String(err),
-          });
+      await prepare(config);
+      const findingsByFingerprint = new Map<string, SecopsTriageFinding>();
+      for (const finding of findings) {
+        const key = fingerprint(finding.id, stage, sourceMeta.issueLabel);
+        const existing = findingsByFingerprint.get(key);
+        if (!existing || SEVERITY_ORDER[finding.severity] < SEVERITY_ORDER[existing.severity]) {
+          findingsByFingerprint.set(key, finding);
         }
       }
+      const uniqueFindings = Array.from(findingsByFingerprint.values());
 
       // 1. Filter by severity threshold
-      const eligible = findings.filter(f => meetsThreshold(f.severity, config.severityThreshold));
-      result.skippedBelowThreshold = findings.length - eligible.length;
+      const eligible = uniqueFindings.filter(f => meetsThreshold(f.severity, config.severityThreshold));
+      result.skippedBelowThreshold = uniqueFindings.length - eligible.length;
 
       // 2. Sort: critical first, then high
       eligible.sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 99) - (SEVERITY_ORDER[b.severity] ?? 99));
@@ -1007,7 +1056,11 @@ export function createSecopsTriageService(logger: Logger, accounting?: PlatformC
           // New finding - optionally enrich with LLM, then create issue
           let enrichment: FindingEnrichment | null = null;
           if (llmInit) {
-            enrichment = await generateFindingEnrichment(finding, llmInit, logger, scanSource);
+            try {
+              enrichment = await generateFindingEnrichment(finding, llmInit, logger, scanSource);
+            } catch (error) {
+              disableOptionalEnrichment(error);
+            }
           }
 
           const body = buildIssueBody(finding, fp, priority, stage, targetUrl, enrichment, scanSource);
@@ -1064,16 +1117,20 @@ export function createSecopsTriageService(logger: Logger, accounting?: PlatformC
       // 7. Generate health assessment if LLM enrichment is enabled
       let healthAssessment: string | null = null;
       if (llmInit) {
-        healthAssessment = await generateHealthAssessment(
-          toProcess,
-          eligible,
-          result,
-          stage,
-          targetUrl,
-          llmInit,
-          logger,
-          scanSource
-        );
+        try {
+          healthAssessment = await generateHealthAssessment(
+            toProcess,
+            eligible,
+            result,
+            stage,
+            targetUrl,
+            llmInit,
+            logger,
+            scanSource
+          );
+        } catch (error) {
+          disableOptionalEnrichment(error);
+        }
         if (healthAssessment) {
           logger.info('[SECOPS-TRIAGE] LLM health assessment generated');
         }

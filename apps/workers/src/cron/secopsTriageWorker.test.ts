@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockForSystem = vi.fn();
 const mockEmitMetric = vi.fn();
 const mockServiceRun = vi.fn();
+const mockServicePrepare = vi.fn();
 const mockFindOne = vi.fn();
 const mockRecordRun = vi.fn();
 const mockRepoCheck = vi.fn();
@@ -29,6 +30,7 @@ vi.mock('@bike4mind/server-utils/security/secopsTriageRepoCheck', () => ({
 vi.mock('@workers/services/secopsTriageService', () => ({
   createSecopsTriageService: () => ({
     run: (...args: unknown[]) => mockServiceRun(...args),
+    prepare: (...args: unknown[]) => mockServicePrepare(...args),
   }),
 }));
 
@@ -150,6 +152,9 @@ const recordedRun = () => {
 
 describe('secopsTriageWorker handler', () => {
   beforeEach(() => {
+    mockServicePrepare.mockImplementation(async (config: { llmEnrichment?: boolean; modelId?: string }) =>
+      Boolean(config.llmEnrichment && config.modelId)
+    );
     vi.clearAllMocks();
     mockFindOne.mockResolvedValue({ settingValue: { enabled: true } });
     mockSafeParse.mockImplementation((v: unknown) => ({
@@ -415,6 +420,42 @@ describe('secopsTriageWorker handler', () => {
       expect(mockRecoverAccounting).toHaveBeenCalledOnce();
       expect(mockClaimExecution).not.toHaveBeenCalled();
       expect(mockServiceRun).not.toHaveBeenCalled();
+    });
+
+    it('recovers completed unresolved accounting with the explicit replay allowance and never reruns business work', async () => {
+      mockExecutionStatus.mockResolvedValue('completed');
+      await run();
+      expect(mockRecoverAccounting).toHaveBeenCalledWith(accountingContext, true);
+      expect(mockServicePrepare).not.toHaveBeenCalled();
+      expect(mockServiceRun).not.toHaveBeenCalled();
+    });
+
+    it('does not acknowledge completed business work when recovery persistence fails', async () => {
+      mockExecutionStatus.mockResolvedValue('completed');
+      mockRecoverAccounting.mockRejectedValueOnce(new PlatformCompletionAccountingError('recovery_pending'));
+      await expect(run()).rejects.toMatchObject({ reason: 'recovery_pending' });
+      expect(mockServiceRun).not.toHaveBeenCalled();
+    });
+
+    it('preflights unsupported optional enrichment before claiming and keeps ordinary triage', async () => {
+      mockServicePrepare.mockResolvedValueOnce(false);
+      await run();
+      expect(mockServicePrepare).toHaveBeenCalledOnce();
+      expect(mockClaimExecution).not.toHaveBeenCalled();
+      expect(mockServiceRun).toHaveBeenCalledOnce();
+      expect(mockCompleteExecution).not.toHaveBeenCalled();
+    });
+
+    it('claims only after successful preflight and completes a deterministic fallback without replay', async () => {
+      await run();
+      expect(mockServicePrepare.mock.invocationCallOrder[0]).toBeLessThan(
+        mockClaimExecution.mock.invocationCallOrder[0]
+      );
+      expect(mockCompleteExecution).toHaveBeenCalledOnce();
+      mockExecutionStatus.mockResolvedValue('completed');
+      await run();
+      expect(mockServiceRun).toHaveBeenCalledOnce();
+      expect(mockCompleteExecution).toHaveBeenCalledOnce();
     });
 
     it('fails closed for concurrent delivery or a prior uncertain execution', async () => {

@@ -38,7 +38,10 @@ export function createSecopsTriageAccounting(
   };
 }
 
-export async function recoverSecopsTriageAccounting(context: PlatformCompletionAccountingContext): Promise<void> {
+export async function recoverSecopsTriageAccounting(
+  context: PlatformCompletionAccountingContext,
+  allowUnresolved = false
+): Promise<void> {
   const executionId = context.attribution.executionId;
   let afterProviderCallId: string | undefined;
   let failed = false;
@@ -53,10 +56,11 @@ export async function recoverSecopsTriageAccounting(context: PlatformCompletionA
         executionId,
         afterProviderCallId,
       });
-      failed ||= recovered.failed.length > 0 || recovered.unresolved > 0;
+      failed ||= recovered.failed.length > 0 || (!allowUnresolved && recovered.unresolved > 0);
       if (!recovered.nextCursor) {
         const diagnostics = await context.accounting.diagnostics({ limit: 1, executionId });
-        if (failed || diagnostics.total > diagnostics.byState.registered) {
+        const permitted = diagnostics.byState.registered + (allowUnresolved ? diagnostics.byState.unresolved : 0);
+        if (failed || diagnostics.total > permitted) {
           throw new PlatformCompletionAccountingError('recovery_pending');
         }
         return;

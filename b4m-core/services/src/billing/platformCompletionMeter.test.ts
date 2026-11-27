@@ -89,11 +89,32 @@ describe('semantic platform completion metering', () => {
     await h.meter.complete(h.backend, model, messages, {}, h.onText, 'finding:abc');
     const restarted = new PlatformCompletionMeter(h.context);
     await expect(restarted.complete(h.backend, model, messages, {}, h.onText, 'finding:abc')).rejects.toMatchObject({
-      reason: 'admission_failed',
+      reason: 'admission_refused',
     });
     expect(h.complete).toHaveBeenCalledOnce();
     await restarted.complete(h.backend, model, messages, {}, h.onText, 'health');
     expect(h.complete).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['diagnostics', 'register', 'claimDispatch'] as const)(
+    'keeps %s datastore failures distinct from proven local refusal',
+    async phase => {
+      const h = harness();
+      h.accounting[phase].mockRejectedValueOnce(new Error('database unavailable'));
+      await expect(h.meter.complete(h.backend, model, messages, {}, h.onText, 'finding:abc')).rejects.toMatchObject({
+        reason: 'admission_failed',
+      });
+      expect(h.complete).not.toHaveBeenCalled();
+    }
+  );
+
+  it('identifies a rejected atomic dispatch claim as a refusal without a paid send', async () => {
+    const h = harness();
+    h.accounting.claimDispatch.mockResolvedValueOnce(false);
+    await expect(h.meter.complete(h.backend, model, messages, {}, h.onText, 'finding:abc')).rejects.toMatchObject({
+      reason: 'admission_refused',
+    });
+    expect(h.complete).not.toHaveBeenCalled();
   });
 
   it.each([undefined, '', 'x'.repeat(129)])('rejects invalid semantic identity before admission (%s)', async key => {

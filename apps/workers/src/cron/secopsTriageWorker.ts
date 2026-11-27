@@ -235,14 +235,15 @@ export const handler = dispatchWithLogger(async (event: SQSEvent, context: Conte
     }
 
     const accounting = createSecopsTriageAccounting(record, Date.now() + context.getRemainingTimeInMillis(), stage);
-    await recoverSecopsTriageAccounting(accounting);
     const executionId = accounting.attribution.executionId;
     let executionClaimed = false;
+    const service = createSecopsTriageService(logger, accounting);
     try {
       const status = await secopsTriageRunRepository.executionStatus(executionId);
+      await recoverSecopsTriageAccounting(accounting, status === 'completed');
       if (status === 'completed') return;
       if (status === 'running') throw new PlatformCompletionAccountingError('execution_requires_manual_recovery');
-      if (config.llmEnrichment && config.modelId) {
+      if (await service.prepare(config)) {
         if (!(await secopsTriageRunRepository.claimExecution(executionId))) {
           throw new PlatformCompletionAccountingError('execution_requires_manual_recovery');
         }
@@ -252,7 +253,6 @@ export const handler = dispatchWithLogger(async (event: SQSEvent, context: Conte
       if (isPlatformCompletionAccountingError(error)) throw error;
       throw new PlatformCompletionAccountingError('execution_claim_failed', undefined, { cause: error });
     }
-    const service = createSecopsTriageService(logger, accounting);
     const result = await service.run(payload, githubService, config, slackBotToken ?? undefined);
     if (executionClaimed) {
       try {
