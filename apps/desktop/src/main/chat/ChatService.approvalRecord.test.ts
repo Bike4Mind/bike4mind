@@ -553,7 +553,7 @@ describe('ChatService approval record', () => {
           tools: ['c1', 'c2', 'c3'].map(id => ({
             id,
             name: 'bash_execute',
-            arguments: JSON.stringify({ command: 'echo again', cwd: root }),
+            arguments: JSON.stringify({ command: 'touch again.txt', cwd: root }),
           })),
         })
       );
