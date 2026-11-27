@@ -19,6 +19,7 @@ struct HomeDrawer: View {
       let progress = openFraction(width: width)
       ZStack(alignment: .leading) {
         if progress > 0 {
+          // A dimming scrim reads as black over content in both appearances, so it skips the palette.
           Color.black.opacity(0.4 * progress)
             .ignoresSafeArea()
             .contentShape(Rectangle())

@@ -219,9 +219,9 @@ private struct NotificationSettingsContent: View {
       Text(day.shortName)
         .font(Tokens.Typography.caption)
         .frame(maxWidth: .infinity, minHeight: 32)
-        .background(Circle().fill(isSelected ? Color.accentColor : Color.clear))
-        .overlay(Circle().stroke(Color.accentColor, lineWidth: 1))
-        .foregroundStyle(isSelected ? Color.white : Color.accentColor)
+        .background(Circle().fill(isSelected ? Tokens.Palette.brand : Color.clear))
+        .overlay(Circle().stroke(Tokens.Palette.brand, lineWidth: 1))
+        .foregroundStyle(isSelected ? Color.white : Tokens.Palette.brand)
     }
     .buttonStyle(.plain)
     .disabled(brief.isSaving)
