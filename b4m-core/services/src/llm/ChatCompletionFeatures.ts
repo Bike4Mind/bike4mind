@@ -490,6 +490,11 @@ export interface IChatCompletionServiceOptions {
     dataLakeTags: string[];
     retrievalFilter?: RetrievalExclusionOptions;
     /**
+     * Admit only lakes the user created or that belong to one of their orgs. Set when the session
+     * named no lake, so a lake reached only by public or entitlement read access never feeds the card.
+     */
+    trustedLakesOnly: boolean;
+    /**
      * Most beliefs to return, across all of `dataLakeTags`: the `lakeMemoryRecallK` admin setting,
      * resolved per turn by the caller with a coded fallback.
      *
@@ -991,6 +996,7 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
         query,
         dataLakeTags,
         retrievalFilter: this.retrievalFilter,
+        trustedLakesOnly: this.retrievalTags.length === 0,
         k: beliefBudget,
       });
       if (beliefs.length === 0) {
