@@ -144,7 +144,7 @@ const PolicyEditor: FC<{
     !busy &&
     !emptyRestriction &&
     parsedPolicy.success &&
-    staleTools.length === 0 &&
+    (!form.restrictTools || staleTools.length === 0) &&
     (invalidStored || !sameForm(form, saved));
   const savedUnrestricted = !saved.restrictProviders && !saved.restrictModels && !saved.restrictTools;
 
@@ -154,9 +154,9 @@ const PolicyEditor: FC<{
         <Box>
           <Typography level="title-md">Models and tools</Typography>
           <Typography level="body-sm">
-            Limit which AI providers, models and built-in tools members can use when working in this organization.
-            Connector (MCP) tools are governed by the connector policy instead. Requests outside an organization context
-            and platform-selected system models are exempt from this policy.
+            Limit which AI providers, models and tools members can use when working in this organization. Connector
+            (MCP) tools are governed by the connector policy instead. Requests outside an organization context and
+            platform-selected system models are exempt from this policy.
           </Typography>
         </Box>
         {invalidStored && (
@@ -230,10 +230,10 @@ const PolicyEditor: FC<{
 
         <FormControl>
           <Stack direction="row" justifyContent="space-between" alignItems="center">
-            <FormLabel>Built-in tools</FormLabel>
+            <FormLabel>Tools</FormLabel>
             <RestrictSwitch
               id="tools"
-              label="Restrict built-in tools"
+              label="Restrict tools"
               checked={form.restrictTools}
               onChange={on => update({ restrictTools: on })}
             />
@@ -258,7 +258,7 @@ const PolicyEditor: FC<{
                   data-testid={`org-model-policy-tool-${tool}`}
                 />
               ))}
-              <FormHelperText>Unchecking every tool turns off all built-in tools.</FormHelperText>
+              <FormHelperText>Unchecking every tool turns off all tools.</FormHelperText>
             </Box>
           )}
         </FormControl>

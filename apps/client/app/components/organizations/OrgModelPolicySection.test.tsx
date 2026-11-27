@@ -85,7 +85,7 @@ describe('OrgModelPolicySection', () => {
     });
   });
 
-  it('allows saving no built-in tools at all', () => {
+  it('allows saving no tools at all', () => {
     renderSection();
     toggleSwitch('tools');
     fireEvent.click(saveButton());
@@ -173,5 +173,17 @@ describe('OrgModelPolicySection', () => {
       allowedModels: null,
       allowedTools: ['web_search'],
     });
+  });
+
+  it('does not block save on unrecognized tools once the tool restriction is switched off', () => {
+    mocks.view = {
+      policy: { ...UNRESTRICTED, allowedTools: ['web_search', 'removed_tool'] },
+      invalidStored: false,
+    };
+    renderSection();
+    toggleSwitch('tools');
+    expect(saveButton().disabled).toBe(false);
+    fireEvent.click(saveButton());
+    expect(mocks.save).toHaveBeenCalledWith({ ...UNRESTRICTED, allowedTools: null });
   });
 });
