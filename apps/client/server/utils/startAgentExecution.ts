@@ -26,6 +26,7 @@ import {
 } from '@bike4mind/database';
 import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem } from '@bike4mind/common';
 import { readOrgModelPolicy } from '@bike4mind/common';
+import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
 import { orgDisallowedTools } from '@bike4mind/services/llm/orgToolPolicy';
 import type { Logger } from '@bike4mind/observability';
 import { credentialExecutionFields, type ApiKeyCredential } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
@@ -231,7 +232,11 @@ export async function startAgentExecution(
   // disallows. Session callers have them stripped silently by the executor.
   if (input.apiKeyInfo && organizationId && input.enabledTools?.length) {
     const org = await organizationRepository.findById(organizationId);
-    const disallowed = orgDisallowedTools(input.enabledTools, readOrgModelPolicy(org?.modelPolicy));
+    const disallowed = orgDisallowedTools(
+      input.enabledTools,
+      readOrgModelPolicy(org?.modelPolicy),
+      new Set(Object.keys(premiumLlmTools))
+    );
     if (disallowed.length > 0) {
       return {
         ok: false,

@@ -111,6 +111,7 @@ export class ChatCompletionInvoke {
     adminRoleWithheld,
     fileInputsAllowed,
     visitId,
+    contributedToolNames,
   }: {
     body: z.infer<typeof ChatCompletionInvokeParamsSchema>;
     userId: string;
@@ -226,7 +227,11 @@ export class ChatCompletionInvoke {
     // An API-key caller chose these tools, so it is told which ones the org disallows. Session and
     // platform (internal) turns have them dropped silently when ChatCompletionProcess assembles the list.
     if (authOrigin === 'apiKey') {
-      const disallowedTools = orgDisallowedTools(tools ?? [], readOrgModelPolicy(organization?.modelPolicy));
+      const disallowedTools = orgDisallowedTools(
+        tools ?? [],
+        readOrgModelPolicy(organization?.modelPolicy),
+        contributedToolNames
+      );
       if (disallowedTools.length > 0) {
         throw new ForbiddenError(`Tools not allowed by your organization: ${disallowedTools.join(', ')}`, {
           errorCode: ORG_TOOL_NOT_ALLOWED_ERROR_CODE,

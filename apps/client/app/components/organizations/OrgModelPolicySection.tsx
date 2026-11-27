@@ -28,6 +28,7 @@ import {
   useResetOrgModelPolicy,
   useSaveOrgModelPolicy,
 } from '@client/app/hooks/data/useOrgModelPolicy';
+import { premiumToolDisplayLabels } from '@client/app/premium-generated/premiumToolDisplayLabels.generated';
 import { useOrgModelChoices } from '@client/app/hooks/data/useModelInfo';
 
 type PolicyForm = {
@@ -62,7 +63,7 @@ const PROVIDERS: readonly string[] = Object.values(ModelBackend);
 const TOOL_ROWS: ReadonlyArray<{ tool: string; companions: string[] }> = (() => {
   const covered = new Set<string>();
   const rows: Array<{ tool: string; companions: string[] }> = [];
-  for (const tool of b4mLLMTools.options) {
+  for (const tool of [...b4mLLMTools.options, ...Object.keys(premiumToolDisplayLabels)]) {
     if (covered.has(tool)) continue;
     const companions = [...expandOrgAllowedTools([tool])].filter(name => name !== tool);
     companions.forEach(name => covered.add(name));
@@ -136,7 +137,7 @@ const PolicyEditor: FC<{ orgId: string; saved: PolicyForm; invalidStored: boolea
   const busy = save.isPending || reset.isPending;
   const parsedPolicy = toPolicy(form);
   const staleProviders = [...new Set(form.providers.filter(provider => !PROVIDERS.includes(provider)))];
-  const knownTools: ReadonlySet<string> = new Set(b4mLLMTools.options);
+  const knownTools: ReadonlySet<string> = new Set(TOOL_ROWS.map(row => row.tool));
   const staleTools = [...new Set(form.tools.filter(tool => !knownTools.has(tool)))];
   const canSave = !busy && !emptyRestriction && parsedPolicy.success && (invalidStored || !sameForm(form, saved));
   const savedUnrestricted = !saved.restrictProviders && !saved.restrictModels && !saved.restrictTools;

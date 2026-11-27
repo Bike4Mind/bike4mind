@@ -2626,6 +2626,7 @@ async function runExecution(
       // `atlassian__jira_create_issue` could not reach it either. Both sets are pure subtraction,
       // so unioning them cannot widen what this agent is offered.
       orgToolPolicy: orgModelPolicy,
+      contributedToolNames: new Set(Object.keys(premiumLlmTools)),
       sessionDisabledTools: mcpSessionDisabledTools(
         sessionDeniedTools(session),
         orchestrationProfile?.deniedTools,
@@ -5089,6 +5090,7 @@ async function processSubagentDispatch(
       getAbortSignal: () => abortController.signal,
       config: subagentToolConfig,
       orgToolPolicy: orgModelPolicy,
+      contributedToolNames: new Set(Object.keys(premiumLlmTools)),
       sessionDisabledTools: [...sessionDeniedTools(session), ...(child.scopeDeniedTools ?? [])],
       mcpToolsByServer,
       // Empty on purpose: buildSharedTools RETURNS only `tools` (agent-only MCP

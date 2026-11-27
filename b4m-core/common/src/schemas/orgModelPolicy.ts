@@ -12,7 +12,12 @@ export const OrgModelPolicySchema = z
   .object({
     allowedProviders: z.array(z.nativeEnum(ModelBackend)).min(1).max(50).nullable().default(null),
     allowedModels: z.array(z.string().trim().min(1).max(200)).min(1).max(500).nullable().default(null),
-    allowedTools: z.array(b4mLLMTools).max(100).nullable().default(null),
+    // Identifier-shaped, not the built-in enum: contributed tool names are governed too and live outside it.
+    allowedTools: z
+      .array(z.string().regex(/^[a-z][a-z0-9_]{0,63}$/, 'Invalid tool name'))
+      .max(100)
+      .nullable()
+      .default(null),
   })
   .strict();
 

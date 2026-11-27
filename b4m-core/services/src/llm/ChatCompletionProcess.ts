@@ -2220,6 +2220,7 @@ export class ChatCompletionProcess {
     prefetchedSession,
     prefetchedOrganization,
     externalTools,
+    contributedToolNames,
     videoToolConfigResolver,
     musicToolConfigResolver,
     imageJobsResolver,
@@ -2237,6 +2238,8 @@ export class ChatCompletionProcess {
     prefetchedOrganization?: IOrganizationDocument | null;
     /** External tool definitions (e.g., Slack tools) that can't be serialized through EventBridge */
     externalTools?: Record<string, ToolDefinition>;
+    /** Premium tool map keys: the only externalTools names the org tool policy governs (externalTools also carries admin/slack/lattice tools). */
+    contributedToolNames?: ReadonlySet<string>;
     /** Resolves the video tool's capability; only invoked when video_generation is enabled. */
     videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
     /** Resolves the music tool's capability; only invoked when music_generation is enabled. */
@@ -3942,6 +3945,7 @@ export class ChatCompletionProcess {
         // parentTools.
         sessionDisabledTools: deniedTools,
         orgToolPolicy: readOrgModelPolicy(organization?.modelPolicy),
+        contributedToolNames,
         mcpToolsByServer,
         quest,
         saveQuest,
@@ -4000,7 +4004,7 @@ export class ChatCompletionProcess {
         const orgFiltered = applyOrgToolPolicy(
           allTools,
           readOrgModelPolicy(organization?.modelPolicy),
-          new Set(Object.keys(externalTools ?? {}))
+          contributedToolNames
         );
         if (orgFiltered.stripped.length > 0) {
           logger.info('[OrgToolPolicy] stripped tools the organization does not allow', {

@@ -305,6 +305,7 @@ async function handleChat(
       oauthClientId: req.apiKeyInfo?.oauthExchangeClientId,
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
       fileInputsAllowed: fileInputsAllowedFor(req),
+      contributedToolNames: premiumToolNames,
       // The visit the question was asked in, so the queued turn's first_value names it. A key turn names none.
       visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,
     });
@@ -366,6 +367,7 @@ async function handleChat(
             // (its own, or its workspace's resolved at read time) include premium names needs
             // the merge or those tools silently no-op on this synchronous path.
             externalTools: premiumLlmTools,
+            contributedToolNames: premiumToolNames,
             abortSignal,
           })
         ),
