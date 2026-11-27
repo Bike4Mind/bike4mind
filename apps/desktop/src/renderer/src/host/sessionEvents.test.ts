@@ -240,4 +240,22 @@ describe('createSessionEventHub', () => {
     await host.answer(0, cursor(1));
     expect(seqsOf(handler)).toEqual([2, 3]);
   });
+
+  it('announces one resync per host when several of its sessions resync together', async () => {
+    const host = fakeClient();
+    const hub = createSessionEventHub(host.client, vi.fn());
+    const announced = vi.fn();
+    hub.onResync(announced);
+    hub.subscribe(ref, { event: vi.fn() });
+    hub.subscribe({ hostId: 'local', sessionId: 's2' }, { event: vi.fn() });
+    await host.answer(0, cursor(0));
+    await host.answer(1, cursor(0));
+
+    host.send(1, { epoch: 'e2' });
+    host.send(1, { epoch: 'e2', sessionId: 's2' });
+    await flush();
+
+    expect(announced).toHaveBeenCalledTimes(1);
+    expect(announced).toHaveBeenCalledWith('local');
+  });
 });

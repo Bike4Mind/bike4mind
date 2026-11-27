@@ -80,6 +80,17 @@ export function createSessionEventHub(
     }
   };
 
+  // One announcement per host per tick, however many of its subscriptions resync together.
+  const announcing = new Set<string>();
+  const announceResyncSoon = (hostId: string): void => {
+    if (announcing.has(hostId)) return;
+    announcing.add(hostId);
+    queueMicrotask(() => {
+      announcing.delete(hostId);
+      announceResync(hostId);
+    });
+  };
+
   const isCurrent = (subscription: Subscription): boolean =>
     subscriptions.get(keyOf(subscription.ref)) === subscription;
 
@@ -115,7 +126,7 @@ export function createSessionEventHub(
     subscription.cursor = null;
     open(subscription);
     each(subscription, handlers => handlers.resync?.());
-    announceResync(subscription.ref.hostId);
+    announceResyncSoon(subscription.ref.hostId);
   };
 
   const accept = (subscription: Subscription, params: SessionEvent): void => {
