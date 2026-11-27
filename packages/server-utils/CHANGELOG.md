@@ -1,5 +1,22 @@
 # @bike4mind/server-utils
 
+## 0.0.28
+
+### Patch Changes
+
+- Updated dependencies [[`36528fc`](https://github.com/Bike4Mind/bike4mind/commit/36528fc1f58b57e3df068623182179f189a544a4)]:
+  - @bike4mind/common@31.4.0
+  - @bike4mind/agents@1.8.12
+  - @bike4mind/auth@1.5.8
+  - @bike4mind/db-core@0.10.3
+  - @bike4mind/fab-pipeline@3.3.5
+  - @bike4mind/llm-adapters@2.10.3
+  - @bike4mind/local-models@0.1.16
+  - @bike4mind/mcp@2.2.15
+  - @bike4mind/slack@8.0.6
+  - @bike4mind/utils@13.1.5
+  - @bike4mind/database@0.4.38
+
 ## 0.0.27
 
 ### Patch Changes

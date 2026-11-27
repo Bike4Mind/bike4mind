@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
-// The local "verify before pushing" loop: typecheck (tsgo with tsc fallback, the same
-// `typecheck:fast` CI gates on), test and lint only what this branch changed against
+// The local "verify before pushing" loop: typecheck (tsgo, the same
+// `typecheck` CI gates on), test and lint only what this branch changed against
 // $TURBO_SCM_BASE (default origin/main). CI's test-shards job makes the same selection for a PR
 // (scripts/ci-affected-tests.mjs, through selectAffected below).
 //
-//   node scripts/verify-affected.mjs [--tasks typecheck:fast,test] [--no-lint] [--dry] [turbo args...]
+//   node scripts/verify-affected.mjs [--tasks typecheck,test] [--no-lint] [--dry] [turbo args...]
 //
 // Package selection is the packages owning a changed file plus their dependents, widened by the
 // cross-package inputs in turbo.json: @bike4mind/workers typechecks apps/client source,
@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-export const DEFAULT_TASKS = ['typecheck:fast', 'test'];
+export const DEFAULT_TASKS = ['typecheck', 'test'];
 
 // A change to any of these can move every package's result, so they run the full graph.
 const FULL_RUN_FILES = ['turbo.json', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.json'];
@@ -96,7 +96,7 @@ export function selectAffected({ changedFiles, turbo, packageDirs, tasks }) {
     changed: [...changed].sort(),
     extra: [...reached].filter(name => !changed.has(name)).sort(),
     // A file outside every package belongs to the root package, as in turbo's [ref] filter, so a
-    // root task such as //#typecheck:fast still runs.
+    // root task such as //#typecheck still runs.
     root: owners.includes(null),
   };
 }
@@ -120,7 +120,7 @@ export function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--tasks') {
-      if (i + 1 >= argv.length) throw new Error('verify: --tasks needs a value, e.g. --tasks typecheck:fast,test');
+      if (i + 1 >= argv.length) throw new Error('verify: --tasks needs a value, e.g. --tasks typecheck,test');
       options.tasks = argv[++i].split(',').filter(Boolean);
     } else if (arg.startsWith('--tasks=')) options.tasks = arg.slice('--tasks='.length).split(',').filter(Boolean);
     else if (arg === '--no-lint') options.lint = false;

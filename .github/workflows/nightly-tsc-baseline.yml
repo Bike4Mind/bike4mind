@@ -1,12 +1,12 @@
 name: Nightly Pure-tsc Baseline
 
-# Authoritative pure-tsc typecheck. The PR/deploy gates run `typecheck:fast`
-# (tsgo only in server-utils, workers and client; tsgo || tsc elsewhere), so
-# classic tsc runs at most on a tsgo failure. If tsgo is ever permissive where
-# tsc is strict (accepts something tsc would reject), the fast path passes and
-# tsc never runs. This nightly job runs pure tsc across the whole workspace so a
-# tsgo-permissive divergence surfaces within a day rather than by accident.
-# Remove (or relax to weekly) once the tsgo RC is GA and stable.
+# Authoritative pure-tsc typecheck. The PR/deploy gates run `typecheck` (tsgo
+# alone, no tsc fallback). If tsgo is ever permissive where tsc is strict
+# (accepts something tsc would reject), the gate passes and tsc never runs.
+# This nightly job runs pure tsc (`typecheck:tsc`) across the whole workspace so
+# a tsgo-permissive divergence surfaces within a day rather than by accident.
+# tsgo is TypeScript 7 GA (packages/tsgo). Remove (or relax to weekly) once it
+# has proven stable here.
 # See docs/typecheck-report.md.
 
 on:
@@ -70,9 +70,9 @@ jobs:
         run: pnpm turbo:core:build
 
       # Pure classic tsc — the authoritative baseline. Mirrors the pre-tsgo
-      # ci.yml gate. No `:fast`, no tsgo: this is the divergence detector.
+      # ci.yml gate. No tsgo: this is the divergence detector.
       - name: Pure tsc typecheck (authoritative baseline)
-        run: pnpm -w typecheck && pnpm --recursive typecheck
+        run: pnpm -w typecheck:tsc && pnpm --recursive typecheck:tsc
 
       - name: Open or update failure issue
         if: failure()
@@ -85,13 +85,13 @@ jobs:
             const body = [
               marker,
               '',
-              'The nightly **pure-tsc** typecheck failed. Because PR/deploy gates run `typecheck:fast` (tsgo, with a tsc fallback only in some packages), this means classic `tsc` rejects something the fast path is currently letting through — a likely **tsgo-permissive divergence**.',
+              'The nightly **pure-tsc** typecheck failed. Because PR/deploy gates run `typecheck` (tsgo alone), this means classic `tsc` rejects something the gate is currently letting through — a likely **tsgo-permissive divergence**.',
               '',
               `**Failing run:** ${runUrl}`,
               '',
               '**To investigate:**',
               '1. Open the run logs above and find the first `tsc` error.',
-              '2. Reproduce locally with pure tsc: `pnpm -w typecheck && pnpm --recursive typecheck`.',
+              '2. Reproduce locally with pure tsc: `pnpm -w typecheck:tsc && pnpm --recursive typecheck:tsc`.',
               '3. If real, fix the type error. If it is a tsgo bug, note it in `docs/typecheck-report.md`.',
               '',
               '_This issue is auto-updated by `.github/workflows/nightly-tsc-baseline.yml`._',
@@ -132,5 +132,5 @@ jobs:
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": ":red_circle: Nightly pure-tsc baseline failed — classic tsc rejects something `typecheck:fast` (tsgo) is letting through. <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+              "text": ":red_circle: Nightly pure-tsc baseline failed — classic tsc rejects something `typecheck` (tsgo) is letting through. <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
             }

@@ -34,8 +34,8 @@ function makeRes(): Captured {
   return { res, headers, getStatus: () => statusCode, getBody: () => body };
 }
 
-function makeReq(method: 'GET' | 'HEAD' | 'POST'): NextApiRequest {
-  return { method } as unknown as NextApiRequest;
+function makeReq(method: 'GET' | 'HEAD' | 'POST', headers: Record<string, string> = {}): NextApiRequest {
+  return { method, headers } as unknown as NextApiRequest;
 }
 
 describe('GET /api/react-artifact-sandbox', () => {
@@ -119,6 +119,20 @@ describe('GET /api/react-artifact-sandbox', () => {
     const { res, headers } = makeRes();
     handler(makeReq('GET'), res);
     expect(headers['Content-Security-Policy']).toContain("connect-src 'none'");
+  });
+
+  it('limits images to data:, blob: and the app origin, and stylesheets to Google Fonts', () => {
+    const { res, headers } = makeRes();
+    handler(makeReq('GET', { host: 'localhost:3000' }), res);
+    const directives = Object.fromEntries(
+      headers['Content-Security-Policy'].split(';').map((directive: string) => {
+        const [name, ...sources] = directive.trim().split(/\s+/);
+        return [name, sources];
+      })
+    );
+    expect(directives['img-src']).toEqual(['data:', 'blob:', 'http://localhost:3000']);
+    expect(directives['media-src']).toEqual(['blob:', 'data:', 'http://localhost:3000']);
+    expect(directives['style-src']).toEqual(["'unsafe-inline'", 'https://fonts.googleapis.com']);
   });
 
   it('sets object-src none and frame-src none', () => {

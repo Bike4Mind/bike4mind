@@ -6,11 +6,17 @@ import InlineArtifactPreview from '../InlineArtifactPreview';
 import type { ReactArtifact, HtmlArtifact, SvgArtifact } from '@bike4mind/common';
 
 // Mock DOMPurify
-vi.mock('dompurify', () => ({
-  default: {
-    sanitize: vi.fn((content: string) => content),
-  },
-}));
+// HTML assertions read the posted markup verbatim; the SVG path keeps the real sanitizer.
+vi.mock('dompurify', async importOriginal => {
+  const { default: real } = await importOriginal<typeof import('dompurify')>();
+  return {
+    default: {
+      sanitize: vi.fn((content: string, options?: { RETURN_DOM_FRAGMENT?: boolean }) =>
+        options?.RETURN_DOM_FRAGMENT ? real.sanitize(content, { ...options, RETURN_DOM_FRAGMENT: true }) : content
+      ),
+    },
+  };
+});
 
 // useReactArtifactSandbox reads the EnableInertArtifactRender flag via this hook (react-query).
 // Mock it so the component renders without a QueryClientProvider. Controllable per-test so we can
