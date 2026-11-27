@@ -5,6 +5,8 @@ import { useTheme } from '@mui/joy';
 import type { HeartbeatLogEntry } from '@client/app/types/heartbeatTypes';
 import MermaidChart from '../Charts/MermaidChart';
 import RechartsChart from '../Charts/RechartsChart';
+import { stripRemoteSvgReferences } from '@client/app/utils/svgSanitizer';
+import { assertNoRemoteDiagramResources, mermaidOptions } from '@client/app/utils/mermaidSecurity';
 
 interface TavernArtifactRendererProps {
   artifact: NonNullable<HeartbeatLogEntry['artifact']>;
@@ -17,12 +19,7 @@ const CompactMermaidPreview: React.FC<{ definition: string; title?: string }> = 
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: theme.palette.mode === 'dark' ? 'dark' : 'default',
-      // 'strict' sanitizes labels and disables click-handler/javascript: link injection.
-      securityLevel: 'strict',
-    });
+    mermaid.initialize(mermaidOptions(theme.palette.mode === 'dark'));
   }, [theme.palette.mode]);
 
   useEffect(() => {
@@ -34,20 +31,25 @@ const CompactMermaidPreview: React.FC<{ definition: string; title?: string }> = 
     const render = async (el: HTMLDivElement) => {
       if (cancelled || el.offsetWidth === 0) return;
       try {
+        assertNoRemoteDiagramResources(definition);
         const { svg } = await mermaid.render(
           'tavern-compact-mermaid-' + Math.random().toString(36).slice(2),
           definition
         );
         if (cancelled) return;
-        el.innerHTML = svg;
-        const svgEl = el.querySelector('svg');
+        // Parsed in a detached document, which loads nothing, so remote references are gone before it mounts.
+        const svgEl = new DOMParser().parseFromString(svg, 'text/html').body.querySelector('svg');
+        el.innerHTML = '';
         if (svgEl) {
+          stripRemoteSvgReferences(svgEl);
           svgEl.setAttribute('width', '100%');
           svgEl.removeAttribute('height');
           svgEl.style.display = 'block';
+          el.appendChild(svgEl);
         }
-      } catch {
-        // silently fail in compact preview; full modal will show the error
+      } catch (err) {
+        // The compact preview stays empty; the full MermaidChart view shows the error.
+        console.warn('Mermaid preview not rendered:', err instanceof Error ? err.message : err);
       }
     };
 

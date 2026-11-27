@@ -1,11 +1,13 @@
 import type { Request, Response } from 'express';
-import { AuthEvents } from '@bike4mind/common';
+import { AuthEvents, type OAuthDeviceClientId } from '@bike4mind/common';
 import { userRepository, authSessionRepository, realtimeConnectionRepository } from '@bike4mind/database';
 import { userService, authSessionService } from '@bike4mind/services';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { clearSessionCookies } from '@bike4mind/server-utils/auth/refreshCookie';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { isApiKeyAuth } from '@server/middlewares/apiKeyAuth';
+
+const DESKTOP_OAUTH_CLIENT_ID: OAuthDeviceClientId = 'b4m-desktop';
 
 /**
  * Ends the requesting browser's session for `req.user`. Shared by GET /api/logout and
@@ -38,10 +40,28 @@ export async function signOutBrowserSession(req: Request, res: Response, opts: {
   // kill switch). An impersonating admin's `sid` IS this impersonation session, so revoking it is
   // correct and - unlike the old tokenVersion bump - does not touch the real customer's other devices.
   if (sid && !isApiKeyAuth(req)) {
-    await authSessionService.revokeSession(sid, {
+    const revokeDeps = {
       db: { authSessions: authSessionRepository, realtimeConnections: realtimeConnectionRepository },
       logger: req.logger,
-    });
+    };
+    const revoked = await authSessionService.revokeSession(sid, revokeDeps);
+    // A Desktop sign-out also ends the web sessions that Desktop opened for itself
+    // (pages/api/auth/desktop-web-session/redeem.ts); they carry no link back to the Desktop sid.
+    // Best effort: a failed revoke must not skip the remaining ones or the audit row below.
+    if (userId && revoked?.clientId === DESKTOP_OAUTH_CLIENT_ID) {
+      try {
+        const handoffSessions = (await authSessionRepository.findActiveByUserId(userId)).filter(
+          session => session.createdVia === 'desktop-handoff'
+        );
+        const results = await Promise.allSettled(
+          handoffSessions.map(session => authSessionService.revokeSession(session.sid, revokeDeps))
+        );
+        const failed = results.filter(result => result.status === 'rejected').length;
+        if (failed > 0) req.logger.warn('[signOut] some Desktop handoff sessions were not revoked', { failed });
+      } catch (error) {
+        req.logger.warn('[signOut] could not look up Desktop handoff sessions', { error });
+      }
+    }
   }
   await logEvent({ userId, type: AuthEvents.LOGOUT }, { ability: req.ability });
   if (userId) {

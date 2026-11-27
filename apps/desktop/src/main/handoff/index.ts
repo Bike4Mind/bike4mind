@@ -1,6 +1,8 @@
+import { readdir, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { ipcMain, shell } from 'electron';
 import { IPC_CHANNELS } from '@shared/ipc';
-import type { AuthService } from '../auth';
+import { onAuthStateChanged, type AuthService } from '../auth';
 
 const WEB_LANDING_PATH = '/notebooks';
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -26,11 +28,38 @@ export function webAppUrlFor(environmentUrl: string): string | null {
   return new URL(WEB_LANDING_PATH, base.origin).href;
 }
 
+// Earlier builds opened the web app in an embedded window whose storage partition
+// (`persist:server-conversations-<hash>`) kept a web session's refresh cookie on disk.
+const LEGACY_WEB_PARTITION_PREFIX = 'server-conversations-';
+
+/** Deletes every web-window storage partition an earlier build left under `userDataDir`. */
+export async function purgeLegacyWebPartitions(userDataDir: string): Promise<void> {
+  const partitionsDir = join(userDataDir, 'Partitions');
+  let names: string[];
+  try {
+    names = await readdir(partitionsDir);
+  } catch {
+    return;
+  }
+  const legacy = names.filter(name => name.toLowerCase().startsWith(LEGACY_WEB_PARTITION_PREFIX));
+  await Promise.all(
+    legacy.map(name =>
+      rm(join(partitionsDir, name), { recursive: true, force: true }).catch((err: unknown) => {
+        console.warn(`handoff: could not remove a leftover web partition: ${err instanceof Error ? err.message : err}`);
+      })
+    )
+  );
+}
+
 /**
  * "Open Bike4Mind web" hands the web app to the user's default browser. The browser keeps its own
  * web sign-in, so Desktop shares no session with it.
  */
-export function registerSessionHandoff(auth: AuthService): void {
+export function registerSessionHandoff(auth: AuthService, userDataDir: string): void {
+  void purgeLegacyWebPartitions(userDataDir);
+  onAuthStateChanged(state => {
+    if (state.status === 'signed-out') void purgeLegacyWebPartitions(userDataDir);
+  });
   ipcMain.handle(IPC_CHANNELS.handoffOpenServerSessions, async () => {
     const state = auth.getState();
     if (state.status !== 'signed-in') return;

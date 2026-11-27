@@ -116,6 +116,7 @@ struct RootView: View {
     let upgrade = services.clientUpgrade
     Task { await upgrade.recheck() }
     Task { await services.push.appDidBecomeActive() }
+    Task { await auth.retryPendingRevocations() }
     services.resumeCapture()
     // A socket that gave up reconnecting while backgrounded gets a fresh start.
     if auth.state == .signedIn {
@@ -171,6 +172,7 @@ struct RootView: View {
     Task { await services.sessionListCache.clear() }
     let mediaFirstPages = services.mediaFirstPages
     Task { await mediaFirstPages.invalidate() }
+    Task { await services.discardAccountContent() }
     services.push.sessionDidEnd()
     services.voiceCatalog.reset()
     // A session that ended on its own cannot unregister tokens; the activities still must not linger.

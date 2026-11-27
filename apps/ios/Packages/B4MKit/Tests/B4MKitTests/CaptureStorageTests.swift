@@ -57,6 +57,25 @@ final class UploadJobStoreTests: XCTestCase {
     XCTAssertNoThrow(try store.remove(id: job.id))
   }
 
+  func testRemoveAllClearsEverythingAndTheStoreStaysUsable() throws {
+    let store = FileUploadJobStore(directory: temp.url)
+    let first = job()
+    try store.save(first)
+    let payload = try store.writePayload(Data("bytes".utf8), jobID: first.id, fileName: "a.txt")
+
+    try store.removeAll()
+
+    XCTAssertEqual(try store.loadAll(), [])
+    XCTAssertFalse(FileManager.default.fileExists(atPath: payload.path(percentEncoded: false)))
+    XCTAssertNoThrow(try store.removeAll(), "removing an already empty store is a no-op")
+
+    let second = job()
+    try store.save(second)
+    let staged = try store.writePayload(Data("more".utf8), jobID: second.id, fileName: "b.txt")
+    XCTAssertEqual(try store.load(id: second.id), second)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: staged.path(percentEncoded: false)))
+  }
+
   func testPayloadsAreKeptPerJob() throws {
     let store = FileUploadJobStore(directory: temp.url)
     let source = temp.file("src.bin", contents: Data("abc".utf8))

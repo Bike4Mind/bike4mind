@@ -7,8 +7,7 @@ import subprocess
 
 import yaml
 
-TOOLS = {'turbo', 'typescript', 'esbuild', '@types/node', '@typescript/native-preview',
-         '@tsconfig/node24', 'vitest', 'husky'}
+TOOLS = {'turbo', 'typescript', 'esbuild', '@types/node', '@tsconfig/node24', 'vitest', 'husky'}
 GROUPS = ('dependencies', 'devDependencies', 'optionalDependencies')
 
 
@@ -86,7 +85,11 @@ def dependency_inputs(ref):
             if not isinstance(version, str) or not version:
                 raise ValueError('Missing resolved version')
             if not version.startswith(('link:', 'workspace:')):
-                queue.append(version[4:] if version.startswith('npm:') else f'{name}@{version}')
+                version = version[4:] if version.startswith('npm:') else version
+                # An npm alias resolves to `<target>@<version>`, which is already the snapshot key.
+                bare = version.split('(')[0]
+                is_alias = '@' in bare[1:] and '://' not in bare and not bare.startswith('file:')
+                queue.append(version if is_alias else f'{name}@{version}')
 
     for importer in importers.values():
         for group in GROUPS:

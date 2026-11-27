@@ -61,7 +61,7 @@ Bike4Mind is a pnpm + Turborepo monorepo (Node 24).
 ```bash
 pnpm i -r              # install
 pnpm turbo:core:build  # build the @bike4mind/* core packages
-pnpm turbo:typecheck:fast   # type check
+pnpm turbo:typecheck   # type check
 pnpm turbo:test        # run tests
 ```
 

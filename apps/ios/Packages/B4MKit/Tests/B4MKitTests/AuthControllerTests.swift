@@ -1,4 +1,5 @@
 import XCTest
+import os
 
 @testable import B4MKit
 
@@ -495,6 +496,102 @@ final class AuthControllerTests: XCTestCase {
 
     XCTAssertEqual(auth.state, .signedOut(.userInitiated))
     XCTAssertNil(try store.refreshToken())
+  }
+
+  func testAFailedRevocationIsKeptAndFinishedOnceTheServerIsReachable() async throws {
+    let accessToken = freshAccessToken()
+    let online = OSAllocatedUnfairLock(initialState: false)
+    await transport.respond { request in
+      switch request.url?.path() {
+      case "/api/logout":
+        guard online.withLock({ $0 }) else { throw URLError(.notConnectedToInternet) }
+        return (200, Data())
+      case "/api/auth/refreshToken":
+        return (200, Fixtures.json(["accessToken": accessToken, "refreshToken": "sid.1"]))
+      default:
+        return (200, Fixtures.json(["access_token": accessToken, "refresh_token": "sid.0"]))
+      }
+    }
+    let auth = makeController()
+    auth.restore()
+    try await auth.signIn(using: FakeWebAuthenticator(.approve(code: "c")))
+
+    await auth.signOut()
+
+    XCTAssertNil(try store.refreshToken())
+    XCTAssertEqual(
+      try store.pendingRevocations(),
+      [PendingRevocation(baseURL: ServerEnvironment.production.baseURL, refreshToken: "sid.0", createdAt: clock.now)])
+
+    await auth.retryPendingRevocations()
+    XCTAssertEqual(
+      try store.pendingRevocations(),
+      [PendingRevocation(baseURL: ServerEnvironment.production.baseURL, refreshToken: "sid.1", createdAt: clock.now)],
+      "a retry that is still offline keeps the rotated token")
+
+    online.withLock { $0 = true }
+    await auth.retryPendingRevocations()
+
+    XCTAssertEqual(try store.pendingRevocations(), [])
+    let logouts = await transport.requests(to: logoutPath)
+    XCTAssertEqual(logouts.last?.value(forHTTPHeaderField: "Authorization"), "Bearer \(accessToken)")
+    XCTAssertEqual(auth.state, .signedOut(.userInitiated), "a retry never signs the device back in")
+    XCTAssertNil(try store.refreshToken())
+  }
+
+  func testAPendingRevocationTheServerAlreadyEndedIsDropped() async throws {
+    try store.setPendingRevocations([
+      PendingRevocation(baseURL: ServerEnvironment.production.baseURL, refreshToken: "sid.9", createdAt: clock.now)
+    ])
+    await transport.respond { _ in (401, Data()) }
+    let auth = makeController()
+    auth.restore()
+
+    await auth.retryPendingRevocations()
+
+    XCTAssertEqual(try store.pendingRevocations(), [])
+    let logouts = await transport.requests(to: logoutPath)
+    XCTAssertTrue(logouts.isEmpty)
+  }
+
+  func testPendingRevocationsAreBoundedByAgeAndCount() async throws {
+    let base = ServerEnvironment.production.baseURL
+    let other = try XCTUnwrap(URL(string: "https://elsewhere.example.com"))
+    let expired = PendingRevocation(
+      baseURL: other, refreshToken: "old", createdAt: clock.now.addingTimeInterval(-PendingRevocation.maxAge))
+    let fresh = (0..<PendingRevocation.maxCount).map {
+      PendingRevocation(baseURL: other, refreshToken: "other.\($0)", createdAt: clock.now)
+    }
+    try store.setPendingRevocations([expired] + fresh)
+    let accessToken = freshAccessToken()
+    await transport.respond { request in
+      if request.url?.path() == "/api/logout" { throw URLError(.notConnectedToInternet) }
+      return (200, Fixtures.json(["access_token": accessToken, "refresh_token": "sid.0"]))
+    }
+    let auth = makeController()
+    auth.restore()
+    try await auth.signIn(using: FakeWebAuthenticator(.approve(code: "c")))
+
+    await auth.signOut()
+
+    let pending = try store.pendingRevocations()
+    XCTAssertEqual(pending.count, PendingRevocation.maxCount)
+    XCTAssertFalse(pending.contains(expired), "an entry past the refresh lifetime is dropped")
+    XCTAssertEqual(pending.last?.baseURL, base, "the newest entry is kept over the oldest")
+  }
+
+  func testARetryLeavesAnotherEnvironmentsRevocationsAlone() async throws {
+    let other = try XCTUnwrap(URL(string: "https://elsewhere.example.com"))
+    let elsewhere = PendingRevocation(baseURL: other, refreshToken: "sid.7", createdAt: clock.now)
+    try store.setPendingRevocations([elsewhere])
+    let auth = makeController()
+    auth.restore()
+
+    await auth.retryPendingRevocations()
+
+    XCTAssertEqual(try store.pendingRevocations(), [elsewhere])
+    let refreshes = await transport.requests(to: "/api/auth/refreshToken")
+    XCTAssertTrue(refreshes.isEmpty)
   }
 
   // MARK: - Environment
