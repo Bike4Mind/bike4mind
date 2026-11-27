@@ -84,10 +84,10 @@ object BrandTokens {
             dark = Color(0xFFD3DFE8),
         )
 
-        /** Send button fill (web primary solidBg: blue[600] light, the Joy default primary 500 dark). */
+        /** Send button fill (web primary solidBg light; dark matches accent, see SessionToolbar). */
         val sendButton = BrandColorPair(
             light = Color(0xFF0066C1),
-            dark = Color(0xFF0B6BCB),
+            dark = Color(0xFF61AFEF),
         )
 
         /** Code panel fill inside a reply (web reading.surface). */
