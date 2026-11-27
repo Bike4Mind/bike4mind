@@ -131,10 +131,18 @@ describe('buildChildExecutionSnapshots — recursive grandchild inclusion', () =
     expect(snapshots[0].children).toBeUndefined();
   });
 
-  it('blanks observation content in nested steps for a viewer who is not the owner', async () => {
+  it('strips owner-only step data in nested steps for a viewer who is not the owner', async () => {
     const steps = [
-      { type: 'action', content: 'search', metadata: { toolName: 'search', timestamp: 1 } },
-      { type: 'observation', content: 'tool output text', metadata: { toolName: 'search', timestamp: 2 } },
+      {
+        type: 'action',
+        content: 'search',
+        metadata: { toolName: 'search', toolInput: { query: 'owner-only-argument' }, timestamp: 1 },
+      },
+      {
+        type: 'observation',
+        content: 'tool output text',
+        metadata: { toolName: 'search', confidenceReason: 'owner-only reasoning', timestamp: 2 },
+      },
     ];
     mockFindChildExecutions.mockResolvedValueOnce([
       makeChild({ id: 'sub-1', status: 'completed', result: { answer: 'a', steps } }),
@@ -147,8 +155,12 @@ describe('buildChildExecutionSnapshots — recursive grandchild inclusion', () =
     const snapshots = await buildChildExecutionSnapshots('parent-1', { isOwner: false });
 
     expect(JSON.stringify(snapshots)).not.toContain('tool output text');
+    expect(JSON.stringify(snapshots)).not.toContain('owner-only-argument');
+    expect(JSON.stringify(snapshots)).not.toContain('owner-only reasoning');
     expect(snapshots[0].steps.map(step => step.type)).toEqual(['action', 'observation']);
+    expect(snapshots[0].steps[0].metadata?.toolName).toBe('search');
     expect(snapshots[0].steps[1].content).toBe('');
+    expect(snapshots[0].children?.[0].steps[0].metadata?.toolName).toBe('search');
     expect(snapshots[0].children?.[0].steps[1].content).toBe('');
   });
 });
