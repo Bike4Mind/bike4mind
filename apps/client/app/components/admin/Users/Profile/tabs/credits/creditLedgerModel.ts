@@ -105,6 +105,7 @@ export const SOURCE_LABELS: Readonly<Record<CompletionSource, string>> = {
   web: 'Web',
   cli: 'CLI',
   desktop: 'Desktop',
+  mcp: 'MCP',
   api: 'API',
   agent: 'Agent',
   system: 'System',

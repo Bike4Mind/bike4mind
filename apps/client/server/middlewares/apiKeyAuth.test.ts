@@ -378,6 +378,16 @@ describe('apiKeyAuth usage log stamping', () => {
     expect((await loggedUsage({ 'user-agent': 'curl/8.4.0' })).source).toBe('api');
   });
 
+  it('stamps source mcp and the sanitized client name only for an MCP user agent', async () => {
+    const mcp = await loggedUsage({ 'user-agent': 'b4m-mcp/claude-code/1.0.0' });
+    expect(mcp.source).toBe('mcp');
+    expect(mcp.mcpClient).toBe('claude-code');
+    vi.clearAllMocks();
+    expect((await loggedUsage({ 'user-agent': 'b4m-mcp/bad name/1' })).mcpClient).toBe('unknown');
+    vi.clearAllMocks();
+    expect((await loggedUsage({ 'user-agent': 'curl/8.4.0' })).mcpClient).toBeUndefined();
+  });
+
   it('logs the route template, never the raw URL or its query string', async () => {
     const logged = await loggedUsage(
       {},

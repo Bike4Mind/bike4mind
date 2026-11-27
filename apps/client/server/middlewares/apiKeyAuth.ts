@@ -5,6 +5,7 @@ import {
   ApiKeyScope,
   ApiKeyScopeValue,
   resolveApiCompletionSource,
+  parseMcpClient,
   type ScopeForbiddenErrorSchema,
 } from '@bike4mind/common';
 import { UnauthorizedError, ForbiddenError } from '@bike4mind/server-utils/utils/errors';
@@ -339,6 +340,8 @@ export const apiKeyAuth = (
         throw new UnauthorizedError('API key validation missing user id');
       }
 
+      const mcpClientName = parseMcpClient(flattenHeaders(req.headers))?.client;
+      const mcpClient = mcpClientName ? { mcpClient: mcpClientName } : {};
       const usageInfo: Express.ApiKeyUsageInfo = {
         keyId: validation.keyId!,
         userId,
@@ -350,6 +353,7 @@ export const apiKeyAuth = (
         // billing owner. Some routes stamp UsageEvent.source differently, so the
         // credit sections can disagree with this view.
         source: resolveApiCompletionSource(flattenHeaders(req.headers)),
+        ...mcpClient,
         ownerType: resolveApiKeyOwnerType(validation),
         ...exchangeAttribution(validation),
       };
@@ -379,6 +383,7 @@ export const apiKeyAuth = (
           responseTime: finalResponseTime,
           statusCode,
           source: usageInfo.source,
+          mcpClient: usageInfo.mcpClient,
           ownerType: usageInfo.ownerType,
           oauthClientId: usageInfo.oauthClientId,
           payerStanding: usageInfo.payerStanding,

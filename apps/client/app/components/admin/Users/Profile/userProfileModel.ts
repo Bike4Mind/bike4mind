@@ -128,6 +128,7 @@ export const CLIENT_SURFACE_LABELS: Readonly<Record<ClientSurface, string>> = {
   web: 'Web',
   desktop: 'Desktop',
   cli: 'CLI',
+  mcp: 'MCP',
   api: 'API',
 };
 

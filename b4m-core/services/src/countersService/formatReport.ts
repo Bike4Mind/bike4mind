@@ -246,7 +246,7 @@ export function formatUsageBySource(usage?: Array<{ source: CompletionSource; co
   if (!usage || usage.length === 0) return null;
   const total = usage.reduce((sum, u) => sum + u.count, 0);
   if (total === 0) return null;
-  const PREFERRED_ORDER: readonly CompletionSource[] = ['web', 'cli', 'desktop', 'agent', 'api', 'system'];
+  const PREFERRED_ORDER: readonly CompletionSource[] = ['web', 'cli', 'desktop', 'mcp', 'agent', 'api', 'system'];
   const sorted = [...usage].sort((a, b) => {
     const ai = PREFERRED_ORDER.indexOf(a.source);
     const bi = PREFERRED_ORDER.indexOf(b.source);

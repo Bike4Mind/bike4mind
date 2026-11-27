@@ -18,16 +18,17 @@ describe('formatUsageBySource', () => {
     ).toBeNull();
   });
 
-  it('orders sources by the preferred order (web -> cli -> desktop -> agent -> api -> system)', () => {
+  it('orders sources by the preferred order (web -> cli -> desktop -> mcp -> agent -> api -> system)', () => {
     const out = formatUsageBySource([
       { source: 'system', count: 1 },
       { source: 'api', count: 1 },
       { source: 'agent', count: 1 },
+      { source: 'mcp', count: 1 },
       { source: 'desktop', count: 1 },
       { source: 'cli', count: 1 },
       { source: 'web', count: 1 },
     ]);
-    const ordered = ['web', 'cli', 'desktop', 'agent', 'api', 'system'].map(s => `${s}: 16.7%`);
+    const ordered = ['web', 'cli', 'desktop', 'mcp', 'agent', 'api', 'system'].map(s => `${s}: 14.3%`);
     expect(out).toBe(ordered.join(' \u00b7 '));
   });
 

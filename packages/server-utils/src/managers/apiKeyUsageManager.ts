@@ -17,6 +17,8 @@ export interface LogApiKeyUsageParams {
   responseTime: number;
   statusCode: number;
   source: ApiKeyCompletionSource;
+  /** Sanitized MCP host name; set only for `mcp` source. */
+  mcpClient?: string;
   ownerType: ApiKeyBillingOwnerType;
   /** Set for an exchange key only. */
   oauthClientId?: string;
@@ -26,7 +28,8 @@ export interface LogApiKeyUsageParams {
   logger?: Logger;
 }
 
-const exchangeAttributionFields = ({ oauthClientId, payerStanding }: LogApiKeyUsageParams) => ({
+const exchangeAttributionFields = ({ oauthClientId, payerStanding, mcpClient }: LogApiKeyUsageParams) => ({
+  ...(mcpClient ? { mcpClient } : {}),
   ...(oauthClientId ? { oauthClientId } : {}),
   ...(oauthClientId && payerStanding ? { payerStanding } : {}),
 });

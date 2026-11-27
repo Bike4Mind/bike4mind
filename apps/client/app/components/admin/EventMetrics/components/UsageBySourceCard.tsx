@@ -17,7 +17,7 @@ import { CHART_MUTED, adminChartSeries, chartLegendProps, chartPieProps, chartTo
 
 // Stable colour-per-source so the chart's slice colours match the table rows
 // across renders (recharts colours-by-index would re-shuffle on data changes).
-const KNOWN_SOURCES = ['web', 'cli', 'desktop', 'agent', 'api', 'system'] as const;
+const KNOWN_SOURCES = ['web', 'cli', 'desktop', 'mcp', 'agent', 'api', 'system'] as const;
 const SOURCE_COLORS: Record<string, string> = Object.fromEntries(
   adminChartSeries(KNOWN_SOURCES.length).map((color, index) => [KNOWN_SOURCES[index], color])
 );

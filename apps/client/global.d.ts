@@ -55,6 +55,7 @@ declare global {
       method: string;
       startTime: number;
       source: ApiKeyCompletionSource;
+      mcpClient?: string;
       ownerType: ApiKeyBillingOwnerType;
       oauthClientId?: string;
       payerStanding?: PayerStanding;

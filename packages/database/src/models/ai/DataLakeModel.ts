@@ -24,6 +24,7 @@ import type {
   LakeSettleFields,
   TaxonomyStatus,
   IDataLakeBatch,
+  API_KEY_COMPLETION_SOURCES,
 } from '@bike4mind/common';
 import {
   BATCH_NON_TERMINAL_STATUSES,
@@ -1601,7 +1602,7 @@ const DataLakeBatchSchema = new mongoose.Schema(
         {
           organizationId: { type: String, default: null },
           apiKeyId: { type: String },
-          source: { type: String, enum: ['api', 'cli', 'desktop'] },
+          source: { type: String, enum: [...API_KEY_COMPLETION_SOURCES] },
         },
         { _id: false }
       ),

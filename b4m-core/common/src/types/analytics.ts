@@ -14,22 +14,28 @@ export interface IBaseEvent {
  * - `web`:    User-driven action in the browser (web chat, image gen UI, etc.)
  * - `cli`:    Request from the B4M CLI (identified by `b4m-cli/<ver>` User-Agent)
  * - `desktop`: Request from B4M Desktop (identified by `b4m-desktop/<ver>` User-Agent)
+ * - `mcp`:    Request from an MCP host (identified by `b4m-mcp/<client>/<ver>` User-Agent)
  * - `api`:    Third-party API key holder hitting public endpoints (no first-party client UA)
  * - `agent`:  Server-side agent execution (Quest agents, automation)
  * - `system`: Background/cron jobs, internal scripts
  */
-export type CompletionSource = 'web' | 'cli' | 'desktop' | 'api' | 'agent' | 'system';
+export type CompletionSource = 'web' | 'cli' | 'desktop' | 'mcp' | 'api' | 'agent' | 'system';
 
-export const COMPLETION_SOURCES = ['web', 'cli', 'desktop', 'api', 'agent', 'system'] as const;
+export const COMPLETION_SOURCES = ['web', 'cli', 'desktop', 'mcp', 'api', 'agent', 'system'] as const;
 
 /**
  * Sources that count toward active users: first-party surfaces (and agent runs). `api` is third-party and
  * shown as its own series; `system` is background work. Must stay in sync with COMPLETION_SOURCES.
  */
-export const ACTIVE_SOURCES = ['web', 'cli', 'desktop', 'agent'] as const satisfies readonly CompletionSource[];
+export const ACTIVE_SOURCES = ['web', 'cli', 'desktop', 'mcp', 'agent'] as const satisfies readonly CompletionSource[];
 
 /** The sources an API-key-authed request can carry - see {@link resolveApiCompletionSource}. */
-export const API_KEY_COMPLETION_SOURCES = ['api', 'cli', 'desktop'] as const satisfies readonly CompletionSource[];
+export const API_KEY_COMPLETION_SOURCES = [
+  'api',
+  'cli',
+  'desktop',
+  'mcp',
+] as const satisfies readonly CompletionSource[];
 
 export type ApiKeyCompletionSource = (typeof API_KEY_COMPLETION_SOURCES)[number];
 
@@ -184,7 +190,7 @@ export interface IAdminLegacyApiKeys {
 
 /**
  * The client signal a request carries: User-Agent, then x-b4m-client. Header names are matched
- * case-insensitively. Source attribution and per-client rate limiting both read this, so the two
+ * case-insensitively. The `b4m-mcp/` prefix is matched on this same value ({@link parseMcpClient}). Source attribution and per-client rate limiting both read this, so the two
  * cannot disagree about which client made a request.
  */
 export function resolveRequestClient(headers: Record<string, string | undefined>): string | undefined {
@@ -198,11 +204,31 @@ export function resolveRequestClient(headers: Record<string, string | undefined>
   return lookup('user-agent') ?? lookup('x-b4m-client');
 }
 
+/** Caller-controlled and persisted, so only a short token is kept as the MCP host name. */
+export const MCP_CLIENT_NAME = /^[A-Za-z0-9._-]{1,32}$/;
+export const MCP_UNKNOWN_CLIENT = 'unknown';
+
+const MCP_USER_AGENT = /^b4m-mcp\/([^/]*)(?:\/(\S*))?$/i;
+
+/**
+ * Parses a `b4m-mcp/<client>/<version>` client signal. A malformed client name becomes `unknown`
+ * (the request is still MCP); a malformed version is dropped. Attribution only, never an auth input.
+ */
+export function parseMcpClient(
+  headers: Record<string, string | undefined>
+): { client: string; version?: string } | undefined {
+  const match = MCP_USER_AGENT.exec(resolveRequestClient(headers) ?? '');
+  if (!match) return undefined;
+  const client = MCP_CLIENT_NAME.test(match[1]) ? match[1] : MCP_UNKNOWN_CLIENT;
+  return match[2] && CLIENT_VERSION.test(match[2]) ? { client, version: match[2] } : { client };
+}
+
 /**
  * First-party HTTP client attribution, not an authorization signal. Only new
  * writes use this classifier; stored source values are never inferred again.
  */
 export function resolveApiCompletionSource(headers: Record<string, string | undefined>): ApiKeyCompletionSource {
+  if (parseMcpClient(headers)) return 'mcp';
   const client = resolveRequestClient(headers) ?? '';
   if (/^b4m-desktop\/\S+$/i.test(client)) return 'desktop';
   return /^b4m-cli\//i.test(client) ? 'cli' : 'api';
@@ -212,7 +238,7 @@ export function resolveApiCompletionSource(headers: Record<string, string | unde
  * The first-party surfaces recorded per user on `IUser.clientUsage`. A subset of
  * {@link CompletionSource}: `agent` and `system` are never a person using a client.
  */
-export const CLIENT_SURFACES = ['web', 'desktop', 'cli', 'api'] as const satisfies readonly CompletionSource[];
+export const CLIENT_SURFACES = ['web', 'desktop', 'cli', 'mcp', 'api'] as const satisfies readonly CompletionSource[];
 
 export type ClientSurface = (typeof CLIENT_SURFACES)[number];
 
@@ -236,6 +262,8 @@ export function resolveClientSurface(
   headers: Record<string, string | undefined>,
   options: { delegatedCredential: boolean }
 ): ClientSurfaceSignal {
+  const mcp = parseMcpClient(headers);
+  if (mcp) return mcp.version ? { surface: 'mcp', version: mcp.version } : { surface: 'mcp' };
   const match = FIRST_PARTY_CLIENT.exec(resolveRequestClient(headers) ?? '');
   if (match) {
     const surface = match[1].toLowerCase() as 'desktop' | 'cli';
