@@ -30,4 +30,19 @@ describe('strip prompt text from counter logs', () => {
     const other = await CounterLog.collection.findOne({ counterName: 'Session Created' });
     expect(other?.metadata).toEqual({ sessionId: 's2' });
   });
+
+  it('rewrites rows in every _id window of a collection larger than one window', async () => {
+    await CounterLog.collection.deleteMany({});
+    const rows = Array.from({ length: 25_000 }, (_, index) => ({
+      counterName: 'Prompt Heard',
+      metadata: index % 5_000 === 0 || index === 24_999 ? { row: index, promptMessage: 'abc' } : { row: index },
+    }));
+    await CounterLog.collection.insertMany(rows);
+
+    await migration.up();
+
+    expect(await CounterLog.collection.countDocuments({ 'metadata.promptMessage': { $exists: true } })).toBe(0);
+    expect(await CounterLog.collection.countDocuments({ 'metadata.promptLength': 3 })).toBe(6);
+    expect(await CounterLog.collection.countDocuments({})).toBe(25_000);
+  });
 });
