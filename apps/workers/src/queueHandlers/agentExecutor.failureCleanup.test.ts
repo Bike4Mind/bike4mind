@@ -55,7 +55,10 @@ describe('failure cleanup wiring in agentExecutor', () => {
   const source = readFileSync(join(__dirname, 'agentExecutor.ts'), 'utf8');
   const sliceFrom = (marker: string, endMarker: string) => {
     const start = source.indexOf(marker);
-    return source.slice(start, source.indexOf(endMarker, start));
+    if (start === -1) throw new Error(`Marker not found in agentExecutor.ts, update this test: ${marker}`);
+    const end = source.indexOf(endMarker, start);
+    if (end === -1) throw new Error(`End marker not found in agentExecutor.ts, update this test: ${endMarker}`);
+    return source.slice(start, end);
   };
 
   it('retries markFailed in the main execution failure cleanup', () => {
