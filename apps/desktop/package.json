@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/desktop",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "private": true,
   "description": "Bike4Mind Electron desktop client",
   "author": "Bike4Mind",
