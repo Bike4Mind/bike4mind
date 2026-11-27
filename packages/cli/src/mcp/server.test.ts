@@ -134,11 +134,22 @@ describe('restrictToolsToKeyScopes', () => {
     expect(await listedTools(['files:write'])).not.toContain('get_file');
   });
 
+  it('lists only list_notebooks for a key that holds only admin:*', async () => {
+    expect(await listedTools(['admin:*'])).toEqual(['list_notebooks']);
+  });
+
+  it('lists the file tools beside list_notebooks for an admin key that also holds files:read', async () => {
+    expect((await listedTools(['admin:*', 'files:read'])).sort()).toEqual(['get_file', 'list_files', 'list_notebooks']);
+  });
+
+  it('lists publish_artifact for an admin key that also holds notebooks:read', async () => {
+    expect(await listedTools(['admin:*', 'notebooks:read'])).toContain('publish_artifact');
+  });
+
   it.each([
     ['scopes that cannot be read', undefined],
     ['an unidentified key', []],
     ['a failed lookup', new Error('offline')],
-    ['an admin key', ['admin:*']],
   ])('lists every tool for %s', async (_name, scopes) => {
     expect(await listedTools(scopes as string[] | undefined | Error)).toEqual(TOOL_NAMES);
   });
