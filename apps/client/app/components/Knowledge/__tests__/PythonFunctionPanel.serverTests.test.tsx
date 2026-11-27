@@ -29,6 +29,7 @@ vi.mock('../SaveFunctionDialog', () => ({ default: () => <div data-testid="save-
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }));
 vi.mock('../PromoteFunctionSection', () => ({ default: () => null }));
 vi.mock('../FunctionDataSection', () => ({ default: () => null }));
+vi.mock('../FunctionSourcesSection', () => ({ default: () => null }));
 
 import PythonFunctionPanel, { type PythonFunctionSave } from '../PythonFunctionPanel';
 

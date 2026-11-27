@@ -41,6 +41,10 @@ vi.mock('@bike4mind/server-utils/callableFunctions/access', () => ({
 vi.mock('@bike4mind/server-utils/callableFunctions/registry', () => ({
   listOfferedCallableFunctions: vi.fn(async () => h.offered),
 }));
+vi.mock('@bike4mind/server-utils/callableFunctions/sharing', async orig => ({
+  ...(await orig<Record<string, unknown>>()),
+  reachableSharedFunctions: vi.fn(async () => []),
+}));
 vi.mock('@bike4mind/server-utils/mcpConnections/customMcpToolHost', () => ({
   customMcpToolHost: { listConnections: vi.fn(async () => []), callTool: vi.fn() },
 }));
@@ -49,6 +53,8 @@ vi.mock('@bike4mind/database', async orig => ({
   callableFunctionRepository: {
     findBySlugForOwner: vi.fn(async (slug: string) => h.offered.find(entry => entry.slug === slug) ?? null),
   },
+  callableFunctionReviewRepository: { findForUser: vi.fn(async () => []) },
+  artifactRepository: { findOne: vi.fn(async () => ({ version: 1, deletedAt: null })) },
 }));
 
 import {

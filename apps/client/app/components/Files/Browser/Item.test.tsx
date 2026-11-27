@@ -152,6 +152,17 @@ describe('FileBrowserItem image moderation gating', () => {
   });
 });
 
+describe('FileBrowserItem size', () => {
+  it('lists a file under 1 KB in bytes and a larger one in KB', () => {
+    renderWithProviders(<FileBrowserItem file={makeFile({ id: 'small', fileSize: 46 })} viewType="list" />);
+    expect(screen.getAllByText('46 bytes').length).toBeGreaterThan(0);
+    expect(screen.queryByText('0 KB')).toBeNull();
+
+    renderWithProviders(<FileBrowserItem file={makeFile({ id: 'large', fileSize: 3017 })} viewType="list" />);
+    expect(screen.getAllByText('3 KB').length).toBeGreaterThan(0);
+  });
+});
+
 // The "Added" indicator is driven by config.addedFileIds from the instance context,
 // so an embedded picker can flag files already present in its own list.
 describe('FileBrowserItem added-indicator', () => {

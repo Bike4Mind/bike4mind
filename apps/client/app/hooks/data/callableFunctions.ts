@@ -7,11 +7,14 @@ import type {
   CallableFunctionExample,
   CallableFunctionGrantVisibility,
   CallableFunctionSlugHolder,
+  CallableFunctionStampData,
   FunctionContract,
   FunctionContractChange,
   FunctionContractProblem,
+  ICallableFunctionDetail,
   ICallableFunctionPublic,
   ICallableFunctionShared,
+  ICallableFunctionSource,
   McpToolApprovalMode,
 } from '@bike4mind/common';
 import type { CallableFunctionShareView } from '@pages/api/callable-functions/[id]/grants';
@@ -164,17 +167,11 @@ export const useCreateCallableFunction = () => {
 export const useRepinCallableFunction = () => {
   const invalidate = useInvalidateCallableFunctions();
   return useMutation({
-    mutationFn: async ({
-      id,
-      expectedVersion,
-      contract,
-      acceptBreaking,
-    }: CallableFunctionPinInput & { id: string; acceptBreaking?: true }) =>
+    mutationFn: async ({ id, expectedVersion, contract }: CallableFunctionPinInput & { id: string }) =>
       (
         await api.post<ICallableFunctionPublic>(`${COLLECTION}/${encodeURIComponent(id)}/pin`, {
           expectedVersion,
           contract,
-          ...(acceptBreaking ? { acceptBreaking } : {}),
         })
       ).data,
     onSettled: invalidate,
@@ -209,12 +206,23 @@ export function useCallableFunctionList(enabled: boolean) {
   });
 }
 
+/** One of the owner's own tools with its contract; null `id` waits. Another person's tool answers 404. */
+export function useCallableFunctionDetail(id: string | null) {
+  const hasAccessToken = useAccessToken(s => !!s.accessToken);
+  return useQuery({
+    queryKey: [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, id, 'detail'],
+    queryFn: async () => (await api.get<ICallableFunctionDetail>(`${COLLECTION}/${encodeURIComponent(id ?? '')}`)).data,
+    enabled: hasAccessToken && !!id,
+  });
+}
+
 /**
  * Runs the saved tool's declared tests on the server, against the pinned code, or only the named ones (those an
  * earlier run left not run); nothing is written but the call log.
  */
-export const useRunCallableFunctionTests = () =>
-  useMutation({
+export const useRunCallableFunctionTests = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
     mutationFn: async ({ id, tests }: { id: string; tests?: string[] }) =>
       (
         await api.post<CallableFunctionTestRun>(
@@ -222,9 +230,14 @@ export const useRunCallableFunctionTests = () =>
           tests ? { tests } : {}
         )
       ).data,
+    onSettled: (_run, _error, { id }) => queryClient.invalidateQueries({ queryKey: callsQueryKey(id) }),
   });
+};
 
 const callsQueryKey = (id: string) => [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, id, 'calls'] as const;
+
+/** How often an open calls panel re-reads, so calls made from chat, REST, or MCP show without a reload. */
+export const CALLABLE_FUNCTION_CALLS_REFRESH_MS = 15_000;
 
 /**
  * Promotes the saved tool to live once the server reads its contract and runs every declared test and worked example;
@@ -249,16 +262,32 @@ export const useSetCallableFunctionExamples = () => {
   });
 };
 
-/** The owner's calls of the saved tool over the last 30 days; refetched with the list after any change to the tool. */
+/**
+ * The owner's calls of the saved tool over the last 30 days; refetched with the list after any change to the tool,
+ * after a server test run, and every `CALLABLE_FUNCTION_CALLS_REFRESH_MS` while shown.
+ */
 export function useCallableFunctionCalls(id: string) {
   return useQuery({
     queryKey: callsQueryKey(id),
     queryFn: async () =>
       (await api.get<CallableFunctionCallSummary>(`${COLLECTION}/${encodeURIComponent(id)}/calls`)).data,
+    refetchInterval: CALLABLE_FUNCTION_CALLS_REFRESH_MS,
   });
 }
 
 const shareQueryKey = (id: string) => [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, id, 'grants'] as const;
+
+/** The account holding exactly `email`, in any organization, for the owner of tool `id` to share with; null if none. */
+export async function lookupCallableFunctionRecipient(
+  id: string,
+  email: string
+): Promise<{ id: string; name: string } | null> {
+  return (
+    await api.get<{ id: string; name: string } | null>(`${COLLECTION}/${encodeURIComponent(id)}/recipient`, {
+      params: { email },
+    })
+  ).data;
+}
 
 /**
  * The owner's share of the tool: its grants and the named people's names. Not kept once nothing watches it: the share
@@ -340,12 +369,12 @@ export const useUpdateSharedCallableFunctionReview = () => {
 };
 
 /** Tools other people shared with this person, with this person's review of each. */
-export function useSharedCallableFunctions() {
+export function useSharedCallableFunctions(enabled = true) {
   const hasAccessToken = useAccessToken(s => !!s.accessToken);
   return useQuery({
     queryKey: [...CALLABLE_FUNCTIONS_LIST_QUERY_KEY, 'shared'],
     queryFn: async () => (await api.get<ICallableFunctionShared[]>(`${COLLECTION}/shared`)).data,
-    enabled: hasAccessToken,
+    enabled: hasAccessToken && enabled,
   });
 }
 
@@ -354,6 +383,15 @@ export const usePinCallableFunctionData = () => {
   return useMutation({
     mutationFn: async ({ id, fileId, name }: { id: string; fileId: string; name: string }) =>
       (await api.post<ICallableFunctionPublic>(`${COLLECTION}/${encodeURIComponent(id)}/data`, { fileId, name })).data,
+    onSettled: invalidate,
+  });
+};
+
+export const useSetCallableFunctionSources = () => {
+  const invalidate = useInvalidateCallableFunctions();
+  return useMutation({
+    mutationFn: async ({ id, sources }: { id: string; sources: ICallableFunctionSource[] }) =>
+      (await api.put<ICallableFunctionPublic>(`${COLLECTION}/${encodeURIComponent(id)}/sources`, { sources })).data,
     onSettled: invalidate,
   });
 };
@@ -382,23 +420,39 @@ export function resetCallableFunctionDataCache(): void {
   dataBytesByHash.clear();
 }
 
-async function fetchVerifiedDataBytes(id: string, pin: ICallableFunctionPublic['dataPins'][number]) {
-  const { url } = (
-    await api.get<{ url: string }>(`${COLLECTION}/${encodeURIComponent(id)}/data/${encodeURIComponent(pin.name)}`)
-  ).data;
+/** Bytes from a link the read route answered with, checked against `sha256`; `label` names them in errors. */
+async function readVerifiedBytes(url: string, sha256: string, label: string, mismatch: string) {
   let bytes: ArrayBuffer;
   if (url.startsWith('/')) {
     bytes = (await api.get<ArrayBuffer>(url, { responseType: 'arraybuffer' })).data;
   } else {
     // A signed link to the data bucket: no credentials, and nothing for the browser to keep.
     const response = await fetch(url, { credentials: 'omit', cache: 'no-store' });
-    if (!response.ok) throw new Error(`The data file ${pin.name} could not be read (${response.status}).`);
+    if (!response.ok) throw new Error(`The ${label} could not be read (${response.status}).`);
     bytes = await response.arrayBuffer();
   }
-  if (hex(await globalThis.crypto.subtle.digest('SHA-256', bytes)) !== pin.sha256) {
-    throw new Error(`The data file ${pin.name} does not match its pinned hash.`);
+  if (hex(await globalThis.crypto.subtle.digest('SHA-256', bytes)) !== sha256) {
+    throw new Error(`The ${label} ${mismatch}.`);
   }
   return bytes;
+}
+
+/** The verified bytes for `sha256`, read by `read` only when no earlier read of the same hash is cached. */
+async function cachedBytes(sha256: string, read: () => Promise<ArrayBuffer>): Promise<ArrayBuffer> {
+  let cached = dataBytesByHash.get(sha256);
+  if (!cached) {
+    cached = read();
+    dataBytesByHash.set(sha256, cached);
+    cached.catch(() => dataBytesByHash.delete(sha256));
+  }
+  return (await cached).slice(0);
+}
+
+async function fetchVerifiedDataBytes(id: string, pin: ICallableFunctionPublic['dataPins'][number]) {
+  const { url } = (
+    await api.get<{ url: string }>(`${COLLECTION}/${encodeURIComponent(id)}/data/${encodeURIComponent(pin.name)}`)
+  ).data;
+  return readVerifiedBytes(url, pin.sha256, `data file ${pin.name}`, 'does not match its pinned hash');
 }
 
 /**
@@ -411,14 +465,33 @@ export async function fetchCallableFunctionDataFiles(
   pins: ICallableFunctionPublic['dataPins']
 ): Promise<{ name: string; bytes: ArrayBuffer }[]> {
   return Promise.all(
-    pins.map(async pin => {
-      let cached = dataBytesByHash.get(pin.sha256);
-      if (!cached) {
-        cached = fetchVerifiedDataBytes(id, pin);
-        dataBytesByHash.set(pin.sha256, cached);
-        cached.catch(() => dataBytesByHash.delete(pin.sha256));
-      }
-      return { name: pin.name, bytes: (await cached).slice(0) };
+    pins.map(async pin => ({
+      name: pin.name,
+      bytes: await cachedBytes(pin.sha256, () => fetchVerifiedDataBytes(id, pin)),
+    }))
+  );
+}
+
+/**
+ * Each source's bytes for `/data/<name>` in the browser, read through the owner-only route that fetches them as a
+ * server call would, with the stamp entry a server call would write. The bytes come from the same one-minute link and
+ * hash cache as pinned files, as fresh copies. Throws when a source cannot be read or does not match.
+ */
+export async function fetchCallableFunctionSources(
+  id: string,
+  sources: ICallableFunctionPublic['sources']
+): Promise<{ name: string; bytes: ArrayBuffer; entry: CallableFunctionStampData }[]> {
+  return Promise.all(
+    sources.map(async source => {
+      const { entry, url } = (
+        await api.get<{ entry: CallableFunctionStampData; url: string }>(
+          `${COLLECTION}/${encodeURIComponent(id)}/sources/${encodeURIComponent(source.name)}`
+        )
+      ).data;
+      const bytes = await cachedBytes(entry.sha256, () =>
+        readVerifiedBytes(url, entry.sha256, `source ${source.name}`, 'does not match the hash it was read with')
+      );
+      return { name: source.name, bytes, entry: { ...entry, name: source.name } };
     })
   );
 }

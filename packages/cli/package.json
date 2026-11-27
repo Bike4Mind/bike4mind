@@ -37,9 +37,8 @@
   "scripts": {
     "dev": "B4M_SOURCE_MODE=1 tsx src/index.tsx",
     "build": "tsdown",
-    "typecheck": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit --types node",
-    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "typecheck:tsc": "tsc --noEmit",
+    "typecheck":"tsgo --noEmit --types node",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",

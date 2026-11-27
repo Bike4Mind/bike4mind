@@ -10,8 +10,11 @@ import {
   type CallableFunctionServerRunCase,
   type FunctionContractChange,
   type ICallableFunctionPublic,
+  type ICallableFunctionSourcePin,
 } from '@bike4mind/common';
 import { callableFunctionRepository } from '@bike4mind/database';
+import { CallableFunctionSourceError } from './fetchSource';
+import { fetchPinnedCallableFunctionSources } from './sources';
 import {
   callableFunctionCaseHash,
   prepareServerRun,
@@ -86,6 +89,16 @@ export async function promoteCallableFunction(
   if (all.length === 0) {
     throw new BadRequestError('Declare a test or add a worked example before promoting.', { code: 'no_cases' });
   }
+
+  // The pinned sources are fetched once here; the cases read these bytes and the promotion freezes them.
+  let sourcePins: ICallableFunctionSourcePin[];
+  try {
+    sourcePins = await fetchPinnedCallableFunctionSources(fn, target.sources);
+  } catch (error) {
+    if (!(error instanceof CallableFunctionSourceError)) throw error;
+    throw new ConflictError(`A pinned source could not be fetched: ${error.message}`, { code: error.code });
+  }
+  target.sources = { ...target.sources, sourcePins };
 
   const reusable = reusableCasePasses(target);
   const fresh = all.filter(entry => !reusable.has(entry.caseHash));
@@ -195,6 +208,10 @@ export async function promoteCallableFunction(
       lastServerRun: run,
       trustLabel: callableFunctionTrustLabel(runCases),
       contract,
+      sourcePins,
+      pin: fn.pin,
+      description: fn.description,
+      ...(fn.sources?.length ? { sources: fn.sources } : {}),
     }
   );
   // A repin, an examples edit, or another promotion landed while the cases ran.

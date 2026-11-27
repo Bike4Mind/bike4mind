@@ -28,6 +28,7 @@ import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import IntegrationLogo from './IntegrationLogo';
 import IntegrationDrawer from './IntegrationDrawer';
+import SharedFunctionsSection from './customMcp/SharedFunctionsSection';
 import { IntegrationStatusLabel, RequestButton, requestCountText } from './IntegrationStatusLabel';
 import {
   STATUS_FILTERS,
@@ -775,6 +776,7 @@ const IntegrationsGallery = ({
         </TabList>
       </Tabs>
 
+      {tab === 'integrations' && <SharedFunctionsSection sx={{ mt: '16px' }} />}
       {tab === 'integrations' ? integrationsBody() : modelsBody()}
 
       <IntegrationDrawer

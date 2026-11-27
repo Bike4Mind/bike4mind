@@ -127,8 +127,8 @@ describe('Spider - determineSessionOperations', () => {
       expect(result.summarize).toBe(true);
     });
 
-    // The backoff bounds a notebook the model can never tag: the handler bills before it parses,
-    // so without this the same notebook buys a completion on every run.
+    // The backoff bounds a notebook the model can never tag: a parse failure still spends (and
+    // bills) a completion, so without this the same notebook buys one on every run.
     it('should skip tagging inside the retry backoff', () => {
       const session = createMockSession({ tagLastAttemptAt: new Date(Date.now() - TAG_RETRY_BACKOFF_MS / 2) });
       const result = determineSessionOperations(session, allOperations);

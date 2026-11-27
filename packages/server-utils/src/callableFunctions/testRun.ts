@@ -31,6 +31,7 @@ import {
 } from './dispatch';
 import { CALLABLE_FUNCTION_DEFAULT_TIMEOUT_MS } from './runtimeParent';
 import { selectCallableFunctionRunner, type CallableFunctionRunner } from './runtimeRunner';
+import type { CallableFunctionSourceDeps } from './sources';
 
 /**
  * One test run answers inside the web function's 60 s (`infra/web.ts`): the contract read and every case draw from
@@ -94,6 +95,8 @@ export interface CallableFunctionServerRunOptions {
   runner?: CallableFunctionRunner | null;
   /** Never above `CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS`. */
   budgetMs?: number;
+  /** For the function's sources; the environment's fetcher and store by default. */
+  sources?: CallableFunctionSourceDeps;
 }
 
 export interface CallableFunctionTestRunOptions extends CallableFunctionServerRunOptions {
@@ -112,6 +115,8 @@ export interface CallableFunctionServerRunTarget {
   runtime: CallableFunctionServerRuntime;
   /** Epoch ms after which no case starts; the contract read and every case draw from one budget. */
   deadline: number;
+  /** Passed to every case's dispatch; a promotion adds the sources it fetched. */
+  sources?: CallableFunctionSourceDeps;
 }
 
 /** Read outcomes that mean the runtime is not ready yet, so a retry can succeed. */
@@ -128,10 +133,7 @@ export async function prepareServerRun(
   id: string,
   options: CallableFunctionServerRunOptions = {}
 ): Promise<CallableFunctionServerRunTarget> {
-  const budgetMs = Math.min(
-    options.budgetMs ?? CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS,
-    CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS
-  );
+  const budgetMs = Math.min(options.budgetMs ?? callableFunctionTestRunBudget(), CALLABLE_FUNCTION_TEST_RUN_BUDGET_MS);
   const deadline = Date.now() + budgetMs;
   const left = () => deadline - Date.now();
 
@@ -184,6 +186,7 @@ export async function prepareServerRun(
     contractCallId: read.callId,
     runtime: read.runtime,
     deadline,
+    ...(options.sources ? { sources: options.sources } : {}),
   };
 }
 
@@ -198,7 +201,9 @@ export const callableFunctionCaseHash = (testCase: CallableFunctionServerCase): 
     )
     .digest('hex');
 
+// A function with sources reads data fetched for each run, so no earlier result stands for this one.
 const sameRunKey = (recorded: CallableFunctionCaseResults, target: CallableFunctionServerRunTarget) =>
+  !target.fn.sources?.length &&
   recorded.pinVersion === target.fn.pin.version &&
   recorded.contentHash === target.fn.pin.contentHash &&
   recorded.runtimeVersion === target.runtime.version &&
@@ -295,6 +300,7 @@ export async function runServerCases(
         contract: target.contract,
         deadline: target.deadline,
         minWaitMs: CALLABLE_FUNCTION_TEST_CASE_MIN_MS,
+        ...(target.sources ? { sources: target.sources } : {}),
       }
     );
     if (call.outcome === 'refused' && call.reason === 'budget_exhausted') {

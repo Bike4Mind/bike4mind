@@ -2,8 +2,9 @@ import { copyFileSync, mkdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import react from '@vitejs/plugin-react';
-import { defineConfig, externalizeDepsPlugin, loadEnv } from 'electron-vite';
+import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import type { Plugin } from 'vite';
+import { baked, copyTreeSitterWasm, devVersionInfo, PRODUCTION_API_URL } from './buildShared';
 
 const sharedDir = resolve(__dirname, 'src/shared');
 // Imported from source: the published CLI is bin-only and ships no skills entry point.
@@ -11,26 +12,6 @@ const cliSkills = resolve(__dirname, '../../packages/cli/src/skills/index.ts');
 // See the shim's own header: @bike4mind/common's barrel statically imports node:crypto,
 // which a sandboxed renderer cannot resolve.
 const nodeCryptoShim = resolve(__dirname, 'src/renderer/src/shims/nodeCrypto.ts');
-// Used when no B4M_DEFAULT_API_URL is supplied; a fork overrides it by setting that variable.
-const PRODUCTION_API_URL = 'https://app.bike4mind.com';
-
-/**
- * Puts the tree-sitter wasm binaries beside the main bundle, in `wasm/`. The shell parser reads
- * them at runtime by file path, so a bundler that never sees an import for them would otherwise
- * leave a packaged app with a parser that cannot start.
- */
-function copyTreeSitterWasm(): Plugin {
-  const require = createRequire(join(__dirname, 'package.json'));
-  const assets = ['web-tree-sitter/tree-sitter.wasm', 'tree-sitter-bash/tree-sitter-bash.wasm'];
-  return {
-    name: 'copy-tree-sitter-wasm',
-    writeBundle(options) {
-      const target = join(options.dir ?? resolve(__dirname, 'out/main'), 'wasm');
-      mkdirSync(target, { recursive: true });
-      for (const asset of assets) copyFileSync(require.resolve(asset), join(target, asset.split('/').pop() as string));
-    },
-  };
-}
 
 /**
  * Puts the manifold-3d engine (Apache-2.0) beside the main bundle, in `model3d/`. The b4m-model:
@@ -53,32 +34,6 @@ function copyManifoldEngine(): Plugin {
 }
 
 /**
- * One of the brand values supplied at build time and never committed. Precedence is the
- * shell environment first - that is how CI injects them for the CLI today, and how a
- * packaging run injects them here - then a gitignored `.env`/`.env.local` in this
- * directory, which only exists so a local packaging run is one command rather than a long
- * prefix. Absent both, the value is empty.
- *
- * An empty shell value counts as unset for the backend, because CI passes an unset repository
- * variable through as ''. It does not for the others: an explicit '' is how the ad-hoc macOS
- * build in desktop-release.yml switches updates off.
- */
-function baked(
-  mode: string,
-  name: 'B4M_DEFAULT_API_URL' | 'B4M_UPDATE_FEED_URL' | 'B4M_UPDATE_PUBLIC_KEYS' | 'B4M_CURATED_MANIFEST_URL'
-): string {
-  const shell = process.env[name];
-  if (shell !== undefined && (shell !== '' || name !== 'B4M_DEFAULT_API_URL')) return shell;
-  // loadEnv lets a prefixed shell value override the file's even when that value is empty.
-  delete process.env[name];
-  try {
-    return loadEnv(mode, __dirname, 'B4M_')[name] ?? '';
-  } finally {
-    if (shell !== undefined) process.env[name] = shell;
-  }
-}
-
-/**
  * Writes `curated-build.json` beside the main bundle with the curated values this build baked in, so
  * packages/scripts `curated:check-build` can fail a release that trusts the test keys or bakes a non-https URL.
  */
@@ -89,18 +44,6 @@ function curatedBuildInfo(info: { devKeys: boolean; manifestUrl: string }): Plug
       this.emitFile({ type: 'asset', fileName: 'curated-build.json', source: `${JSON.stringify(info)}\n` });
     },
   };
-}
-
-/** The release-derived version an unpackaged run shows. Computed in every mode and unable to fail the build. */
-function devVersionInfo(): { version: string; basis: string } {
-  try {
-    const { readDevVersion } = createRequire(join(__dirname, 'package.json'))('./scripts/dev-version.cjs') as {
-      readDevVersion(cwd: string): { version: string; basis: string };
-    };
-    return readDevVersion(__dirname);
-  } catch {
-    return { version: '', basis: '' };
-  }
 }
 
 export default defineConfig(({ mode }) => {

@@ -1,5 +1,12 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
-import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  ApiKeyStatus,
+  chatContract,
+  createFunctionContract,
+  invokeFunctionContract,
+  isMintableConfinedScopeSet,
+} from '@bike4mind/common';
 import {
   assertApiKeyScope,
   decideScopeGate,
@@ -480,6 +487,26 @@ describe('exchange keys', () => {
       outcome: 'legacyAllow',
     });
     expect(decideScopeGate(required, held, NONE, undefined, { grandfathered: false })).toEqual({ outcome: 'deny' });
+  });
+
+  it('passes a key holding the chat and functions scopes on the functions and chat routes, and nowhere else', () => {
+    const both = [...held, ApiKeyScope.FUNCTIONS_INVOKE, ApiKeyScope.FUNCTIONS_AUTHOR];
+    expect(isMintableConfinedScopeSet(both, { exchangeKey: true })).toBe(true);
+    for (const contract of [invokeFunctionContract, createFunctionContract, chatContract]) {
+      expect(
+        decideScopeGate([...contract.scopes], both, NONE, undefined, { exchangeKey: true }),
+        contract.path
+      ).toEqual({ outcome: 'allow' });
+    }
+    expect(decideScopeGate(undefined, both, NONE, undefined, { exchangeKey: true })).toEqual({ outcome: 'deny' });
+    expect(decideScopeGate([ApiKeyScope.READ_NOTEBOOKS], both, NONE, undefined, { exchangeKey: true })).toEqual({
+      outcome: 'deny',
+    });
+    // A dashboard key keeps the stricter rule: a functions scope shares a key only with the other one.
+    expect(isMintableConfinedScopeSet(both)).toBe(false);
+    expect(
+      isMintableConfinedScopeSet([ApiKeyScope.FUNCTIONS_INVOKE, ApiKeyScope.EMBED_CHAT], { exchangeKey: true })
+    ).toBe(false);
   });
 
   it('allows an exchange key that explicitly matches on a grandfathered route', () => {

@@ -5,6 +5,7 @@ import type { LocalRuntime } from '@bike4mind/local-models';
 import { B4mApiClient } from './b4mApiClient';
 import { MODEL_TOOL_NAMES, type ModelToolsDeps } from './modelTools';
 import { buildLocalMcpServer, buildMcpServer } from './server';
+import { TOOL_NAMES, restrictToolsToKeyScopes } from './tools';
 
 describe('buildLocalMcpServer', () => {
   it('serves callable model tools and no resources or prompts', async () => {
@@ -66,5 +67,79 @@ describe('buildMcpServer', () => {
     const { prompts } = await client.listPrompts();
 
     expect(prompts.map(p => p.title)).toEqual(['Summarize']);
+  });
+});
+
+describe('restrictToolsToKeyScopes', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function listedTools(scopes: string[] | undefined | Error) {
+    vi.spyOn(B4mApiClient.prototype, 'getOwnKeyScopes').mockImplementation(async () => {
+      if (scopes instanceof Error) throw scopes;
+      return scopes;
+    });
+    const client = new B4mApiClient('http://localhost:3000', undefined, 'b4m_live_key');
+    const options = { baseURL: 'http://localhost:3000', apiKey: 'b4m_live_key', version: '0.0.0' };
+    const server = buildMcpServer(options, client);
+    await restrictToolsToKeyScopes(server, client);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const mcpClient = new Client({ name: 'test-client', version: '0.0.0' });
+    await Promise.all([server.connect(serverTransport), mcpClient.connect(clientTransport)]);
+    return (await mcpClient.listTools()).tools.map(t => t.name);
+  }
+
+  it('lists the function tools alone for a key that holds only functions:invoke', async () => {
+    expect(await listedTools(['functions:invoke'])).toEqual(['list_functions', 'call_function']);
+  });
+
+  it('lists a tool for each scope the key holds', async () => {
+    const names = await listedTools(['functions:invoke', 'notebooks:read']);
+    expect(names).toEqual(expect.arrayContaining(['list_functions', 'call_function', 'list_notebooks']));
+    expect(names).not.toContain('create_notebook');
+  });
+
+  it.each([
+    ['notebooks:write', ['list_notebooks', 'get_notebook', 'search_knowledge_base']],
+    ['datalake:query', ['list_lakes']],
+    ['ai:generate', ['get_file', 'send_message']],
+  ])('keeps the read tools listed for a key that holds only %s', async (scope, tools) => {
+    expect(await listedTools([scope])).toEqual(expect.arrayContaining(tools));
+  });
+
+  it('hides the project read tools from a key that holds only projects:write', async () => {
+    const names = await listedTools(['projects:write']);
+    expect(names).not.toContain('list_projects');
+    expect(names).not.toContain('get_project');
+    expect(names).toContain('create_project');
+  });
+
+  it('hides publish_artifact from a key that holds only artifacts:publish', async () => {
+    expect(await listedTools(['artifacts:publish'])).not.toContain('publish_artifact');
+  });
+
+  it.each([['notebooks:read'], ['notebooks:write']])(
+    'lists publish_artifact for a key that holds artifacts:publish and %s',
+    async scope => {
+      expect(await listedTools(['artifacts:publish', scope])).toContain('publish_artifact');
+    }
+  );
+
+  it.each([['files:write'], ['ai:generate']])('hides list_files from a key that holds only %s', async scope => {
+    expect(await listedTools([scope])).not.toContain('list_files');
+  });
+
+  it('hides get_file from a key that holds only files:write', async () => {
+    expect(await listedTools(['files:write'])).not.toContain('get_file');
+  });
+
+  it.each([
+    ['scopes that cannot be read', undefined],
+    ['an unidentified key', []],
+    ['a failed lookup', new Error('offline')],
+    ['an admin key', ['admin:*']],
+  ])('lists every tool for %s', async (_name, scopes) => {
+    expect(await listedTools(scopes as string[] | undefined | Error)).toEqual(TOOL_NAMES);
   });
 });

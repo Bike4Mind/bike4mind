@@ -396,7 +396,7 @@ from io import StringIO
 
 _MAX_OUTPUT_CHARS = 100000
 _MAX_CONTRACT_BYTES = 32768
-_MAX_RESULT_BYTES = 262144
+_MAX_RESULT_BYTES = 5242880
 _MAX_PROBLEMS = 50
 
 class _FunctionCallError(Exception):
@@ -468,7 +468,7 @@ def _b4m_call_function(code, params_json):
             except (TypeError, ValueError) as e:
                 raise _FunctionCallError('run returned a value that is not valid JSON: ' + str(e))
             if len(value_text) > _MAX_RESULT_BYTES:
-                raise _FunctionCallError('The function returned a result larger than 256 KB.')
+                raise _FunctionCallError('The function returned a result larger than 5 MB.')
             value_json = value_text
             _output_type_problems(contract.get('outputs'), value, '', output_problems)
     except _FunctionCallError as e:

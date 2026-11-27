@@ -4,6 +4,7 @@ import {
   CallableFunctionProtectedFieldError,
   calculateContentHash,
   parseFunctionContract,
+  recipientCallableFunction,
   reviewHash,
   type FunctionContract,
   type ICallableFunctionGrants,
@@ -34,9 +35,11 @@ vi.mock('./access', () => ({
 }));
 
 import { resolveOrganizationCallableFunctionsEnabled } from './access';
+import { findCallerFunction, listCallerFunctions } from './callerFunctions';
 import { dispatchFunctionCall } from './dispatch';
 import {
   canCallFunction,
+  findCallableFunctionRecipient,
   getCallableFunctionShare,
   listSharedCallableFunctions,
   revokeCallableFunctionShare,
@@ -255,7 +258,7 @@ describe('the access matrix, through the dispatcher', () => {
     expect(await listSharedCallableFunctions(PROJECT_MEMBER)).toEqual([]);
   });
 
-  it('refuses every recipient while a repin leaves the function a draft, until the next promotion', async () => {
+  it('refuses every recipient while a repin leaves a function with no kept promotion a draft', async () => {
     const id = await seedLiveFunction({ visibility: 'organization', organizationId: ORG_ID, userIds: [PERSON.id] });
     const owner = { ownerType: 'user' as const, ownerKey: OWNER.id };
     const live = await CallableFunction.findById(id).lean();
@@ -274,21 +277,103 @@ describe('the access matrix, through the dispatcher', () => {
     }
     expect(runner).not.toHaveBeenCalled();
     expect(await canCallFunction(OWNER, repinned!)).toBe('owner');
+  });
 
-    const promoted = await callableFunctionRepository.promote(
-      id,
-      owner,
-      { updatedAt: repinned!.updatedAt },
-      {
-        seq: 2,
-        runtime: { kind: 'pyodide-server', version: '0.25.1', packages: [] },
-        lastServerRun: { at: new Date(), passed: 0, failed: 0, results: [] },
-        trustLabel: 'unverified',
-        contract: CONTRACT,
-      }
+  it('keeps recipients on the last promotion while the owner edits, and moves them at the next one', async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    const owner = { ownerType: 'user' as const, ownerKey: OWNER.id };
+    const promote = async (seq: number) => {
+      const current = await callableFunctionRepository.findByIdForOwner(id, owner);
+      return callableFunctionRepository.promote(
+        id,
+        owner,
+        { updatedAt: current!.updatedAt },
+        {
+          seq,
+          runtime: { kind: 'pyodide-server', version: '0.25.1', packages: [] },
+          lastServerRun: { at: new Date(), passed: 0, failed: 0, results: [] },
+          trustLabel: 'unverified',
+          contract: CONTRACT,
+          sourcePins: [],
+          pin: current!.pin,
+          description: current!.description,
+        }
+      );
+    };
+    await promote(1);
+    await reviewSharedCallableFunction(PERSON, id, { reviewHash: await reviewHash(CONTRACT), approval: 'default' });
+    const codeRun = () => (runner.mock.calls.at(-1) as unknown as [{ code: string }])[0].code;
+
+    const edited = `${SOURCE}# edited\n`;
+    const repinned = await callableFunctionRepository.repin(id, owner, 1, {
+      pin: {
+        artifactId: ARTIFACT_ID,
+        version: 2,
+        contentHash: calculateContentHash(edited),
+        source: edited,
+        pinnedAt: new Date(),
+      },
+      contract: CONTRACT,
+      description: CONTRACT.description,
+    });
+    expect(repinned).toMatchObject({ state: 'draft' });
+    expect(await canCallFunction(PERSON, repinned!)).toBe('person');
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'ok' });
+    expect(codeRun()).toBe(SOURCE);
+    const [shared] = await listSharedCallableFunctions(PERSON);
+    expect(shared).toMatchObject({ id, status: 'reviewed', pin: { version: 1, seq: 1 } });
+    expect(JSON.stringify(shared)).not.toContain('def run');
+    const [row] = await CallableFunctionCall.find({ functionId: id }).sort({ startedAt: -1 }).limit(1).lean();
+    expect(row).toMatchObject({ callerUserId: PERSON.id, ownerUserId: OWNER.id, pinSeq: 1 });
+
+    expect(await promote(2)).toMatchObject({ state: 'live', pin: { version: 2, seq: 2 } });
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'ok' });
+    expect(codeRun()).toBe(edited);
+  });
+
+  it('reads a promotion saved without its pin as none kept: live runs, and a repin refuses recipients as before', async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    const owner = { ownerType: 'user' as const, ownerKey: OWNER.id };
+    await CallableFunction.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      { $set: { promoted: { seq: 1, contract: CONTRACT, at: new Date() } } }
     );
-    expect(promoted).toMatchObject({ state: 'live', grants: { visibility: 'organization', userIds: [PERSON.id] } });
-    expect(await callAs(PERSON, id)).toMatchObject({ reason: 'review_required' });
+    await reviewSharedCallableFunction(PERSON, id, { reviewHash: await reviewHash(CONTRACT), approval: 'default' });
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'ok' });
+
+    const live = await CallableFunction.findById(id).lean();
+    const repinned = await callableFunctionRepository.repin(id, owner, 1, {
+      pin: { ...live!.pin, version: 2, pinnedAt: new Date() },
+      contract: CONTRACT,
+      description: CONTRACT.description,
+    });
+    expect(repinned).toMatchObject({ state: 'draft', promoted: { seq: 1 } });
+    expect(repinned!.promoted!.pin).toBeUndefined();
+    expect(recipientCallableFunction(repinned!)).toBeNull();
+    expect(await canCallFunction(PERSON, repinned!)).toBeNull();
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'refused', reason: 'not_found' });
+    expect(await listSharedCallableFunctions(PERSON)).toEqual([]);
+  });
+
+  it('refuses a reviewed recipient at once when the owner turns the function off, on the kept promotion too', async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    await reviewSharedCallableFunction(PERSON, id, { reviewHash: await reviewHash(CONTRACT), approval: 'default' });
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'ok' });
+
+    await setCallableFunctionEnabled(OWNER, id, false);
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'refused', reason: 'disabled' });
+    expect(await listSharedCallableFunctions(PERSON)).toEqual([]);
+
+    await setCallableFunctionEnabled(OWNER, id, true);
+    const live = await CallableFunction.findById(id).lean();
+    await CallableFunction.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      { $set: { state: 'draft', promoted: { seq: 1, contract: CONTRACT, at: new Date(), pin: live!.pin } } }
+    );
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'ok' });
+    await setCallableFunctionEnabled(OWNER, id, false);
+    expect(await callAs(PERSON, id)).toMatchObject({ outcome: 'refused', reason: 'disabled' });
+    expect(await listSharedCallableFunctions(PERSON)).toEqual([]);
   });
 
   it('admits a project member, and refuses them at the next call after they leave', async () => {
@@ -393,6 +478,130 @@ describe('revoking', () => {
     await shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [PERSON.id] });
     const kept = await CallableFunctionReview.find({ functionId: id }).lean();
     expect(kept.map(row => row.userId)).toEqual([PERSON.id]);
+  });
+
+  it('keeps the review of a member the wider scope still covers when a project share becomes an organization share', async () => {
+    await Organization.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(ORG_ID) },
+      { $push: { users: { userId: PROJECT_MEMBER.id, permissions: ['read'] } } as never }
+    );
+    const id = await seedLiveFunction({ visibility: 'project', projectId: PROJECT_ID, userIds: [] });
+    await reviewSharedCallableFunction(PROJECT_MEMBER, id, {
+      reviewHash: await reviewHash(CONTRACT),
+      approval: 'always_ask',
+    });
+    expect(await callAs(PROJECT_MEMBER, id)).toMatchObject({ outcome: 'ok' });
+
+    await shareCallableFunction(OWNER, id, { visibility: 'organization', organizationId: ORG_ID, userIds: [] });
+    expect(await callAs(PROJECT_MEMBER, id)).toMatchObject({ outcome: 'ok' });
+    const [shared] = await listSharedCallableFunctions(PROJECT_MEMBER);
+    expect(shared).toMatchObject({ sharedVia: 'organization', status: 'reviewed', review: { approval: 'always_ask' } });
+
+    await shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [PERSON.id] });
+    expect(await CallableFunctionReview.countDocuments({ functionId: id, userId: PROJECT_MEMBER.id })).toBe(0);
+  });
+});
+
+describe('the caller list and lookup behind the public routes, unreviewed entries included', () => {
+  const reach = async (caller: { id: string }, id: string) => {
+    const listed = await listCallerFunctions(caller, { includeUnreviewed: true });
+    const lookup = await findCallerFunction(caller, { id });
+    return {
+      listed: listed.map(entry => [entry.fn.id, entry.access]),
+      found: 'found' in lookup ? lookup.found.access : lookup.refused,
+    };
+  };
+  const leave = (model: typeof Project | typeof Organization, id: string) => () =>
+    model.collection.updateOne({ _id: new mongoose.Types.ObjectId(id) }, { $set: { users: [] } });
+
+  it.each<[string, ICallableFunctionGrants, { id: string }, string, (id: string) => Promise<unknown>]>([
+    [
+      'a person the owner drops from the share',
+      { visibility: 'private', userIds: [PERSON.id] },
+      PERSON,
+      'person',
+      id => shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [STRANGER.id] }),
+    ],
+    [
+      'a person after the owner stops sharing',
+      { visibility: 'private', userIds: [PERSON.id] },
+      PERSON,
+      'person',
+      id => revokeCallableFunctionShare(OWNER, id),
+    ],
+    [
+      'a project member who leaves the project',
+      { visibility: 'project', projectId: PROJECT_ID, userIds: [] },
+      PROJECT_MEMBER,
+      'project',
+      leave(Project, PROJECT_ID),
+    ],
+    [
+      'an organization member who leaves the organization',
+      { visibility: 'organization', organizationId: ORG_ID, userIds: [] },
+      ORG_MEMBER,
+      'organization',
+      leave(Organization, ORG_ID),
+    ],
+  ])('reaches %s until that access ends, an allow on file or not', async (_name, grants, recipient, access, end) => {
+    const id = await seedLiveFunction(grants);
+    expect(await reach(recipient, id)).toEqual({ listed: [[id, access]], found: access });
+    expect(await reach(STRANGER, id)).toEqual({ listed: [], found: 'not_found' });
+
+    await reviewSharedCallableFunction(recipient, id, { reviewHash: await reviewHash(CONTRACT), approval: 'default' });
+    await end(id);
+    expect(await reach(recipient, id)).toEqual({ listed: [], found: 'not_found' });
+  });
+});
+
+describe('a re-review', () => {
+  it('lists what changed in the interface since the review, field by field', async () => {
+    const id = await seedLiveFunction({ visibility: 'private', userIds: [PERSON.id] });
+    await reviewSharedCallableFunction(PERSON, id, { reviewHash: await reviewHash(CONTRACT), approval: 'default' });
+    expect((await listSharedCallableFunctions(PERSON))[0]).toMatchObject({ status: 'reviewed', changes: [] });
+
+    const changed: FunctionContract = {
+      ...CONTRACT,
+      description: 'Midspan deflection of a beam under a uniform load, with an optional factor.',
+      inputs: {
+        ...CONTRACT.inputs,
+        properties: { ...CONTRACT.inputs.properties, factor: { type: 'number', unit: '1' } },
+      },
+      outputs: {
+        ...CONTRACT.outputs,
+        properties: { deflection: { type: 'number', unit: 'mm' } },
+      },
+    };
+    await CallableFunction.updateOne({ _id: id }, { $set: { contract: changed, description: changed.description } });
+
+    const [shared] = await listSharedCallableFunctions(PERSON);
+    expect(shared!.status).toBe('pending_review');
+    expect(shared!.changes!.map(({ path, kind }) => ({ path, kind }))).toEqual(
+      expect.arrayContaining([
+        { path: 'description', kind: 'description_changed' },
+        { path: 'inputs.factor', kind: 'added' },
+        { path: 'outputs.deflection.unit', kind: 'unit_changed' },
+      ])
+    );
+    expect(shared!.changes).toHaveLength(3);
+  });
+});
+
+describe('naming a person by address', () => {
+  it('finds an account outside every organization and project of the owner, and nothing for an unknown address', async () => {
+    const id = await seedLiveFunction();
+    expect(await findCallableFunctionRecipient(OWNER, id, ' person4@example.com ')).toEqual({
+      id: STRANGER.id,
+      name: 'Person 4',
+    });
+    expect(await findCallableFunctionRecipient(OWNER, id, 'nobody@example.com')).toBeNull();
+    await expect(findCallableFunctionRecipient(STRANGER, id, 'person1@example.com')).rejects.toMatchObject({
+      message: 'Tool not found',
+    });
+
+    await shareCallableFunction(OWNER, id, { visibility: 'private', userIds: [STRANGER.id] });
+    await reviewSharedCallableFunction(STRANGER, id, { reviewHash: await reviewHash(CONTRACT), approval: 'default' });
+    expect(await callAs(STRANGER, id)).toMatchObject({ outcome: 'ok' });
   });
 });
 

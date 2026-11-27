@@ -25,7 +25,15 @@ vi.mock('@client/app/hooks/data/callableFunctions', async importOriginal => ({
   useStopSharingCallableFunction: () => h.stopSharing,
 }));
 vi.mock('../ShareFunctionDialog', () => ({
-  default: ({ tool }: { tool: { slug: string } }) => <div data-testid="python-function-share-dialog">{tool.slug}</div>,
+  default: ({ tool, dataPins, sources }: { tool: { slug: string }; dataPins: string[]; sources: string[] }) => (
+    <div
+      data-testid="python-function-share-dialog"
+      data-data-pins={dataPins.join(',')}
+      data-sources={sources.join(',')}
+    >
+      {tool.slug}
+    </div>
+  ),
 }));
 
 import PromoteFunctionSection from '../PromoteFunctionSection';
@@ -77,7 +85,7 @@ const tool = (overrides: Partial<ICallableFunctionPublic> = {}): ICallableFuncti
     ...overrides,
   }) as ICallableFunctionPublic;
 
-const live = (trustLabel: 'verified' | 'unverified', seq = 2) =>
+const live = (trustLabel: 'platform' | 'verified' | 'unverified', seq = 2) =>
   tool({
     state: 'live',
     status: 'live',
@@ -121,6 +129,21 @@ describe('sharing', () => {
     expect(screen.queryByTestId('python-function-share-stop-btn')).toBeNull();
     fireEvent.click(screen.getByTestId('python-function-share-btn'));
     expect(screen.getByTestId('python-function-share-dialog').textContent).toBe(CONTRACT.name);
+  });
+
+  it('hands the share dialog the names of the data files and the live and pinned sources', () => {
+    renderSection({
+      ...live('verified'),
+      dataPins: [{ name: 'factors.csv', sha256: 'b'.repeat(64), bytes: 46, pinnedAt: new Date() }],
+      sources: [
+        { name: 'rates.csv', url: 'https://data.example.com/rates.csv', mode: 'live' },
+        { name: 'base.csv', url: 'https://data.example.com/base.csv', mode: 'pinned' },
+      ],
+    });
+    fireEvent.click(screen.getByTestId('python-function-share-btn'));
+    const dialog = screen.getByTestId('python-function-share-dialog');
+    expect(dialog.getAttribute('data-data-pins')).toBe('factors.csv');
+    expect(dialog.getAttribute('data-sources')).toBe('rates.csv,base.csv');
   });
 
   it('a shared tool says with whom and stops sharing', () => {
@@ -196,6 +219,7 @@ describe('PromoteFunctionSection', () => {
   });
 
   it.each([
+    ['platform', 'Platform: curated and checked by Bike4Mind.'],
     ['verified', 'A cited worked example passed on the server.'],
     ['unverified', 'Only declared tests ran on the server.'],
   ] as const)('a live tool shows the %s chip and its promotion', (label, help) => {
@@ -213,7 +237,7 @@ describe('PromoteFunctionSection', () => {
     expect(screen.getByTestId('python-function-promote-blocked').textContent).toBe('Turn the tool on to promote it.');
   });
 
-  it("lists the owner's calls of the last 30 days: the count, the outcomes, and the latest with time and outcome", () => {
+  it("lists the function's calls of the last 30 days: the count, the outcomes, and the latest with time, outcome, and caller", () => {
     h.calls = {
       isError: false,
       data: {
@@ -221,8 +245,8 @@ describe('PromoteFunctionSection', () => {
         total: 3,
         outcomes: { ok: 2, timeout: 1 },
         recent: [
-          { id: 'c1', startedAt: '2026-11-23T10:00:00.000Z', outcome: 'ok', surface: 'test' },
-          { id: 'c2', startedAt: '2026-11-22T10:00:00.000Z', outcome: 'timeout', surface: 'test' },
+          { id: 'c1', startedAt: '2026-11-23T10:00:00.000Z', outcome: 'ok', surface: 'test', byRecipient: true },
+          { id: 'c2', startedAt: '2026-11-22T10:00:00.000Z', outcome: 'timeout', surface: 'test', byRecipient: false },
         ],
       },
     };
@@ -231,7 +255,69 @@ describe('PromoteFunctionSection', () => {
     expect(screen.getByTestId('python-function-calls-total').textContent).toBe('3 calls: Returned 2, Timed out 1.');
     const rows = screen.getAllByTestId('python-function-call-row');
     expect(rows.map(row => within(row).getAllByRole('cell')[1]!.textContent)).toEqual(['Returned', 'Timed out']);
+    expect(rows.map(row => within(row).getAllByRole('cell')[2]!.textContent)).toEqual([
+      'A recipient',
+      'You, a test on the server',
+    ]);
     expect(rows[0]!.textContent).toContain('2026');
+    expect(screen.getByTestId('python-function-calls-note').textContent).toBe(
+      'Call function on the Function tab runs in your browser and is not listed here.'
+    );
+  });
+
+  it('shows the promotion that ran, how long it took, and the API key the owner called with, never a recipient', () => {
+    const at = '2026-11-23T10:00:00.000Z';
+    h.calls = {
+      isError: false,
+      data: {
+        since: new Date(),
+        total: 6,
+        outcomes: { ok: 4, cancelled: 1, refused: 1 },
+        recent: [
+          {
+            id: 'c1',
+            startedAt: at,
+            outcome: 'ok',
+            surface: 'rest',
+            byRecipient: false,
+            pinSeq: 3,
+            durationMs: 42,
+            apiKey: { name: 'nightly-batch' },
+          },
+          { id: 'c2', startedAt: at, outcome: 'ok', surface: 'mcp', byRecipient: true, pinSeq: 3, durationMs: 2300 },
+          {
+            id: 'c3',
+            startedAt: at,
+            outcome: 'ok',
+            surface: 'rest',
+            byRecipient: false,
+            pinSeq: 2,
+            durationMs: 125_000,
+            apiKey: { name: null },
+          },
+          { id: 'c4', startedAt: at, outcome: 'ok', surface: 'chat', byRecipient: false, pinSeq: 2, durationMs: 900 },
+          { id: 'c5', startedAt: at, outcome: 'cancelled', surface: 'rest', byRecipient: false, durationMs: 4 },
+          { id: 'c6', startedAt: at, outcome: 'refused', surface: 'rest', byRecipient: false, durationMs: 1 },
+        ],
+      },
+    };
+    renderSection(live('verified'));
+    expect(screen.getByTestId('python-function-calls-total').textContent).toBe(
+      '6 calls: Returned 4, Cancelled 1, Refused 1.'
+    );
+    const cells = screen.getAllByTestId('python-function-call-row').map(row =>
+      within(row)
+        .getAllByRole('cell')
+        .map(cell => cell.textContent)
+    );
+    expect(cells.map(([, outcome, by, promotion, duration]) => [outcome, by, promotion, duration])).toEqual([
+      ['Returned', 'You, with API key "nightly-batch"', '3', '42 ms'],
+      ['Returned', 'A recipient', '3', '2.3 s'],
+      ['Returned', 'You, with a deleted API key', '2', '2 min 5 s'],
+      ['Returned', 'You', '2', '900 ms'],
+      ['Cancelled', 'You', '-', '-'],
+      ['Refused', 'You', '-', '1 ms'],
+    ]);
   });
 
   it('says so when there are no calls', () => {

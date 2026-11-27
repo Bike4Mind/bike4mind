@@ -35,7 +35,7 @@ The endpoint keeps no session. It issues no session id and ignores one sent to i
 
 ## List tools
 
-`tools/list` returns one tool per live function. The tool name is the function's slug. `inputSchema` and `outputSchema` are the function's input and output JSON Schemas, with each field's `unit` kept as an extra keyword. Every tool carries `annotations.readOnlyHint: true`.
+`tools/list` returns one tool per live function. The tool name is the function's slug. `inputSchema` and `outputSchema` are the function's input and output JSON Schemas, with each field's `unit` kept as an extra keyword. Every tool carries `annotations.readOnlyHint: true` and `_meta.trust_label`, one of `platform` (Platform: curated and checked by Bike4Mind), `verified`, or `unverified`, as described in [Trust labels](./functions.md#trust-labels).
 
 ## Call a tool
 

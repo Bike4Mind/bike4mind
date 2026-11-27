@@ -1082,11 +1082,11 @@ export interface ISession {
 /**
  * How long a notebook whose tagging completion produced no usable tags stays ineligible.
  *
- * The tagging handler bills `recordSessionOperationalUsage` BEFORE it parses, so a notebook the
- * model can never produce tags for costs one operations-model call per grooming run. Stamping
- * `taggedAt` on that failure would bound the spend but close the gate forever on a notebook that
- * was never tagged: no operator or automated path clears `taggedAt`, only a user re-importing that
- * one notebook. A cooldown bounds the spend without that, the same trade
+ * A parse failure still spends (and bills) an operations-model call, so a notebook the model can
+ * never produce tags for costs one call per grooming run. Stamping `taggedAt` on that failure
+ * would bound the spend but close the gate forever on a notebook that was never tagged: no
+ * operator or automated path clears `taggedAt`, only a user re-importing that one notebook. A
+ * cooldown bounds the spend without that, the same trade
  * `apps/client/server/s3/moderationRescueSweep.ts` makes and for the same reason - a terminal
  * give-up state is unrecoverable when there is no operator re-run route.
  *

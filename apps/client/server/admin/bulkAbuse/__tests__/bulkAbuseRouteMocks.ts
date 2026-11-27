@@ -29,6 +29,7 @@ export const adminApiMock = async () => {
         {
           use: () => chain,
           post: (fn: (req: unknown, res: unknown) => unknown) => ((h.POST = fn), chain),
+          patch: (fn: (req: unknown, res: unknown) => unknown) => ((h.PATCH = fn), chain),
           delete: (fn: (req: unknown, res: unknown) => unknown) => ((h.DELETE = fn), chain),
           _config: config,
         }

@@ -25,6 +25,7 @@ import {
   type FunctionContract,
   type FunctionContractProblem,
   type ICallableFunctionDetail,
+  type ICallableFunctionDocument,
   type ICallableFunctionOfferable,
   type ICallableFunctionPin,
   type ICallableFunctionPublic,
@@ -57,11 +58,6 @@ export interface CallableFunctionPinInput {
   expectedVersion: number;
   /** The caller's read of `FUNCTION`, checked with `parseFunctionContract`. */
   contract: unknown;
-}
-
-export interface CallableFunctionRepinInput extends CallableFunctionPinInput {
-  /** Confirms an update that breaks the promoted contract; ignored before the first promotion. */
-  acceptBreaking?: boolean;
 }
 
 const userOwner = (actor: CallableFunctionActor): CallableFunctionOwner => ({ ownerType: 'user', ownerKey: actor.id });
@@ -104,12 +100,23 @@ async function readArtifactPin(
     });
     throw new ConflictError('The saved code could not be verified.', { code: 'hash_mismatch' });
   }
-  if (calculateContentSize(row.content) > CALLABLE_FUNCTION_LIMITS.maxSourceBytes) {
+  const contract = checkCallableFunctionCode(row.content, rawContract);
+
+  return {
+    pin: { artifactId: artifact.id, version: artifact.version, contentHash, source: row.content, pinnedAt: new Date() },
+    contract,
+    head: { version: artifact.version, deletedAt: null },
+  };
+}
+
+/** The checks a pin makes of code and the caller's read of its `FUNCTION`, before anything is written. */
+export function checkCallableFunctionCode(code: string, rawContract: unknown): FunctionContract {
+  if (calculateContentSize(code) > CALLABLE_FUNCTION_LIMITS.maxSourceBytes) {
     throw new BadRequestError(`The code is larger than ${CALLABLE_FUNCTION_LIMITS.maxSourceBytes / 1024} KB.`, {
       code: 'source_too_large',
     });
   }
-  if (!hasFunctionEntryPoint(row.content)) {
+  if (!hasFunctionEntryPoint(code)) {
     throw new BadRequestError('The saved code has no FUNCTION contract and run function.', { code: 'no_entry_point' });
   }
 
@@ -125,12 +132,26 @@ async function readArtifactPin(
       code: 'invalid_name',
     });
   }
+  return parsed.contract;
+}
 
-  return {
-    pin: { artifactId: artifact.id, version: artifact.version, contentHash, source: row.content, pinnedAt: new Date() },
-    contract: parsed.contract,
-    head: { version: artifact.version, deletedAt: null },
-  };
+/** The name is fixed at create, and a pin must not break callers of the promoted contract. */
+export function assertCallableFunctionRepinnable(
+  current: Pick<ICallableFunctionDocument, 'slug' | 'contract' | 'promoted'>,
+  contract: FunctionContract
+): void {
+  if (contract.name !== current.slug) {
+    throw new ConflictError(
+      `The function name in the code changed from ${current.slug} to ${contract.name}. Save this version as a new tool under the new name.`,
+      { code: 'name_changed' }
+    );
+  }
+  // Promotion refuses a contract that breaks the promoted one, so such a pin could never be promoted again.
+  const diff = diffFunctionContracts(current.promoted?.contract ?? current.contract, contract);
+  if (!diff) throw new CallableFunctionContractUnreadableError();
+  if (diff.breaking.length > 0) {
+    throw new CallableFunctionBreakingChangeError(diff.breaking, current.promoted?.seq);
+  }
 }
 
 /**
@@ -223,7 +244,7 @@ export async function getCallableFunction(actor: CallableFunctionActor, id: stri
 export async function repinCallableFunction(
   actor: CallableFunctionActor,
   id: string,
-  input: CallableFunctionRepinInput
+  input: CallableFunctionPinInput
 ): Promise<ICallableFunctionPublic> {
   const owner = userOwner(actor);
   const current = await callableFunctionRepository.findByIdForOwner(id, owner);
@@ -234,21 +255,7 @@ export async function repinCallableFunction(
     input.expectedVersion,
     input.contract
   );
-  if (contract.name !== current.slug) {
-    throw new ConflictError(
-      `The function name in the code changed from ${current.slug} to ${contract.name}. Save this version as a new tool under the new name.`,
-      { code: 'name_changed' }
-    );
-  }
-  // Once promoted, callers rely on the promoted contract. Breaking it is allowed only when confirmed, since the
-  // tool returns to draft and promotion will refuse this version.
-  if (!current.promoted || !input.acceptBreaking) {
-    const diff = diffFunctionContracts(current.promoted?.contract ?? current.contract, contract);
-    if (!diff) throw new CallableFunctionContractUnreadableError();
-    if (diff.breaking.length > 0) {
-      throw new CallableFunctionBreakingChangeError(diff.breaking, current.promoted?.seq);
-    }
-  }
+  assertCallableFunctionRepinnable(current, contract);
   const repinned = await callableFunctionRepository.repin(id, owner, current.pin.version, {
     pin,
     contract,
@@ -281,6 +288,19 @@ export async function setCallableFunctionApproval(
   const fn = await callableFunctionRepository.setApproval(id, userOwner(actor), approval);
   if (!fn) throw notFound();
   return toCallableFunctionPublic(fn, await readHead(actor, fn.pin.artifactId));
+}
+
+export type CallableFunctionSettings = { enabled: boolean } | { approval: McpToolApprovalMode };
+
+/** One setting per request: turn the tool on or off, or set when chat asks before a call. */
+export async function updateCallableFunctionSettings(
+  actor: CallableFunctionActor,
+  id: string,
+  settings: CallableFunctionSettings
+): Promise<ICallableFunctionPublic> {
+  return 'approval' in settings
+    ? setCallableFunctionApproval(actor, id, settings.approval)
+    : setCallableFunctionEnabled(actor, id, settings.enabled);
 }
 
 /** The actor's functions chat may offer: live, turned on, and with their artifact still in place. */
@@ -318,8 +338,8 @@ export async function setCallableFunctionExamples(
     throw new BadRequestError(`At most ${maxExamples} worked examples are allowed.`, { code: 'too_many_examples' });
   }
   const problems: FunctionContractProblem[] = [];
-  examples.forEach((example, index) => {
-    const citation = example.citation.trim();
+  const next = examples.map(example => ({ ...example, name: example.name.trim(), citation: example.citation.trim() }));
+  next.forEach(({ citation }, index) => {
     if (!citation || citation.length > maxCitationLength) {
       problems.push({
         path: `examples.${index}.citation`,
@@ -328,7 +348,7 @@ export async function setCallableFunctionExamples(
     }
   });
   // Checked as declared tests of the stored contract, so an example obeys the same rules as a test in the code.
-  const cases = examples.map(({ name, input, expected, tolerance }) => ({
+  const cases = next.map(({ name, input, expected, tolerance }) => ({
     name,
     input,
     expected,
@@ -351,7 +371,6 @@ export async function setCallableFunctionExamples(
   if (problems.length > 0) {
     throw new BadRequestError('The worked examples have problems.', { code: 'invalid_examples', problems });
   }
-  const next = examples.map(example => ({ ...example, citation: example.citation.trim() }));
   // A live tool's label stands for the examples it was promoted with; changed ones have not run on the server.
   const unverify = current.state === 'live' && canonicalJson(next) !== canonicalJson(current.examples ?? []);
   const saved = await callableFunctionRepository.setExamples(id, owner, { updatedAt: current.updatedAt }, next, {
@@ -368,7 +387,10 @@ export async function setCallableFunctionExamples(
 export const CALLABLE_FUNCTION_CALLS_WINDOW_DAYS = 30;
 const RECENT_CALLS = 5;
 
-/** The owner's own calls of their function over the last 30 days: counts by outcome and the latest few. */
+/**
+ * Calls of the owner's function over the last 30 days, theirs and its recipients': counts by outcome and the latest
+ * few, each marked when a recipient made it.
+ */
 export async function summarizeCallableFunctionCalls(
   actor: CallableFunctionActor,
   id: string,
@@ -377,7 +399,7 @@ export async function summarizeCallableFunctionCalls(
   const fn = await callableFunctionRepository.findByIdForOwner(id, userOwner(actor));
   if (!fn) throw notFound();
   const since = new Date(now.getTime() - CALLABLE_FUNCTION_CALLS_WINDOW_DAYS * 24 * 60 * 60 * 1000);
-  return callableFunctionCallRepository.summarizeForCaller(fn.id, actor.id, since, RECENT_CALLS);
+  return callableFunctionCallRepository.summarizeForOwner(fn.id, actor.id, since, RECENT_CALLS);
 }
 
 /**
@@ -392,7 +414,7 @@ export async function deleteCallableFunction(
   const fn = await callableFunctionRepository.findByIdForOwner(id, userOwner(actor));
   if (!fn) throw notFound();
   // The objects first: a record left behind by a failed delete can be deleted again, an object without one cannot.
-  // Always, pins or not: a lost pin race or a failed unpin delete leaves objects no pin names.
+  // Always, pins or not: a lost pin race, a failed unpin delete, or a removed source leaves objects no pin names.
   await deleteCallableFunctionDataObjects(fn.id, storage);
   if (!(await callableFunctionRepository.deleteForOwner(id, userOwner(actor)))) throw notFound();
   await callableFunctionReviewRepository.deleteForFunction(id);

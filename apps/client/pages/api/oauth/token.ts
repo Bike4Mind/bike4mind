@@ -10,7 +10,12 @@
  */
 
 import { z } from 'zod';
-import { NATIVE_DEV_OAUTH_CLIENT_ID, NATIVE_OAUTH_CLIENT_ID, type AuthSessionCreatedVia } from '@bike4mind/common';
+import {
+  ForbiddenError,
+  NATIVE_DEV_OAUTH_CLIENT_ID,
+  NATIVE_OAUTH_CLIENT_ID,
+  type AuthSessionCreatedVia,
+} from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 import { isTokenVersionCurrent, authSessionService } from '@bike4mind/services';
@@ -18,6 +23,7 @@ import {
   cacheRepository,
   oauthAuthorizationCodeRepository,
   oauthClientRepository,
+  oauthClientSignInRepository,
   oauthGrantRepository,
   oauthRefreshTokenRepository,
   userRepository,
@@ -25,6 +31,7 @@ import {
 import { verifyPkce, validateClientSecret, validateClient, generateIdToken } from '@server/auth/oauthServer';
 import { PKCE_CODE_VERIFIER_RE } from '@server/auth/pkce';
 import { issueSessionForRequest } from '@server/auth/issueSession';
+import { withAccountNotPurging } from '@server/auth/withAccountNotPurging';
 import { buildSessionDevice } from '@server/auth/sessionDevice';
 import { ACCESS_TOKEN_TTL_SECONDS, authTokenGenerator } from '@server/auth/tokenGenerator';
 import { grantCovers, oauthAccessTokenAudience } from '@server/auth/oauthConsent';
@@ -214,6 +221,18 @@ const handler = baseApi({ auth: false })
         nonce: authCode.nonce,
       });
 
+      const recordSignInBestEffort = async () => {
+        try {
+          await withAccountNotPurging(user.id, () =>
+            oauthClientSignInRepository.recordSignIn({ userId: user.id, clientId: client.clientId, at: new Date() })
+          );
+        } catch (error) {
+          if (!(error instanceof ForbiddenError)) {
+            req.logger?.warn('Failed to record OAuth client sign-in', { clientId: client.clientId, error });
+          }
+        }
+      };
+
       // Relying-party clients get a scope/audience-bound OAuth access token, NOT a full first-party
       // session: no first-party refresh token, and the route gate (oauthRouteGate) default-denies it
       // everywhere except OAuth-reachable routes. Consent must already be recorded (the authorize
@@ -245,6 +264,8 @@ const handler = baseApi({ auth: false })
             })
           : undefined;
 
+        await recordSignInBestEffort();
+
         return res.json({
           access_token: accessToken,
           id_token: idToken,
@@ -263,6 +284,8 @@ const handler = baseApi({ auth: false })
         clientId: client_id,
         ...(deviceName ? { device: { ...buildSessionDevice(req), displayName: deviceName } } : {}),
       });
+
+      await recordSignInBestEffort();
 
       return res.json({
         access_token: accessToken,

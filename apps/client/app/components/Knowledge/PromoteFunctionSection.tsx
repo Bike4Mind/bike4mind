@@ -2,11 +2,13 @@ import React, { useState } from 'react';
 import { Alert, Box, Button, Chip, FormControl, FormLabel, Input, Stack, Table, Textarea, Typography } from '@mui/joy';
 import type {
   CallableFunctionCallRowOutcome,
+  CallableFunctionCallSummary,
   CallableFunctionExample,
   FunctionContract,
   FunctionContractProblem,
   ICallableFunctionPublic,
 } from '@bike4mind/common';
+import { CALLABLE_FUNCTION_TRUST_LABEL_TEXT } from '@bike4mind/common';
 import {
   callableFunctionCasesLeft,
   callableFunctionErrorMessage,
@@ -31,9 +33,32 @@ const OUTCOME_LABELS: Record<CallableFunctionCallRowOutcome, string> = {
   queued: 'Queued',
   running: 'Running',
   data_mismatch: 'Data file changed',
+  cancelled: 'Cancelled',
 };
 
+// A pending or cancelled call's row holds only the time its checks took, not a run.
+const NO_RUN_TIME: ReadonlySet<CallableFunctionCallRowOutcome> = new Set(['queued', 'running', 'cancelled']);
+
+type RecentCall = CallableFunctionCallSummary['recent'][number];
+
+function callDuration(call: RecentCall): string {
+  if (NO_RUN_TIME.has(call.outcome)) return '-';
+  if (call.durationMs < 1000) return `${call.durationMs} ms`;
+  const tenths = Math.round(call.durationMs / 100) / 10;
+  if (tenths < 60) return `${tenths.toFixed(1)} s`;
+  const seconds = Math.round(call.durationMs / 1000);
+  return `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
+}
+
+function callCaller(call: RecentCall): string {
+  if (call.byRecipient) return 'A recipient';
+  if (call.surface === 'test') return 'You, a test on the server';
+  if (!call.apiKey) return 'You';
+  return call.apiKey.name === null ? 'You, with a deleted API key' : `You, with API key "${call.apiKey.name}"`;
+}
+
 const LABEL_HELP = {
+  platform: `${CALLABLE_FUNCTION_TRUST_LABEL_TEXT.platform} A cited worked example passed on the server.`,
   verified: 'A cited worked example passed on the server.',
   unverified: 'Only declared tests ran on the server. Add a cited worked example and promote again to verify it.',
 } as const;
@@ -310,7 +335,7 @@ function ExamplesBlock({ tool, contract }: { tool: ICallableFunctionPublic; cont
   );
 }
 
-function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
+export function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
   const { data, isError } = useCallableFunctionCalls(tool.id);
   const counts = data
     ? Object.entries(data.outcomes)
@@ -319,7 +344,10 @@ function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
     : '';
   return (
     <Stack spacing={0.5} data-testid="python-function-calls">
-      <Typography level="title-sm">Your calls in the last 30 days</Typography>
+      <Typography level="title-sm">Calls in the last 30 days</Typography>
+      <Typography level="body-xs" sx={{ color: 'text.secondary' }} data-testid="python-function-calls-note">
+        Call function on the Function tab runs in your browser and is not listed here.
+      </Typography>
       {isError && (
         <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
           The calls could not be loaded.
@@ -331,11 +359,14 @@ function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
             {data.total === 0 ? 'No calls.' : `${data.total} ${data.total === 1 ? 'call' : 'calls'}: ${counts}.`}
           </Typography>
           {data.recent.length > 0 && (
-            <Table size="sm" data-testid="python-function-calls-recent">
+            <Table size="sm" sx={{ tableLayout: 'auto' }} data-testid="python-function-calls-recent">
               <thead>
                 <tr>
                   <th>Time</th>
                   <th>Outcome</th>
+                  <th>By</th>
+                  <th>Promotion</th>
+                  <th>Duration</th>
                 </tr>
               </thead>
               <tbody>
@@ -345,6 +376,9 @@ function CallsBlock({ tool }: { tool: ICallableFunctionPublic }) {
                       {new Date(call.startedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
                     </td>
                     <td>{OUTCOME_LABELS[call.outcome] ?? call.outcome}</td>
+                    <td>{callCaller(call)}</td>
+                    <td>{call.pinSeq === undefined ? '-' : call.pinSeq}</td>
+                    <td>{callDuration(call)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -428,7 +462,7 @@ function ShareBlock({ tool, live }: { tool: ICallableFunctionPublic; live: boole
         <ShareFunctionDialog
           tool={tool}
           dataPins={tool.dataPins.map(pin => pin.name)}
-          sources={[]}
+          sources={(tool.sources ?? []).map(source => source.name)}
           onClose={() => setOpen(false)}
         />
       )}
@@ -464,7 +498,7 @@ export default function PromoteFunctionSection({
             <Chip
               size="sm"
               variant="soft"
-              color={tool.trustLabel === 'verified' ? 'success' : 'neutral'}
+              color={tool.trustLabel === 'unverified' ? 'neutral' : 'success'}
               data-testid="python-function-trust-chip"
             >
               {tool.trustLabel}

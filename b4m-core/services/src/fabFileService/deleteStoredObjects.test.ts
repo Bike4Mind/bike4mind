@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
-import { deleteStoredObjects } from './deleteStoredObjects';
+import { deleteStoredObjects, deleteStoredObjectsAfterCommit } from './deleteStoredObjects';
+
+const queued = vi.hoisted(() => ({ owned: true, work: new Map<string, () => Promise<unknown>>() }));
+vi.mock('@bike4mind/db-core', () => ({
+  runAfterCommit: (_session: unknown, key: string, work: () => Promise<unknown>) => {
+    if (queued.owned) queued.work.set(key, work);
+    return queued.owned;
+  },
+}));
 
 const buckets = (sessionIdsShowingKey: string[] = []) => ({
   files: { delete: vi.fn().mockResolvedValue(undefined) },
@@ -172,5 +180,105 @@ describe('deleteStoredObjects', () => {
     storage.files.delete.mockRejectedValue(new Error('denied'));
 
     await expect(deleteStoredObjects([{ id: 'f1', filePath: 'a' }], storage, logger)).rejects.toThrow('denied');
+  });
+});
+
+describe('deleteStoredObjectsAfterCommit', () => {
+  const session = {} as never;
+  const file = { id: 'f1', filePath: 'uploads/a.pdf' };
+  const log = { warn: vi.fn(), error: vi.fn() };
+
+  it('queues the delete under an owned session and runs it only when the queue is drained', async () => {
+    queued.owned = true;
+    queued.work.clear();
+    const storage = buckets();
+
+    await deleteStoredObjectsAfterCommit([file], storage, { session, key: 'k', logger: log });
+    expect(storage.files.delete).not.toHaveBeenCalled();
+
+    await queued.work.get('k')!();
+    expect(storage.files.delete).toHaveBeenCalledWith('uploads/a.pdf');
+  });
+
+  it('deletes inline when there is no session', async () => {
+    const storage = buckets();
+
+    await deleteStoredObjectsAfterCommit([file], storage, { key: 'k', logger: log });
+    expect(storage.files.delete).toHaveBeenCalledWith('uploads/a.pdf');
+  });
+
+  it('deletes inline and warns when the session is not owned by withTransaction', async () => {
+    queued.owned = false;
+    const storage = buckets();
+
+    await deleteStoredObjectsAfterCommit([file], storage, { session, key: 'k', logger: log });
+    expect(storage.files.delete).toHaveBeenCalledWith('uploads/a.pdf');
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('not owned'), { key: 'k' });
+  });
+
+  it('logs a failed post-commit delete with the file id and key instead of throwing', async () => {
+    queued.owned = true;
+    queued.work.clear();
+    const storage = buckets();
+    storage.files.delete.mockRejectedValue(new Error('s3 down'));
+
+    await deleteStoredObjectsAfterCommit([file], storage, { session, key: 'k', logger: log });
+    await expect(queued.work.get('k')!()).resolves.toBeUndefined();
+    expect(log.error).toHaveBeenCalledWith(
+      expect.stringContaining('post-commit delete failed'),
+      expect.objectContaining({ files: [{ fileId: 'f1', filePath: 'uploads/a.pdf' }], error: 's3 down' })
+    );
+  });
+
+  describe('with a logger whose methods read `this`', () => {
+    class ThisLogger {
+      calls: string[] = [];
+      warn(message: string) {
+        this.calls.push(`warn:${message}`);
+      }
+      error(message: string) {
+        this.calls.push(`error:${message}`);
+      }
+    }
+
+    it('still attempts the file object and logs the orphan after a retained-version failure', async () => {
+      queued.owned = true;
+      queued.work.clear();
+      const storage = buckets();
+      storage.files.delete.mockImplementation(async (key: string) => {
+        if (key === 'uploads/v1.pdf') throw new Error('s3 down');
+      });
+      const lg = new ThisLogger();
+      const withVersion = { id: 'f1', filePath: 'uploads/a.pdf', versions: [version('uploads/v1.pdf')] };
+
+      await deleteStoredObjectsAfterCommit([withVersion], storage, { session, key: 'k', logger: lg });
+      await queued.work.get('k')!();
+
+      expect(storage.files.delete).toHaveBeenCalledWith('uploads/a.pdf');
+      expect(lg.calls.some(c => c.startsWith('warn:'))).toBe(true);
+    });
+
+    it('logs the orphan through the instance when the file object delete fails', async () => {
+      queued.owned = true;
+      queued.work.clear();
+      const storage = buckets();
+      storage.files.delete.mockRejectedValue(new Error('s3 down'));
+      const lg = new ThisLogger();
+
+      await deleteStoredObjectsAfterCommit([file], storage, { session, key: 'k', logger: lg });
+      await expect(queued.work.get('k')!()).resolves.toBeUndefined();
+
+      expect(lg.calls).toEqual([expect.stringContaining('error:[deleteStoredObjects] post-commit delete failed')]);
+    });
+
+    it('does not throw inline for a moderation-held file', async () => {
+      const storage = buckets();
+      const lg = new ThisLogger();
+      const held = { id: 'f1', filePath: 'uploads/a.pdf', moderationStatus: 'blocked', blockReason: 'csam' } as never;
+
+      await expect(deleteStoredObjectsAfterCommit([held], storage, { key: 'k', logger: lg })).resolves.toBeUndefined();
+      expect(storage.files.delete).not.toHaveBeenCalled();
+      expect(lg.calls[0]).toContain('legal hold');
+    });
   });
 });

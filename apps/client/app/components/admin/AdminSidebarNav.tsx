@@ -386,7 +386,7 @@ export const SidebarNav = ({
     fullAdmin ? item.badge : (item.delegateBadge ?? item.badge);
   const pendingCount = (item: SidebarItem): number => {
     const badge = badgeOf(item);
-    if (!badge || badge === 'newSubscriptions') return 0;
+    if (item.pinned || !badge || badge === 'newSubscriptions') return 0;
     if (badge === 'waitingSubscribers' && hiddenNotifications.includes('waiting-subscribers')) return 0;
     return actionCounts?.[badge] ?? 0;
   };
@@ -394,6 +394,7 @@ export const SidebarNav = ({
 
   const itemBadge = (item: SidebarItem): ReactNode => {
     const badge = badgeOf(item);
+    if (item.pinned) return null;
     if (badge === 'newSubscriptions') {
       return newSubscriptions ? (
         <Box
@@ -601,7 +602,7 @@ export const SidebarNav = ({
                     {section.label}
                   </Box>
                   {section.items.map(item => {
-                    const active = item.tab === activeTab;
+                    const active = !item.pinned && item.tab === activeTab;
                     return (
                       <MenuItem
                         key={item.tab}
@@ -754,7 +755,7 @@ export const SidebarNav = ({
           // Contributed pages are the last rows, so they fall behind "More" like a trailing tab item.
           const keepPastCut = (entry: SidebarEntry) =>
             entry.kind === 'tab'
-              ? entry.item.tab === activeTab || hasWaitingWork(entry.item)
+              ? (!entry.item.pinned && entry.item.tab === activeTab) || hasWaitingWork(entry.item)
               : isPageActive(entry.page);
           const { shown, hiddenCount } = splitSectionEntries(entries, moreOpen, keepPastCut);
           const canCollapseAgain =
@@ -775,7 +776,7 @@ export const SidebarNav = ({
                         Icon={entry.item.Icon}
                         label={entry.item.label}
                         testid={entry.item.testid}
-                        active={entry.item.tab === activeTab}
+                        active={!entry.item.pinned && entry.item.tab === activeTab}
                         endDecorator={itemBadge(entry.item)}
                         onSelect={() => onTabSelect(entry.item.tab)}
                       />

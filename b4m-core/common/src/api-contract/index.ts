@@ -220,7 +220,28 @@ export {
 export {
   listFunctionsContract,
   getFunctionContract,
+  reviewFunctionContract,
   invokeFunctionContract,
   getFunctionCallContract,
+  cancelFunctionCallContract,
 } from './contracts/functions.contract';
+export {
+  createFunctionContract,
+  listAuthoredFunctionsContract,
+  getAuthoredFunctionContract,
+  saveFunctionCodeContract,
+  updateFunctionContract,
+  deleteFunctionContract,
+  setFunctionExamplesContract,
+  runFunctionTestsContract,
+  pinFunctionDataContract,
+  unpinFunctionDataContract,
+  setFunctionSourcesContract,
+  promoteFunctionContract,
+  getFunctionShareContract,
+  shareFunctionContract,
+  unshareFunctionContract,
+  findFunctionRecipientContract,
+  getFunctionCallSummaryContract,
+} from './contracts/functionsAuthoring.contract';
 export { CONTRACTS } from './contracts';

@@ -232,10 +232,16 @@ export enum ApiKeyScope {
   ARTIFACTS_PUBLISH = 'artifacts:publish',
   /**
    * List, read, and call the key owner's own live functions (`/api/v1/functions/*`). Confined, so the key
-   * holds no other scope and reaches no other route; that one scope also opens the list and the read, since a
-   * confined key cannot carry a second. Calls are refused unless callable functions are on for the owner.
+   * holds no other scope but `functions:author` and reaches no other route; that one scope also opens the list and
+   * the read. Calls are refused unless callable functions are on for the owner.
    */
   FUNCTIONS_INVOKE = 'functions:invoke',
+  /**
+   * Write, test, pin data to, promote, share, and delete the key owner's own functions over `/api/v1/functions`
+   * (functionsAuthoring.contract.ts). Calls nothing: calling stays `functions:invoke`. Confined, like it, and the
+   * two may share a key ({@link CONFINED_API_KEY_SCOPE_FAMILIES}).
+   */
+  FUNCTIONS_AUTHOR = 'functions:author',
 }
 
 /**
@@ -284,18 +290,60 @@ export const CONFINED_API_KEY_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.REWARDS_GRANT,
   ApiKeyScope.SLACK_POST,
   ApiKeyScope.FUNCTIONS_INVOKE,
+  ApiKeyScope.FUNCTIONS_AUTHOR,
 ];
+
+/**
+ * Confined scopes that may share one key, because their routes are one flow. Any other confined scope stays the
+ * key's only scope. The runtime gate needs no change: each route still names the one scope it accepts.
+ */
+export const CONFINED_API_KEY_SCOPE_FAMILIES: readonly (readonly ApiKeyScope[])[] = [
+  [ApiKeyScope.FUNCTIONS_INVOKE, ApiKeyScope.FUNCTIONS_AUTHOR],
+];
+
+/**
+ * Confined scopes an OAuth exchange key may hold beside its other scopes. The runtime gate confines every exchange
+ * key whatever it holds (`decideScopeGate`'s `exchangeKey`), so these add only the routes that name them.
+ */
+export const EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES: readonly ApiKeyScope[] = [
+  ApiKeyScope.FUNCTIONS_INVOKE,
+  ApiKeyScope.FUNCTIONS_AUTHOR,
+];
+
+/**
+ * The mint half of confinement: a key holding a confined scope holds nothing else, or only scopes of that one
+ * {@link CONFINED_API_KEY_SCOPE_FAMILIES} entry. An exchange key may also hold
+ * {@link EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES} beside unconfined scopes.
+ */
+export function isMintableConfinedScopeSet(
+  scopes: readonly string[],
+  options: { exchangeKey?: boolean } = {}
+): boolean {
+  const isConfined = (scope: string) => (CONFINED_API_KEY_SCOPES as readonly string[]).includes(scope);
+  if (options.exchangeKey) {
+    const rest = scopes.filter(
+      scope => !(EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES as readonly string[]).includes(scope)
+    );
+    if (rest.length < scopes.length) return !rest.some(isConfined);
+  }
+  const confined = scopes.some(isConfined);
+  if (!confined || scopes.length <= 1) return true;
+  return CONFINED_API_KEY_SCOPE_FAMILIES.some(family =>
+    scopes.every(scope => (family as readonly string[]).includes(scope))
+  );
+}
 
 /** Confined scopes customers mint themselves, so the public API reference documents them. */
 const CUSTOMER_MINTED_CONFINED_SCOPES: readonly ApiKeyScope[] = [
   ApiKeyScope.SKILLS_READ,
   ApiKeyScope.SLACK_POST,
   ApiKeyScope.FUNCTIONS_INVOKE,
+  ApiKeyScope.FUNCTIONS_AUTHOR,
 ];
 
 /**
  * Built-in scopes left out of the public API reference. An explicit list, not a rule: `admin:*`, the
- * confined integration scopes except the customer-minted `skills:read`, `slack:post` and `functions:invoke`, and the `optihashi:*` family. Documentation only -
+ * confined integration scopes except the customer-minted `skills:read`, `slack:post`, `functions:invoke` and `functions:author`, and the `optihashi:*` family. Documentation only -
  * it never affects which scopes a key may hold or what the runtime accepts.
  */
 export const UNDOCUMENTED_API_KEY_SCOPES: readonly ApiKeyScope[] = [

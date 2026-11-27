@@ -55,6 +55,12 @@ public struct CaptureStack: Sendable {
       delegator: CaptureFixtures.delegator)
   }
 
+  /// Session end: drops queued captures, their staged files and the remembered destination.
+  public func signOut() async {
+    await engine?.discardAll()
+    destinationStore.forget()
+  }
+
   @MainActor
   public func composerModel(items: [ShareItem]) -> ShareComposerModel {
     ShareComposerModel(

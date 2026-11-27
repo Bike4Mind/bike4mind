@@ -2,6 +2,7 @@ import {
   ConflictError,
   ForbiddenError,
   NotFoundError,
+  assertCanChangeExplicitOnlyPermissions,
   isFullAdmin,
   sortAdminPermissions,
   type AdminPermissionId,
@@ -35,7 +36,7 @@ export type AdminRolesDeps = {
   transaction: <T>(work: () => Promise<T>) => Promise<T>;
 };
 
-type Actor = { id: string; isAdmin?: boolean | null };
+type Actor = Parameters<typeof assertCanChangeExplicitOnlyPermissions>[0] & { id: string };
 
 const assertCanEditRoles = (actor: Actor) => {
   if (!isFullAdmin(actor)) throw new ForbiddenError('Only full administrators can change admin roles');
@@ -76,6 +77,7 @@ export async function createAdminRole(
   deps: AdminRolesDeps
 ): Promise<AdminRoleWithMembers> {
   assertCanEditRoles(actor);
+  assertCanChangeExplicitOnlyPermissions(actor, [], input.permissions);
   return deps.transaction(async () => {
     let role: AdminRole;
     try {
@@ -109,6 +111,7 @@ export async function updateAdminRole(
     // Adding a permission grants it to every member at once, so it needs the same proof a direct grant does.
     const requested = patch.permissions ? sortAdminPermissions(patch.permissions) : before.permissions;
     const requestedDiff = diff(before.permissions, requested);
+    assertCanChangeExplicitOnlyPermissions(actor, before.permissions, requested);
     if (requestedDiff.granted.length > 0 || requestedDiff.revoked.length > 0) parseAdminActionReason(reason);
     if (requestedDiff.granted.length > 0) await deps.requireStepUp();
     let after: AdminRole | null;

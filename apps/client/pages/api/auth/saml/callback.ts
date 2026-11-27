@@ -153,7 +153,7 @@ const handleSamlCallback = async (req: any, res: any) => {
       // client-supplied one: only an active registered client yields a tag.
       if (user.isNewUser) {
         await stampOAuthSourceTag(user.id, clientIdFromAuthorizeRedirect(redirectTo));
-        await recordSignupNetwork({ req, userId: user.id, method: AuthStrategy.SAML });
+        await recordSignupNetwork({ req, userId: user.id, method: AuthStrategy.SAML, clientId: user.signupClientId });
         // After recordSignupNetwork so the datacenter signal sees the stored signup network.
         await refreshSignupRiskScore(user.id, Logger.globalInstance);
         const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.SAML });
