@@ -1,8 +1,4 @@
-import {
-  parseMcpClient,
-  resolveApiCompletionSource,
-  type ApiKeyCompletionSource,
-} from '@bike4mind/common';
+import { parseMcpClient, resolveApiCompletionSource, type ApiKeyCompletionSource } from '@bike4mind/common';
 import type { IncomingHttpHeaders } from 'http';
 import { flattenHeaders } from './flattenHeaders';
 

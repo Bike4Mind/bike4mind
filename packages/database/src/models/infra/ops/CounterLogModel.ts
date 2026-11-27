@@ -130,7 +130,10 @@ export type SpendChannels = { apiCredits: number; chatCredits: number };
 const API_SOURCES = ['api', 'mcp'] as const;
 const CHAT_SOURCES = ['web', 'cli', 'desktop'] as const;
 // Compile error when a new CompletionSource is in neither channel and not listed as excluded here.
-type UnchanneledSource = Exclude<CompletionSource, (typeof API_SOURCES)[number] | (typeof CHAT_SOURCES)[number] | 'agent' | 'system'>;
+type UnchanneledSource = Exclude<
+  CompletionSource,
+  (typeof API_SOURCES)[number] | (typeof CHAT_SOURCES)[number] | 'agent' | 'system'
+>;
 const _allSourcesChanneled: [UnchanneledSource] extends [never] ? true : never = true;
 void _allSourcesChanneled;
 
