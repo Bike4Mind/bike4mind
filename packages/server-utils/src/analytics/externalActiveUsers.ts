@@ -8,9 +8,10 @@ import { internalStaffEmailRegex, parseInternalStaffDomains } from '@bike4mind/c
  * An active user-day is a distinct userId with at least one UsageEvent (status ok), Quest chat
  * message or AgentExecution on a UTC day. Public API activity (UsageEvent source 'api', API-key
  * AgentExecutions) is kept in a separate user-day map: it is reported as "API users" and never
- * counts toward DAU, activation or retention (MCP-host UsageEvents, source 'mcp', do count). Internal users (admins, staff domains) are split out
- * of the app map into their own daily series and never enter an external figure. Days are carried as
- * integer UTC epoch days so retention offsets are plain subtraction.
+ * counts toward DAU, activation or retention (MCP-host UsageEvents, source 'mcp', do count).
+ * Internal users (admins, staff domains) are split out of the app map into their own daily series
+ * and never enter an external figure. Days are carried as integer UTC epoch days so retention
+ * offsets are plain subtraction.
  */
 
 export const DEFAULT_DAYS = 90;
@@ -71,8 +72,8 @@ counts as the app.
 Excluded: admins, accounts flagged isSynthetic, emails ending in a NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS domain, emails matching
 --test-pattern, and userIds with no User document.
 Internal users are the admins and staff-domain accounts above. They stay out of DAU, API users,
-cohorts and the per-source rows, and show in their own "Internal" column: users with a web app, CLI
-or desktop action that day (API-only activity is not counted, as for DAU). Test-pattern and
+cohorts and the per-source rows, and show in their own "Internal" column: users with a web app, CLI,
+desktop or MCP-host action that day (API-only activity is not counted, as for DAU). Test-pattern and
 no-User-doc accounts are in neither.
 
 Known gaps in the API split:
@@ -82,6 +83,8 @@ Known gaps in the API split:
   CLI early in a window that predates that deploy, and those users show up as API users.
 - Desktop usage recorded before the 'desktop' source deployed is stored as 'api', with the same
   undercount and the same effect on API users.
+- MCP usage recorded before the 'mcp' source deployed is stored as 'api', with the same undercount
+  and the same effect on API users.
 
 Cohort = external users whose User.createdAt falls inside the window, grouped by the UTC Sunday-start
 week of their signup day. Users who signed up before the window count toward DAU but are in no
@@ -386,7 +389,7 @@ export interface ExternalActivityReport {
   dau: DauRow[];
   /** Daily external users with at least one API-sourced action; same span as `dau`. */
   apiUsers: DauRow[];
-  /** Daily internal users with app, CLI or desktop activity; same span as `dau`. */
+  /** Daily internal users with app, CLI, desktop or MCP-host activity; same span as `dau`. */
   internal: DauRow[];
   sources: SourceRow[];
   cohorts: CohortTable;
@@ -447,7 +450,7 @@ export function formatReport(report: ExternalActivityReport): string {
     `External activity, ${report.windowStart} to ${report.today} UTC (${report.days} days)`,
     `External users with app, CLI or desktop activity: ${report.externalUsers}`,
     `External users with API activity (not in DAU): ${report.externalApiUsers}`,
-    `Internal users with app, CLI or desktop activity: ${report.internalUsers}`,
+    `Internal users with app, CLI, desktop or MCP-host activity: ${report.internalUsers}`,
     `Excluded users: ${excluded.admin} admin, ${excluded.staffDomain} staff domain, ` +
       `${excluded.testPattern} test pattern, ${excluded.synthetic} synthetic, ${excluded.noUser} no User doc`,
   ];
