@@ -55,7 +55,7 @@ public enum BrandTokens {
     public static let composerPlaceholder = BrandColorPair(
       light: BrandRGBA(0x0A3D50), dark: BrandRGBA(0xD3DFE8))
 
-    /// Send button fill (web primary solidBg light; dark matches accent, see SessionToolbar).
+    /// Send button fill (web primary solidBg light; dark is the accent, see apps/client/app/components/Session/SessionBottom/composerActionSx.ts).
     public static let sendButton = BrandColorPair(
       light: BrandRGBA(0x0066C1), dark: BrandRGBA(0x61AFEF))
 

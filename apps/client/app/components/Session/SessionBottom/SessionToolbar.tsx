@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 
 import { IFabFileDocument, ISessionDocument } from '@bike4mind/common';
 import { fixedIconSize } from './sessionBottomConstants';
+import { composerActionDarkFill } from './composerActionSx';
 import { getSendBlockedLabel, type SendBlockedReason } from './sendBlockedReason';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 
@@ -309,11 +310,12 @@ export function SessionToolbar(props: SessionToolbarProps) {
                     /* Recording active: confirm button to stop & submit transcription */
                     <Tooltip title="Confirm recording" placement="top">
                       <Button
-                        sx={{
+                        sx={theme => ({
                           borderRadius: '6px',
                           paddingBlock: '0px',
                           ...fixedIconSize,
-                        }}
+                          ...composerActionDarkFill(theme),
+                        })}
                         variant="solid"
                         color="primary"
                         size="md"
@@ -351,17 +353,7 @@ export function SessionToolbar(props: SessionToolbarProps) {
                             borderRadius: '6px',
                             paddingBlock: '0px',
                             ...fixedIconSize,
-                            // Dark primary solidBg is Joy's default blue, a second blue beside the accent.
-                            // Must stay in sync with the native sendButton role (design-tokens nativeTheme.ts).
-                            [theme.getColorSchemeSelector('dark')]: {
-                              '&:not(:disabled)': {
-                                bgcolor: 'reading.accent',
-                                // This selector outranks Joy's hover/active rules, so restate both (darken, not
-                                // brighten, to keep the white icon legible).
-                                '@media (hover: hover)': { '&:hover': { filter: 'brightness(0.92)' } },
-                                '&:active': { filter: 'brightness(0.85)' },
-                              },
-                            },
+                            ...composerActionDarkFill(theme),
                           })}
                           variant="solid"
                           color="primary"

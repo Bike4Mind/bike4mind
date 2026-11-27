@@ -84,7 +84,7 @@ object BrandTokens {
             dark = Color(0xFFD3DFE8),
         )
 
-        /** Send button fill (web primary solidBg light; dark matches accent, see SessionToolbar). */
+        /** Send button fill (web primary solidBg light; dark is the accent, see apps/client/app/components/Session/SessionBottom/composerActionSx.ts). */
         val sendButton = BrandColorPair(
             light = Color(0xFF0066C1),
             dark = Color(0xFF61AFEF),

@@ -158,7 +158,8 @@ export const NATIVE_COLOR_ROLES: readonly ColorRoleSpec[] = [
   },
   {
     name: 'sendButton',
-    description: 'Send button fill (web primary solidBg light; dark matches accent, see SessionToolbar).',
+    description: 'Send button fill (web primary solidBg light; dark is the accent, ' +
+      'see apps/client/app/components/Session/SessionBottom/composerActionSx.ts).',
     light: ramp('blue', '600'),
     dark: ramp('blue', '550'),
   },

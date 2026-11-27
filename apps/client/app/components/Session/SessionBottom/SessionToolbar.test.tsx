@@ -320,18 +320,33 @@ describe('SessionToolbar - dark send button fill', () => {
     expect(fill()).toBe('var(--variant-solidBg, var(--joy-palette-primary-solidBg, #0066C1))');
   });
 
-  // getComputedStyle cannot see pseudo-classes, so pin the emitted hover/press rules as text.
-  it('darkens on hover (hover-capable pointers only) and on press', () => {
+  // getComputedStyle cannot see pseudo-classes, so check the emitted rules. Matched loosely so a
+  // stylis/Joy serialization change does not break it.
+  it('shades the fill on hover (hover-capable pointers only) and on press', () => {
     render(<SessionToolbar {...baseProps} chatInputValue="hello" />, { wrapper: ModeWrapper('dark') });
     const cls = [...screen.getByTestId('send-message-btn').classList].find(name => name.startsWith('css-'));
     const css = Array.from(document.querySelectorAll('style'))
       .map(style => style.textContent)
       .join('\n');
-    expect(css).toContain(
-      `@media (hover: hover){[data-joy-color-scheme="dark"] .${cls}:not(:disabled):hover{-webkit-filter:brightness(0.92);filter:brightness(0.92);}`
+    const rule = (pseudo: string) =>
+      new RegExp(
+        `\\.${cls}:not\\(:disabled\\):${pseudo}\\s*\\{[^}]*background-color:\\s*color-mix\\(in srgb,\\s*var\\(--joy-palette-reading-accent\\)`
+      );
+    expect(css).toMatch(rule('hover'));
+    expect(css).toMatch(rule('active'));
+    expect(css).toMatch(new RegExp(`@media \\(hover: ?hover\\)\\s*\\{[^{}]*\\.${cls}:not\\(:disabled\\):hover`));
+  });
+
+  it('gives the recording confirm button the same dark fill, since it takes the same slot', () => {
+    render(<SessionToolbar {...baseProps} />, { wrapper: ModeWrapper('dark') });
+    act(() => mocks.voiceRecordingStarts.at(-1)?.());
+    expect(getComputedStyle(screen.getByTestId('voice-record-confirm-btn')).backgroundColor).toBe(
+      'var(--joy-palette-reading-accent)'
     );
-    expect(css).toContain(
-      `[data-joy-color-scheme="dark"] .${cls}:not(:disabled):active{-webkit-filter:brightness(0.85);filter:brightness(0.85);}`
-    );
+  });
+
+  // Ties the web fill to the native sendButton pin (nativeTheme.test.ts expects #61AFEF).
+  it('resolves the dark accent to the value the native sendButton role uses', () => {
+    expect(appTheme.colorSchemes.dark.palette.reading.accent.toLowerCase()).toBe('#61afef');
   });
 });
