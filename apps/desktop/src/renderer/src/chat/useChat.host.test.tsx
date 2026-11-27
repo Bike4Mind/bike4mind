@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatSessionStatusEvent, ChatSessionSummary } from '@shared/chat';
 import { LOCAL_HOST_ID, type HostBridgeApi, type HostNotificationDelivery } from '@shared/hostBridge';
-import { hostNotification } from '@shared/hostProtocol';
+import { HOST_ERROR_CODES, hostNotification } from '@shared/hostProtocol';
 import { SESSION_PAGE_SIZE } from '@shared/sessionPage';
 import { sessionEvents } from '../host/sessionEvents';
 import {
@@ -286,6 +286,32 @@ describe('a held context notice across a reconnect', () => {
     held.notices = [budgetWarning];
     await reconnect();
     expect(conversation().notice).toBe(budgetWarning.message);
+  });
+
+  it('reads the session and its queue again when a resumed subscription needs a snapshot', async () => {
+    const { host } = stubConversationHost({ notices: [] });
+    const answer = vi.mocked(host.request).getMockImplementation();
+    await render<ConversationController>(() => useConversation('s1', () => undefined));
+    const reads = (method: string) =>
+      vi.mocked(host.request).mock.calls.filter(([, called]) => called === method).length;
+    const snapshot = () => ({ session: reads('session/get'), queue: reads('queue/list') });
+
+    // A plain resume announces a resync of host-wide state; it is the baseline.
+    const start = snapshot();
+    await reconnect();
+    const plain = snapshot();
+
+    vi.mocked(host.request).mockImplementation(async (hostId, method, params) =>
+      method === 'session/subscribe' && (params as { after?: unknown }).after
+        ? { ok: false as const, error: { code: HOST_ERROR_CODES.snapshotRequired, message: 'gone' } }
+        : answer!(hostId, method, params)
+    );
+    await reconnect();
+    const resynced = snapshot();
+
+    // The open session's own resync adds a read of it and of its queue on top of the baseline.
+    expect(resynced.session - plain.session).toBeGreaterThan(plain.session - start.session);
+    expect(resynced.queue - plain.queue).toBeGreaterThan(plain.queue - start.queue);
   });
 
   it('ignores a notice inside session/event, which a host still sends for 1.2 clients', async () => {
