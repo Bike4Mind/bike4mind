@@ -35,6 +35,9 @@ export const adminActionBlockedReason = (
   return null;
 };
 
+/** Accounts created before this were never attributed to a sign-up client (first release that records it). */
+export const SIGNUP_CLIENT_RECORDED_SINCE = new Date('2026-11-26T13:45:45Z');
+
 /**
  * A user as the profile page has it: GET /api/users/[id] returns the whole document, so fields the
  * list projection leaves out (signup channel, internal notes) are there too. List rows lack them.
