@@ -409,7 +409,7 @@ Preview deploys are created on demand by maintainers via the internal deployer (
 1. Verifies the deployed preview (revision, deploy status and marker comment) before any test starts, then wakes it if its services are scaled to zero for the weekend (via `/api/test/preview-sleep`, gated by the stage's `E2E_CLEANUP_SECRET`). The wake step polls for up to 8 minutes and fails before any test runs if the services never come up, saying whether the stage was still asleep or its status could not be read; a preview where the route returns 404 (deployed before it existed, or with weekend sleep disabled) is tested as-is
 2. Selects the projects to run (see [PROJECT_SELECTION.md](./PROJECT_SELECTION.md)) and runs them headless (3 workers, `PW_WORKERS`) against the preview URL
 3. Posts an advisory **comment on the PR** (`Advisory preview E2E: <outcome>`) and sets the `e2e/preview-advisory` commit status; neither is a required check
-4. Uploads the **HTML report** as a build artifact (`playwright-report-preview-pr<N>`)
+4. Stores the run, its HTML report and each failed test's trace, video and screenshot in the QA status store (`/admin/qa`, admins only). The report is also uploaded as a build artifact (`playwright-report-preview-pr<N>`) when the workflow runs in a private repository
 
 In CI, `API_URL` points at the deployment under test. `E2E_CLEANUP_SECRET` is written into each stage's SST secret on every deploy. Each `pr<N>` preview gets its own value, HMAC-SHA256(seed, `pr<N>`), so it is stable across redeploys but differs per preview; dev/staging has one stable value. Previews used to self-provision a fresh random per deploy; that was dropped because it made manual QA against a preview a chore and let a redeploy invalidate the secret mid-run.
 
