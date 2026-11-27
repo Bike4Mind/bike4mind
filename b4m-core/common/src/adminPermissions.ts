@@ -11,6 +11,8 @@ export const ADMIN_PERMISSIONS = [
   'users:export',
   'settings:manage',
   'models:curate',
+  'credits:self_grant',
+  'credits:approve_self_grant',
 ] as const;
 
 export const AdminPermissionSchema = z.enum(ADMIN_PERMISSIONS);
@@ -19,6 +21,39 @@ export const AdminPermissionsSchema = z
   .max(ADMIN_PERMISSIONS.length)
   .refine(ids => new Set(ids).size === ids.length, 'Admin permissions must not repeat');
 export type AdminPermissionId = z.infer<typeof AdminPermissionSchema>;
+
+/**
+ * Permissions the full-admin flag does not imply; only a holder can grant or revoke one
+ * (assertCanChangeExplicitOnlyPermissions), and holding one alone grants no admin access.
+ */
+export const EXPLICIT_ONLY_ADMIN_PERMISSIONS = [
+  'credits:self_grant',
+  'credits:approve_self_grant',
+] as const satisfies readonly AdminPermissionId[];
+
+export const isExplicitOnlyAdminPermission = (permission: string): boolean =>
+  (EXPLICIT_ONLY_ADMIN_PERMISSIONS as readonly string[]).includes(permission);
+
+const ADMIN_ACCESS_PERMISSIONS = ADMIN_PERMISSIONS.filter(permission => !isExplicitOnlyAdminPermission(permission));
+
+/**
+ * Refuses a change that adds or removes an explicit-only permission the actor does not hold themselves, so a
+ * second account of the same person cannot hand one out. `before` and `after` are effective permission sets
+ * (direct grants plus role permissions).
+ */
+export function assertCanChangeExplicitOnlyPermissions(
+  actor: AdminIdentity | null | undefined,
+  before: readonly string[],
+  after: readonly string[]
+): void {
+  const changed = EXPLICIT_ONLY_ADMIN_PERMISSIONS.filter(
+    permission => before.includes(permission) !== after.includes(permission)
+  );
+  const missing = changed.filter(permission => !hasAdminPermission(actor, permission));
+  if (missing.length > 0) {
+    throw new ForbiddenError(`Only an admin who holds ${missing.join(', ')} can grant or revoke it`);
+  }
+}
 
 /** Bounds how many admin roles (adminRoles.ts) one user can hold, so per-request resolution stays one small query. */
 export const MAX_ADMIN_ROLES_PER_USER = 20;
@@ -104,10 +139,13 @@ type AdminIdentity = {
   adminRoleIds?: readonly unknown[] | null;
 };
 
-/** Effective = direct grants UNION role permissions; a user whose roles were not resolved has only the former. */
+/**
+ * Effective = direct grants UNION role permissions; a user whose roles were not resolved has only the former.
+ * Full admins hold every permission except the EXPLICIT_ONLY_ADMIN_PERMISSIONS.
+ */
 export function hasAdminPermission(user: AdminIdentity | null | undefined, permission: AdminPermissionId): boolean {
   return (
-    user?.isAdmin === true ||
+    (user?.isAdmin === true && !isExplicitOnlyAdminPermission(permission)) ||
     user?.adminPermissions?.includes(permission) === true ||
     user?.roleAdminPermissions?.includes(permission) === true
   );
@@ -127,7 +165,8 @@ export function meetsAdminPermissionRequirement(
  */
 export function canAccessAdmin(user: AdminIdentity | null | undefined): boolean {
   return (
-    ADMIN_PERMISSIONS.some(permission => hasAdminPermission(user, permission)) || (user?.adminRoleIds?.length ?? 0) > 0
+    ADMIN_ACCESS_PERMISSIONS.some(permission => hasAdminPermission(user, permission)) ||
+    (user?.adminRoleIds?.length ?? 0) > 0
   );
 }
 

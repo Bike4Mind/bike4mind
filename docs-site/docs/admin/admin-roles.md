@@ -15,7 +15,7 @@ An admin's effective permissions are their direct permissions plus the permissio
 
 - Roles only add access. A role never removes a permission granted directly or by another role.
 - Full admin access is never a role. A role can hold delegated permissions only, so full admin is still granted and removed with **Change role** on the user's profile.
-- A full administrator already holds every permission, so a role on a full admin's account adds nothing.
+- A full administrator already holds every permission except `credits:self_grant` and `credits:approve_self_grant`, so a role on a full admin's account adds nothing. Grant those two to a full admin directly.
 - If an account still lists a role that was deleted, that role grants nothing.
 
 ## Templates
@@ -35,6 +35,7 @@ Open **Admin > Roles** and choose **Create from a template** to start from one o
 ## Managing roles
 
 - Only a full administrator can create, edit or delete a role, and only a full administrator can give a role to a user or take it away. Holding `settings:manage` is not enough.
+- Adding `credits:self_grant` or `credits:approve_self_grant` to a role, or giving such a role to a user, also needs you to hold that permission yourself. See [Credit grants to your own account](./delegated-permissions.md#credit-grants-to-your-own-account).
 - Give or remove roles on the user's profile, in the same editor as their delegated permissions. See [Granting permissions](./delegated-permissions.md#granting-permissions).
 - Changing a role's permissions requires a reason. The audit log records the permissions granted and revoked, the reason, and how many members the change reached.
 - A role that still has members cannot be deleted. Remove it from each member first, so deleting a role never takes access away from anyone silently.

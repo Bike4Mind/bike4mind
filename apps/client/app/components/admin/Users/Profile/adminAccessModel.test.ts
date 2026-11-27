@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { describeProvenance, permissionProvenance, roleGrantBlockedReason } from './adminAccessModel';
+import {
+  UNHELD_EXPLICIT_ONLY_HINT,
+  describeProvenance,
+  permissionProvenance,
+  roleGrantBlockedReason,
+  roleRemovalBlockedReason,
+} from './adminAccessModel';
 
 const SUPPORT_AGENT = {
   id: 'aaaaaaaaaaaaaaaaaaaaaaaa',
@@ -49,13 +55,40 @@ describe('describeProvenance', () => {
 });
 
 describe('roleGrantBlockedReason', () => {
-  it('never blocks a full admin', () => {
+  it('does not block a full admin from a role of ordinary permissions', () => {
     expect(roleGrantBlockedReason({ isAdmin: true }, ROLES[1])).toBeNull();
+  });
+
+  it('blocks a full admin from a role carrying an explicit-only permission they lack', () => {
+    const approvers = { permissions: ['support:read', 'credits:approve_self_grant'] as const };
+    expect(roleGrantBlockedReason({ isAdmin: true }, approvers)).toBe('You do not hold Approve self-grants');
+    expect(
+      roleGrantBlockedReason({ isAdmin: true, adminPermissions: ['credits:approve_self_grant'] }, approvers)
+    ).toBeNull();
   });
 
   it('blocks a delegate from a role carrying a permission they lack, counting their own roles', () => {
     const delegate = { adminPermissions: ['support:read'], roleAdminPermissions: ['users:moderate'] };
     expect(roleGrantBlockedReason(delegate, ROLES[0])).toBeNull();
     expect(roleGrantBlockedReason(delegate, ROLES[1])).toBe('You do not hold Adjust credits');
+  });
+});
+
+describe('roleRemovalBlockedReason', () => {
+  const role = { permissions: ['support:read', 'credits:approve_self_grant'] };
+
+  it('blocks removing a role whose explicit-only permission the actor lacks', () => {
+    expect(roleRemovalBlockedReason({ isAdmin: true }, role, [])).toBe(UNHELD_EXPLICIT_ONLY_HINT);
+  });
+
+  it('allows it for a holder, or when the permission stays through another source', () => {
+    expect(
+      roleRemovalBlockedReason({ isAdmin: true, adminPermissions: ['credits:approve_self_grant'] }, role, [])
+    ).toBeNull();
+    expect(roleRemovalBlockedReason({ isAdmin: true }, role, ['credits:approve_self_grant'])).toBeNull();
+  });
+
+  it('never blocks removing a role of ordinary permissions', () => {
+    expect(roleRemovalBlockedReason({ isAdmin: true }, ROLES[1], [])).toBeNull();
   });
 });

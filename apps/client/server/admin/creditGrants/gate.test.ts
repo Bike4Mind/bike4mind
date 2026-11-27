@@ -92,6 +92,15 @@ describe('creditGrantNeedsApproval', () => {
     expect(mocks.sum).not.toHaveBeenCalled();
   });
 
+  it('holds a self-grant of any size, even with approvals off, and never a self-deduction', async () => {
+    mocks.policy.mockResolvedValue({ ...POLICY, enabled: false });
+    expect(await creditGrantNeedsApproval(1, 'admin1', { heldSelfGrant: true })).toEqual({
+      policy: { ...POLICY, enabled: false },
+    });
+    expect(await creditGrantNeedsApproval(-50, 'admin1', { heldSelfGrant: true })).toMatchObject({ policy: null });
+    expect(reservations.reserve).not.toHaveBeenCalled();
+  });
+
   it('counts an action that commits and releases while the next reservation is read', async () => {
     let audited = 0;
     reservations.rows.set('running', { actorUserId: 'admin1', kind: 'credits', amount: 600 });

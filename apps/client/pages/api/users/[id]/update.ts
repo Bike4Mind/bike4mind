@@ -54,6 +54,9 @@ import {
   requestAuditWriter,
 } from '@bike4mind/server-utils/utils/adminAudit';
 import { gradeDetectionsForStatusChange } from '@server/admin/shadowDetectionStatusVerdicts';
+import { requestApproval } from '@server/admin/approvals/service';
+import { SELF_GRANT_APPROVAL, isHeldSelfGrant } from '@server/admin/creditGrants/selfGrant';
+import type { Request } from 'express';
 import { Logger } from '@bike4mind/observability';
 
 const logger = new Logger({ metadata: { service: 'userUpdate' } });
@@ -188,6 +191,13 @@ const toIsoOrNull = (value: Date | string | null | undefined) => (value ? new Da
 const statusFlagChanges = (body: userService.AdminUpdateUserParameters, before: AuditTargetSnapshot | null) =>
   STATUS_FLAGS.filter(({ field }) => body[field] !== undefined && body[field] !== !!before?.[field]);
 
+/** The signed balance move an admin update body asks for, before adminUpdateUser clamps a deduction at zero. */
+const requestedCreditDelta = (body: userService.AdminUpdateUserParameters, currentCredits: number | undefined) =>
+  body.creditDelta ?? (body.currentCredits !== undefined ? body.currentCredits - (currentCredits ?? 0) : 0);
+
+/** The fields a held self-grant may carry: anything else would be applied without the credits it came with. */
+const SELF_GRANT_FIELDS: ReadonlySet<string> = new Set(['id', 'currentCredits', 'creditDelta', 'creditReason']);
+
 /** Whether an admin update body asks to move the balance; mirrors adminUpdateUser's delta rule. */
 const requestsCreditChange = (body: userService.AdminUpdateUserParameters, currentCredits: number | undefined) =>
   body.creditDelta !== undefined
@@ -298,12 +308,32 @@ const handler = baseApi().put(
       const statusChanges = statusFlagChanges(body, targetBefore);
       const changesCredits = requestsCreditChange(body, targetBefore?.currentCredits);
 
-      // Self credit adjustments are allowed for now, pending scoped admin permissions, and flagged in
-      // their audit entry.
+      // Self credit adjustments are flagged in their audit entry; an increase waits for a second admin
+      // unless the admin holds credits:self_grant (isHeldSelfGrant).
       const targetsSelf = isSelfOrImpersonator(currentUser, userId);
 
       // Validated before any write so a missing reason never leaves a half-applied update.
       const creditReason = changesCredits ? parseAdminActionReason(body.creditReason) : undefined;
+
+      const selfGrantCredits = targetsSelf ? requestedCreditDelta(body, targetBefore.currentCredits) : 0;
+      if (creditReason && selfGrantCredits > 0 && isHeldSelfGrant(currentUser, true)) {
+        const otherFields = Object.entries(body)
+          .filter(([field, value]) => value !== undefined && !SELF_GRANT_FIELDS.has(field))
+          .map(([field]) => field);
+        if (otherFields.length > 0) {
+          throw new BadRequestError(
+            `A credit grant to your own account waits for another admin's approval, so send it on its own. Also sent: ${otherFields.join(', ')}`
+          );
+        }
+        const pending = await requestApproval(req as unknown as Request, {
+          action: 'user.credits.self_grant',
+          params: { userId, creditDelta: selfGrantCredits, creditReason },
+          summary: `Grant ${selfGrantCredits} credits to their own account`,
+          reason: creditReason,
+          ...SELF_GRANT_APPROVAL,
+        });
+        return res.status(202).json(pending);
+      }
       const throttleReason = body.throttleTier ? parseAdminActionReason(body.throttleReason) : undefined;
       const statusChangeReason = statusChanges.length > 0 ? parseAdminActionReason(body.statusChangeReason) : undefined;
 

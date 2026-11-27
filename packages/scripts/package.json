@@ -33,6 +33,7 @@
     "datalake:check-stale-vector-claims": "tsx datalake/check-stale-vector-claims.ts",
     "datalake:seed-stranded-member": "tsx datalake/seed-stranded-lake-member.ts",
     "db:create-user": "tsx createUser.ts",
+    "db:grant-explicit-admin-permission": "tsx grantExplicitAdminPermission.ts",
     "db:list-users": "tsx listUsers.ts",
     "db:setup-email-user": "tsx setupTestEmailUser.ts",
     "daily-insights:generate": "tsx generateUserActivity.ts",
