@@ -30,8 +30,9 @@ export async function lakeGateTagsIn(tags: readonly string[]): Promise<string[]>
 
 /**
  * Lake gate tags stay full-admin only on every path that adds or removes account tags (the tag
- * editor, account creation, bulk add/undo), alongside the managed-tag rule in
- * `lib/entitlements/managedUserTags.ts`. `tags` is what the write adds or removes.
+ * editor, account creation, bulk add/undo, grant packages, the defaultTags setting), alongside the
+ * managed-tag rule in `lib/entitlements/managedUserTags.ts`, which stays free of this DB lookup
+ * because the admin UI imports it. `tags` is what the write adds or removes.
  */
 export async function assertCanChangeLakeGateTags(
   user: Parameters<typeof isFullAdmin>[0],
@@ -41,4 +42,19 @@ export async function assertCanChangeLakeGateTags(
   if ((await lakeGateTagsIn(tags)).length > 0) {
     throw new ForbiddenError('Only full administrators can assign tags that gate data lake access');
   }
+}
+
+/** assertCanChangeLakeGateTags over the tags a write adds or removes going from `before` to `after`. */
+export async function assertCanChangeLakeGateTagsBetween(
+  user: Parameters<typeof isFullAdmin>[0],
+  before: readonly string[] | null | undefined,
+  after: readonly string[] | null | undefined
+): Promise<void> {
+  if (isFullAdmin(user)) return;
+  const beforeSet = new Set((before ?? []).map(normalizeTag));
+  const afterSet = new Set((after ?? []).map(normalizeTag));
+  await assertCanChangeLakeGateTags(user, [
+    ...(after ?? []).filter(tag => !beforeSet.has(normalizeTag(tag))),
+    ...(before ?? []).filter(tag => !afterSet.has(normalizeTag(tag))),
+  ]);
 }
