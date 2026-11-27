@@ -25,7 +25,7 @@ export type ExecutionMode = 'inject' | 'auto-fire' | 'hidden';
  * host's closed tool set (`B4MLLMTools`), never free text - a stored prompt
  * cannot reference a tool that no longer exists.
  */
-export type BriefcasePromptToolFlag = B4MLLMTools;
+export type BriefcasePromptToolFlag = string;
 
 /**
  * The stored unit of the catalog. `userId == null/absent` => system prompt

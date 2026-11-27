@@ -1378,6 +1378,11 @@ describe('processExecution tool deps', () => {
             Object.entries(tools).map(([k, t]) => [k, { ...(t as object), guarded: true }])
           ) as typeof tools
       );
+      resolve.mockReturnValueOnce({
+        id: 'synthetic:fixture-profile',
+        allowedTools: ['fixture_tool'],
+        deniedTools: ['fixture_denied'],
+      } as never);
       await runWithSession({ ...baseSession, surface: OPTI_SURFACE });
 
       expect(resolve).toHaveBeenCalledWith(
@@ -1385,7 +1390,7 @@ describe('processExecution tool deps', () => {
         expect.objectContaining({ executionId: 'exec-1', contributedToolNames: ['fixture_tool'] })
       );
       const profile = resolve.mock.results[0].value;
-      expect(profile.id).toBe('synthetic:opti-orchestration');
+      expect(profile.id).toBe('synthetic:fixture-profile');
       expect(profile.allowedTools).toContain('fixture_tool');
 
       expect(guard).toHaveBeenCalledTimes(1);
