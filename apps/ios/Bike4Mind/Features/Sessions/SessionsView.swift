@@ -80,8 +80,7 @@ private struct SessionsListScreen: View {
   private var content: some View {
     switch (model.state, model.sessions.isEmpty) {
     case (.idle, true), (.loading, true):
-      ProgressView("Loading notebooks")
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      SessionsSkeleton()
         .accessibilityIdentifier("sessions-loading")
     case (.failed(let error), true):
       ContentUnavailableView {
@@ -166,6 +165,26 @@ private struct SessionsListScreen: View {
     .listStyle(.plain)
     .scrollContentBackground(.hidden)
     .accessibilityIdentifier("sessions-list")
+  }
+}
+
+/// Mirrors `SessionRow`: a title line over a caption line.
+private struct SessionsSkeleton: View {
+  private static let titleFractions: [CGFloat] = [0.72, 0.55, 0.8, 0.62, 0.68, 0.5]
+
+  var body: some View {
+    SkeletonContainer(label: "Loading notebooks") {
+      VStack(alignment: .leading, spacing: Tokens.Spacing.l) {
+        ForEach(Self.titleFractions.indices, id: \.self) { index in
+          VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+            SkeletonBlock(widthFraction: Self.titleFractions[index], height: 17)
+            SkeletonBlock(widthFraction: 0.4, height: 12)
+          }
+          .padding(.vertical, Tokens.Spacing.xs)
+        }
+      }
+      .padding(Tokens.Spacing.m)
+    }
   }
 }
 
