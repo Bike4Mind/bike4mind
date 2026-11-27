@@ -45,7 +45,7 @@ export function seriesLabel(split: SpendSplitDimension, key: string): string {
     case 'funding':
       return FUNDING_LABELS[key] ?? sentenceCase(key);
     case 'source':
-      return key === 'cli' || key === 'api' ? key.toUpperCase() : sentenceCase(key);
+      return key === 'cli' || key === 'api' || key === 'mcp' ? key.toUpperCase() : sentenceCase(key);
     case 'model':
       return key;
     case 'feature':

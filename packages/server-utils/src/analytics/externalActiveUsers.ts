@@ -8,7 +8,7 @@ import { internalStaffEmailRegex, parseInternalStaffDomains } from '@bike4mind/c
  * An active user-day is a distinct userId with at least one UsageEvent (status ok), Quest chat
  * message or AgentExecution on a UTC day. Public API activity (UsageEvent source 'api', API-key
  * AgentExecutions) is kept in a separate user-day map: it is reported as "API users" and never
- * counts toward DAU, activation or retention. Internal users (admins, staff domains) are split out
+ * counts toward DAU, activation or retention (MCP-host UsageEvents, source 'mcp', do count). Internal users (admins, staff domains) are split out
  * of the app map into their own daily series and never enter an external figure. Days are carried as
  * integer UTC epoch days so retention offsets are plain subtraction.
  */
@@ -63,8 +63,8 @@ Usage: report:external-active-users [--days <n>] [--test-pattern <regex>] [--hel
 
 An active user-day is a distinct userId with a UsageEvent (status ok), a Quest chat message or an
 AgentExecution (any status: starting a run is the user's action, a failure is ours) on a UTC day.
-DAU is web app + CLI + desktop activity only. Public API activity is reported separately as "API users" (users
-with at least one API-sourced action that day, whether or not they are also in DAU) and never
+DAU is web app + CLI + desktop + MCP-host activity only. Public API activity is reported separately as
+"API users" (users with at least one API-sourced action that day, whether or not they are also in DAU) and never
 activates or retains a cohort user. API activity means a UsageEvent with source 'api' or an
 AgentExecution started with an API key (plus the Quest that run wrote). An unset UsageEvent source
 counts as the app.

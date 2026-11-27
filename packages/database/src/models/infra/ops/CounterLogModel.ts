@@ -122,8 +122,8 @@ export type YoungAccountSpender = {
 
 /**
  * In-window AI credit spend split by channel (CreditTransaction.source): `api` is third-party API
- * use (`mcp` included: MCP traffic is API-key authed), `chat` the interactive surfaces (web, cli, desktop). Agent, system and unclassified rows are
- * in neither, so a post-turn system charge never reads as chat.
+ * use (`mcp` included: MCP hosts call the public API, as `api` did before), `chat` the interactive surfaces (web, cli,
+ * desktop). Agent, system and unclassified rows are in neither, so a post-turn system charge never reads as chat.
  */
 export type SpendChannels = { apiCredits: number; chatCredits: number };
 

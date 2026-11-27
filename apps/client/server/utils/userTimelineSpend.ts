@@ -4,6 +4,7 @@ import {
   CreditHolderType,
   signedCredits,
   type AuditLogCursor,
+  type CompletionSource,
   type CreditTransactionType,
   type UserTimelineSpendEntry,
 } from '@bike4mind/common';
@@ -237,9 +238,10 @@ const SOURCE_LABELS: Readonly<Record<string, string>> = {
   cli: 'CLI',
   desktop: 'Desktop app',
   api: 'API',
+  mcp: 'MCP',
   agent: 'Agent',
   system: 'System',
-};
+} satisfies Record<CompletionSource, string>;
 
 const formatCredits = (credits: number): string => Math.round(credits).toLocaleString('en-US');
 
