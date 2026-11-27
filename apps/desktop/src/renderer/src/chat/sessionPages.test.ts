@@ -67,6 +67,25 @@ describe('mergeHostRows', () => {
     ]);
   });
 
+  it('never holds back a child of a kept session', () => {
+    const child = {
+      ...row('b-child', '2026-09-01'),
+      origin: { parentSessionId: 'b-open', depth: 1, seedPrompt: '' },
+    } as ChatSessionSummary;
+    const local = [...busy, child];
+    const paging = new Map([
+      ['local', paged(local, 'more')],
+      ['devbox', paged(quiet, 'more')],
+    ]);
+    const rows = new Map([
+      ['local', local],
+      ['devbox', quiet],
+    ]);
+    expect(mergeHostRows(rows, paging, ['local', 'devbox'], new Set(['b-open'])).map(entry => entry.id)).toContain(
+      'b-child'
+    );
+  });
+
   it('returns one host rows as they are', () => {
     const only = new Map([['local', busy]]);
     expect(mergeHostRows(only, new Map([['local', paged(busy, 'more')]]), ['local'])).toBe(busy);
