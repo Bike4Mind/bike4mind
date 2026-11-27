@@ -376,6 +376,124 @@ describe('CallableFunctionModel', () => {
     });
   });
 
+  describe('platform mark', () => {
+    type Saved = Awaited<ReturnType<typeof callableFunctionRepository.create>>;
+    const promoteAs = async (saved: Saved, trustLabel: 'verified' | 'unverified', seq = 1): Promise<Saved> => {
+      const promoted = await callableFunctionRepository.promote(
+        saved.id,
+        OWNER,
+        { updatedAt: saved.updatedAt },
+        {
+          seq,
+          runtime: { kind: 'pyodide-server', version: '0.25.1', packages: [] },
+          lastServerRun: { at: new Date(), passed: 1, failed: 0, results: [] },
+          trustLabel,
+          contract: saved.contract,
+          pin: saved.pin,
+          description: saved.description,
+          sourcePins: [],
+        }
+      );
+      if (!promoted) throw new Error('promotion did not land');
+      return promoted;
+    };
+    const mark = { setBy: 'admin-1', setAt: new Date('2026-01-03T00:00:00Z') };
+
+    it('marks only a live, verified function and records who set it', async () => {
+      const created = await callableFunctionRepository.create(fn());
+      expect(await callableFunctionRepository.setPlatformMark(created.id, mark)).toBeNull();
+      const unverified = await promoteAs(created, 'unverified');
+      expect(await callableFunctionRepository.setPlatformMark(created.id, mark)).toBeNull();
+      await promoteAs(unverified, 'verified', 2);
+      const marked = await callableFunctionRepository.setPlatformMark(created.id, mark);
+      expect(marked?.platform).toEqual(mark);
+      expect(marked?.trustLabel).toBe('verified');
+      expect(await callableFunctionRepository.setPlatformMark('not-an-id', mark)).toBeNull();
+    });
+
+    it('is cleared only by its own writer, and a generic update refuses it', async () => {
+      const created = await callableFunctionRepository.create(fn());
+      await promoteAs(created, 'verified');
+      await callableFunctionRepository.setPlatformMark(created.id, mark);
+      await expect(
+        callableFunctionRepository.update({ id: created.id, enabled: true } as never, { unset: ['platform'] } as never)
+      ).rejects.toBeInstanceOf(CallableFunctionProtectedFieldError);
+      await expect(
+        callableFunctionRepository.update({ id: created.id, platform: mark } as never)
+      ).rejects.toBeInstanceOf(CallableFunctionProtectedFieldError);
+      expect((await callableFunctionRepository.clearPlatformMark(created.id))?.platform).toBeUndefined();
+      expect(await callableFunctionRepository.clearPlatformMark(created.id)).toBeNull();
+    });
+
+    it('survives a verified promotion and is dropped by an unverified one', async () => {
+      const created = await callableFunctionRepository.create(fn());
+      await promoteAs(created, 'verified');
+      const marked = (await callableFunctionRepository.setPlatformMark(created.id, mark))!;
+      const again = await promoteAs(marked, 'verified', 2);
+      expect(again.platform).toEqual(mark);
+      const dropped = await promoteAs(again, 'unverified', 3);
+      expect(dropped.platform).toBeUndefined();
+      expect(dropped.trustLabel).toBe('unverified');
+    });
+
+    it('is dropped when an examples edit unverifies the function', async () => {
+      const created = await callableFunctionRepository.create(fn());
+      await promoteAs(created, 'verified');
+      const marked = (await callableFunctionRepository.setPlatformMark(created.id, mark))!;
+      const edited = await callableFunctionRepository.setExamples(
+        created.id,
+        OWNER,
+        { updatedAt: marked.updatedAt },
+        [],
+        { unverify: true }
+      );
+      expect(edited?.trustLabel).toBe('unverified');
+      expect(edited?.platform).toBeUndefined();
+    });
+
+    it('is dropped by a code, data, or source edit, and a verified re-promotion does not bring it back', async () => {
+      const created = await callableFunctionRepository.create(fn());
+      const live = await promoteAs(created, 'verified');
+      await callableFunctionRepository.setPlatformMark(created.id, mark);
+      const repinned = await callableFunctionRepository.repin(created.id, OWNER, 1, {
+        pin: {
+          artifactId: 'artifact-1',
+          version: 2,
+          contentHash: calculateContentHash(`${SOURCE}# v2\n`),
+          source: `${SOURCE}# v2\n`,
+          pinnedAt: new Date(),
+        },
+        contract: live.contract,
+        description: live.description,
+      });
+      expect(repinned?.state).toBe('draft');
+      expect(repinned?.platform).toBeUndefined();
+      const relive = await promoteAs(repinned!, 'verified', 2);
+      expect(relive.platform).toBeUndefined();
+
+      const remarked = (await callableFunctionRepository.setPlatformMark(created.id, mark))!;
+      const pinned = await callableFunctionRepository.setDataPins(
+        created.id,
+        OWNER,
+        { updatedAt: remarked.updatedAt },
+        [DATA_PIN]
+      );
+      expect(pinned?.platform).toBeUndefined();
+
+      await promoteAs(pinned!, 'verified', 3);
+      const marked = (await callableFunctionRepository.setPlatformMark(created.id, mark))!;
+      expect(marked.platform).toEqual(mark);
+      const resourced = await callableFunctionRepository.setSources(
+        created.id,
+        OWNER,
+        { updatedAt: marked.updatedAt },
+        [{ name: 'base.csv', url: 'https://data.example.com/base.csv', mode: 'pinned' }]
+      );
+      expect(resourced?.state).toBe('draft');
+      expect(resourced?.platform).toBeUndefined();
+    });
+  });
+
   describe('setDataPins', () => {
     it('returns a live function to draft and drops its promoted runtime and label', async () => {
       const created = await callableFunctionRepository.create(fn());

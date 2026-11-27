@@ -171,10 +171,12 @@ The table below remains the literal-update inventory, not proof that all databas
 | CallableFunction | `sources.url` | maxlength,match | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setSources` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `state` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.setSources` | schema | `runValidators` | update call passes runValidators |
 | CallableFunction | `trustLabel` | enum | `ai/CallableFunctionModel.ts#CallableFunctionRepository.promote` | schema | `runValidators` | update call passes runValidators |
+| CallableFunctionResult | `outcome` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.cancel` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionResult | `outcome` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endLost` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionResult | `outcome` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endUnclaimed` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionResult | `reason` | match | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endLost` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionResult | `reason` | match | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endUnclaimed` | schema | `runValidators` | update call passes runValidators |
+| CallableFunctionResult | `state` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.cancel` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionResult | `state` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.claim` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionResult | `state` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endLost` | schema | `runValidators` | update call passes runValidators |
 | CallableFunctionResult | `state` | enum | `ai/CallableFunctionResultModel.ts#CallableFunctionResultRepository.endUnclaimed` | schema | `runValidators` | update call passes runValidators |

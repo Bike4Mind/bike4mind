@@ -6,6 +6,7 @@ import {
   ApiKeyScope,
   CONFINED_API_KEY_SCOPES,
   CONTRACTS,
+  cancelFunctionCallContract,
   getFunctionCallContract,
   getFunctionContract,
   invokeFunctionContract,
@@ -38,11 +39,12 @@ const CONTRACTS_BY_IDENTIFIER = {
   getFunctionContract,
   invokeFunctionContract,
   getFunctionCallContract,
+  cancelFunctionCallContract,
 };
 
 describe('public /api/v1/functions routes gate on functions:invoke through their contract', () => {
   it('finds the route files', () => {
-    expect(files).toHaveLength(4);
+    expect(files).toHaveLength(5);
   });
 
   it.each(files.map(f => [path.relative(ROUTES_DIR, f), f]))('%s', (rel, file) => {
@@ -83,13 +85,14 @@ describe('public /api/v1/functions routes gate on functions:invoke through their
     });
   });
 
-  it('opens exactly the MCP endpoint and the four functions routes to a functions:invoke key', () => {
+  it('opens exactly the MCP endpoint and the five functions routes to a functions:invoke key', () => {
     expect(DERIVED_API_KEY_SCOPE_ENDPOINTS[ApiKeyScope.FUNCTIONS_INVOKE]).toEqual([
       'POST /api/mcp/functions',
       'GET /api/v1/functions',
       'GET /api/v1/functions/:id',
       'POST /api/v1/functions/:id/invoke',
       'GET /api/v1/functions/calls/:call_id',
+      'POST /api/v1/functions/calls/:call_id/cancel',
     ]);
   });
 });

@@ -1375,7 +1375,7 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
                 Call function
               </Button>
               <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                Calls run in your browser. Call results are not saved.
+                Calls run in your browser. They are not saved and do not appear in the call log.
               </Typography>
             </Stack>
 

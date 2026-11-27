@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import {
   ApiKeyScope,
+  cancelFunctionCallContract,
   getFunctionCallContract,
   getFunctionContract,
   invokeFunctionContract,
@@ -164,7 +165,7 @@ vi.mock('@bike4mind/database', async () => ({
     },
     rewrite: async (id: string, row: Record<string, unknown>) => {
       const index = Number(id.slice(2)) - 1;
-      h.calls[index] = { ...h.calls[index], ...row };
+      if (h.calls[index]?.outcome !== 'cancelled') h.calls[index] = { ...h.calls[index], ...row };
       return { ...h.calls[index], id };
     },
   },
@@ -185,6 +186,14 @@ vi.mock('@bike4mind/database', async () => ({
       const doc = h.results.get(callId);
       return doc && doc.callerUserId === callerUserId ? doc : null;
     },
+    cancel: async (callId: string, callerUserId: string) => {
+      const doc = h.results.get(callId);
+      if (!doc || doc.callerUserId !== callerUserId || doc.state === 'finished') return null;
+      const { input: _input, ...rest } = doc;
+      const cancelled = { ...rest, state: 'finished', outcome: 'cancelled' };
+      h.results.set(callId, cancelled);
+      return cancelled;
+    },
   },
 }));
 
@@ -192,6 +201,7 @@ const { default: listRoute } = await import('@pages/api/v1/functions/index');
 const { default: getRoute } = await import('@pages/api/v1/functions/[id]/index');
 const { default: invokeRoute, config: invokeConfig } = await import('@pages/api/v1/functions/[id]/invoke');
 const { default: pollRoute } = await import('@pages/api/v1/functions/calls/[call_id]');
+const { default: cancelRoute } = await import('@pages/api/v1/functions/calls/[call_id]/cancel');
 const { queueFunctionCall } = await import('@bike4mind/server-utils/callableFunctions/asyncCalls');
 const {
   FUNCTION_INVOKE_BUDGET_MS,
@@ -331,6 +341,7 @@ describe('scopes and limits', () => {
     ['getFunction', getFunctionContract],
     ['invokeFunction', invokeFunctionContract],
     ['getFunctionCall', getFunctionCallContract],
+    ['cancelFunctionCall', cancelFunctionCallContract],
   ] as const;
 
   it.each(contracts)('%s names functions:invoke and declares the 403 scope envelope', (_name, contract) => {
@@ -347,6 +358,7 @@ describe('scopes and limits', () => {
   it('hands functions:invoke to the API-key chain for every route', () => {
     const required = h.baseApiOptions.map(o => o?.requiredScopes);
     expect(required).toEqual([
+      [ApiKeyScope.FUNCTIONS_INVOKE],
       [ApiKeyScope.FUNCTIONS_INVOKE],
       [ApiKeyScope.FUNCTIONS_INVOKE],
       [ApiKeyScope.FUNCTIONS_INVOKE],
@@ -368,6 +380,7 @@ describe('scopes and limits', () => {
       '/api/v1/functions/[id]',
       '/api/v1/functions/[id]/invoke',
       '/api/v1/functions/calls/[call_id]',
+      '/api/v1/functions/calls/[call_id]/cancel',
     ]);
   });
 
@@ -429,6 +442,13 @@ describe('list', () => {
       ],
       next_cursor: null,
     });
+  });
+
+  it('labels a verified function an admin marked as platform, without naming the admin', async () => {
+    h.functions[0] = fnDoc(LIVE_ID, { platform: { setBy: 'admin1', setAt: T0 } });
+    const res = await call(listRoute, {});
+    expect((res.body.data as { trust_label: string }[])[0].trust_label).toBe('platform');
+    expect(JSON.stringify(res.body)).not.toContain('admin1');
   });
 
   it('leaves out a live function that is turned off or whose artifact was deleted', async () => {
@@ -1015,5 +1035,58 @@ describe('async invoke and poll', () => {
     const callId = (await asyncInvoke()).body.call_id as string;
     h.enabled.value = false;
     expect((await poll(callId)).status).toBe(403);
+  });
+
+  describe('cancel', () => {
+    const cancel = (callId: string, user?: string) =>
+      call(cancelRoute, { method: 'POST', query: { call_id: callId }, user });
+    const CANCELLED = (callId: string) => ({
+      call_id: callId,
+      status: 'finished',
+      outcome: 'cancelled',
+      error: 'The call was cancelled.',
+    });
+
+    it.each(['queued', 'running'] as const)(
+      'ends a %s call cancelled, drops its inputs, marks its row, and polls it as cancelled',
+      async state => {
+        const callId = (await asyncInvoke()).body.call_id as string;
+        h.results.set(callId, { ...h.results.get(callId), state });
+        const res = await cancel(callId);
+        expect(res).toEqual({ status: 200, body: CANCELLED(callId) });
+        expect(h.results.get(callId)?.input).toBeUndefined();
+        expect(h.calls[0]).toMatchObject({ outcome: 'cancelled' });
+        expect(await poll(callId)).toEqual({ status: 200, body: CANCELLED(callId) });
+      }
+    );
+
+    it('returns a finished call unchanged', async () => {
+      const callId = (await asyncInvoke()).body.call_id as string;
+      const outputs = { deflection: 2 };
+      h.results.set(callId, { ...h.results.get(callId), state: 'finished', outcome: 'ok', outputs });
+      const res = await cancel(callId);
+      expect(res).toEqual({
+        status: 200,
+        body: { call_id: callId, status: 'finished', outcome: 'ok', output: outputs },
+      });
+      expect(h.calls[0]).toMatchObject({ outcome: 'queued' });
+    });
+
+    it("answers another person's call id exactly as a made-up or malformed one, and leaves the call", async () => {
+      const callId = (await asyncInvoke()).body.call_id as string;
+      const theirs = await cancel(callId, 'u2');
+      expect(theirs).toEqual({ status: 404, body: { error: 'Call not found' } });
+      expect(await cancel('6c9999999999999999999999')).toEqual(theirs);
+      expect(await cancel('not-an-id')).toEqual(theirs);
+      expect(h.results.get(callId)).toMatchObject({ state: 'queued' });
+      expect(h.calls[0]).toMatchObject({ outcome: 'queued' });
+    });
+
+    it('answers 403 when callable functions are off, and leaves the call', async () => {
+      const callId = (await asyncInvoke()).body.call_id as string;
+      h.enabled.value = false;
+      expect((await cancel(callId)).status).toBe(403);
+      expect(h.results.get(callId)).toMatchObject({ state: 'queued' });
+    });
   });
 });

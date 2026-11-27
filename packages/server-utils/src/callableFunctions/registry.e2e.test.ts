@@ -13,6 +13,7 @@ import {
   ArtifactContent,
   CallableFunction,
   CallableFunctionCall,
+  UserApiKey,
   artifactContentRepository,
   artifactRepository,
   callableFunctionRepository,
@@ -954,7 +955,51 @@ describe('summarizeCallableFunctionCalls', () => {
       outcome: 'ok',
       surface: 'test',
       byRecipient: false,
+      durationMs: 10,
     });
+  });
+
+  it("names the promotion that ran, its duration, and the owner's own API key, and never a recipient's", async () => {
+    const view = await save();
+    const ownKey = new mongoose.Types.ObjectId();
+    const deletedKey = new mongoose.Types.ObjectId();
+    const recipientKey = new mongoose.Types.ObjectId();
+    await UserApiKey.collection.insertMany([
+      { _id: ownKey, userId: OWNER.id, name: 'nightly-batch', keyPrefix: 'b4m_live_own' },
+      { _id: recipientKey, userId: STRANGER.id, name: 'their-key', keyPrefix: 'b4m_live_their' },
+    ]);
+    const keyed = async (daysAgo: number, caller: string, apiKeyId: string | undefined, pinSeq: number) => {
+      const created = await row(view.id, daysAgo, 'ok', caller);
+      await CallableFunctionCall.collection.updateOne(
+        { _id: created._id },
+        { $set: { pinSeq, durationMs: 1250, surface: 'rest', ...(apiKeyId ? { apiKeyId } : {}) } }
+      );
+    };
+    await keyed(1, OWNER.id, String(ownKey), 2);
+    await keyed(2, STRANGER.id, String(recipientKey), 2);
+    await keyed(3, OWNER.id, String(deletedKey), 1);
+    await keyed(4, OWNER.id, undefined, 1);
+
+    try {
+      const summary = await summarizeCallableFunctionCalls(OWNER, view.id, NOW);
+      expect(
+        summary.recent.map(({ byRecipient, pinSeq, durationMs, apiKey }) => ({
+          byRecipient,
+          pinSeq,
+          durationMs,
+          apiKey,
+        }))
+      ).toEqual([
+        { byRecipient: false, pinSeq: 2, durationMs: 1250, apiKey: { name: 'nightly-batch' } },
+        { byRecipient: true, pinSeq: 2, durationMs: 1250, apiKey: undefined },
+        { byRecipient: false, pinSeq: 1, durationMs: 1250, apiKey: { name: null } },
+        { byRecipient: false, pinSeq: 1, durationMs: 1250, apiKey: undefined },
+      ]);
+      expect(JSON.stringify(summary)).not.toContain('their-key');
+      expect(JSON.stringify(summary)).not.toContain(STRANGER.id);
+    } finally {
+      await UserApiKey.collection.deleteMany({});
+    }
   });
 
   it("counts a recipient's calls as the owner's to see, and leaves out a refused caller it was never shared with", async () => {

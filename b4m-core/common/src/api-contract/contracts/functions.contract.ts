@@ -35,6 +35,10 @@ const NOT_FOUND =
 
 const RATE_LIMITED = 'Per-user rate limit exceeded. Honor `Retry-After`.';
 
+const CALL_NOT_FOUND =
+  "No call with that id was made by the key owner, or its result is more than 24 hours old. Another person's call " +
+  'answers this same 404.';
+
 const PAGE_422 =
   '`limit` is out of range, or `cursor` is malformed or was issued by a different endpoint. A cursor is opaque: ' +
   'pass back exactly the `next_cursor` you were given.';
@@ -171,12 +175,31 @@ export const getFunctionCallContract = defineEndpoint({
   responses: {
     200: { description: 'The call as it stands.', schema: GetFunctionCallResponseSchema },
     403: { description: FORBIDDEN, schema: ScopeForbiddenErrorSchema },
-    404: {
-      description:
-        "No call with that id was made by the key owner, or its result is more than 24 hours old. Another person's " +
-        'call answers this same 404.',
-      schema: ApiErrorSchema,
-    },
+    404: { description: CALL_NOT_FOUND, schema: ApiErrorSchema },
+    429: { description: RATE_LIMITED, schema: ApiErrorSchema },
+  },
+  codeSample: { ...codeSample, body: {} },
+});
+
+export const cancelFunctionCallContract = defineEndpoint({
+  method: 'post',
+  path: '/api/v1/functions/calls/{call_id}/cancel',
+  operationId: 'cancelFunctionCall',
+  summary: 'Cancel an asynchronous function call',
+  description:
+    'Cancels an asynchronous call that is `queued` or `running` and returns it as `finished` with `outcome: ' +
+    '"cancelled"`. A queued call never runs. A running call is left to end, but what it returns is discarded and ' +
+    'never polled. A call that already finished is returned unchanged. Only the person whose key made the call ' +
+    'can cancel it.',
+  tags: ['Functions'],
+  auth: 'apiKeyOrJwt',
+  scopes: SCOPES,
+  pathParams: FunctionCallIdParamSchema,
+  emitsRateLimitHeaders: true,
+  responses: {
+    200: { description: 'The call after the cancel.', schema: GetFunctionCallResponseSchema },
+    403: { description: FORBIDDEN, schema: ScopeForbiddenErrorSchema },
+    404: { description: CALL_NOT_FOUND, schema: ApiErrorSchema },
     429: { description: RATE_LIMITED, schema: ApiErrorSchema },
   },
   codeSample: { ...codeSample, body: {} },

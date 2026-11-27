@@ -23,6 +23,28 @@ curl https://app.bike4mind.com/api/v1/functions \
 
 The response is `{ "data": [...], "next_cursor": ... }`. Each entry has `id`, `slug`, `description`, `trust_label`, `pin_version`, `pin_seq`, and `updated_at`. Pass `limit` and the previous `next_cursor` as `cursor` to read the next page; `next_cursor` is `null` on the last page.
 
+### Trust labels
+
+`trust_label` is set on every live function, in the list, in a single read, and in each call's `stamp`:
+
+| Label        | Meaning                                                                     |
+| ------------ | --------------------------------------------------------------------------- |
+| `platform`   | Platform: curated and checked by Bike4Mind. Also `verified`.                |
+| `verified`   | A cited worked example passed on the server when the function was promoted. |
+| `unverified` | No cited worked example was checked when the function was promoted.         |
+
+Only a Bike4Mind admin gives the `platform` label, and only to a live, `verified` function. The label is never read from a function's name or description. Changing the function's code, data files, or sources returns it to draft and removes the label, and so does a promotion or examples change that leaves it `unverified`. Promoting it again, even as `verified`, does not bring the label back; only an admin can.
+
+## Find your functions in the app
+
+The **Functions** page in the app's navigation lists the functions you own under **Mine** and the functions others shared with you under **Shared with me**. Search matches a function's name and description. Each row shows its state (draft, live, or off) and its trust label, and a shared row also shows its owner and whether you reviewed it.
+
+Open one of your own functions to see its inputs and outputs, its label, the data it reads, and its calls in the last 30 days, with who called, the promotion that ran, and how long it took. A call made with one of your own API keys names the key. A call by someone you shared the function with reads "A recipient", with no name or key. **Call function** on an artifact's Function tab runs in your browser and does not appear in the call log.
+
+Open a shared function to review its inputs and outputs and turn on **Allow calls**. You never see its code or its data files. A function leaves **Shared with me** when its owner removes your share or turns it off. While its owner edits it, a shared function stays listed and callable at its last promoted version.
+
+A data file is pinned by choosing it from your files. Only a file you uploaded can be pinned. A file deleted after you chose it is refused as not found.
+
 ## Read a function
 
 ```bash
@@ -93,6 +115,15 @@ curl https://app.bike4mind.com/api/v1/functions/calls/<call-id> \
 
 `status` is `queued`, then `running`, then `finished`. A finished call carries `outcome`. When `outcome` is `ok`, the answer has `output` and `stamp`, as a waiting call does. Any other outcome carries `error`, and `stamp` when the function ran. A call is readable only by the user who made it, for 24 hours. After that, or for any other id, the poll answers `404`. A call that stopped before it finished, or that was still queued 40 minutes after it was sent, reads `finished` with `outcome` set to `error` and an `error` asking you to send it again.
 
+To stop a call you no longer need, cancel it with the same key while it is `queued` or `running`:
+
+```bash
+curl -X POST https://app.bike4mind.com/api/v1/functions/calls/<call-id>/cancel \
+  -H 'Authorization: Bearer <your-api-key>'
+```
+
+The answer is the call as a poll reads it: `finished`, with `outcome` set to `cancelled`. A queued call never runs. A running call is left to end, but what it returns is discarded, so a later poll still reads `cancelled`. A call that already finished is returned unchanged. Only the user who made the call can cancel it; any other id answers `404`. Cancel is available only here: [MCP](./functions-mcp.md) tool calls and calls from chat wait for their result, so there is nothing to cancel.
+
 ## Limits
 
 - The input may be up to 5 MB, and so may the output. An output too large to return answers `502` with `outcome` set to `output_too_large`.
@@ -105,7 +136,7 @@ curl https://app.bike4mind.com/api/v1/functions/calls/<call-id> \
 Errors use the shared error envelope described in [Errors](./errors.md).
 
 - `403`: the key does not hold `functions:invoke`, or callable functions are turned off for your account.
-- `404`: the function is not one of your live functions, or a polled call is not yours or has expired.
+- `404`: the function is not one of your live functions, or a polled or cancelled call is not yours or has expired.
 - `413`: the input is larger than 5 MB.
 - `422`: an input does not fit `input_schema`. The `error` names the first field, for example `Input span must be a number.`, and `problems` lists every field with its `path` and `message`.
 - `429`: you passed the rate limit, or you already have as many asynchronous calls queued or running as your organization's **Callable Function Pending Call Limit** allows (10 unless it sets another). In the second case `errorCode` is `concurrency_limit_exceeded` and `limit` is the cap; send the call again when one finishes.

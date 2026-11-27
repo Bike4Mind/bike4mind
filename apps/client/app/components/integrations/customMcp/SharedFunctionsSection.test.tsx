@@ -88,6 +88,13 @@ describe('SharedFunctionsSection', () => {
     expect(screen.queryByTestId('shared-function-review-card')).toBeNull();
   });
 
+  it('says what the platform label means', () => {
+    h.shared = [{ ...SHARED, trustLabel: 'platform' }];
+    renderSection();
+    fireEvent.click(screen.getByTestId('shared-function-open-btn'));
+    expect(screen.getByTestId('shared-function-label').textContent).toBe('Platform: curated and checked by Bike4Mind.');
+  });
+
   it('opens a review card with the schemas, label, owner, and data list', () => {
     renderSection();
     fireEvent.click(screen.getByTestId('shared-function-open-btn'));

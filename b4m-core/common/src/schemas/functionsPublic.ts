@@ -4,6 +4,7 @@ import { CALLABLE_FUNCTION_TRUST_LABELS } from '../types/entities/CallableFuncti
 import {
   CALLABLE_FUNCTION_CALL_OUTCOMES,
   CALLABLE_FUNCTION_CALL_SURFACES,
+  CALLABLE_FUNCTION_RESULT_OUTCOMES,
 } from '../types/entities/CallableFunctionCallTypes';
 import { ApiErrorSchema } from './chat';
 import { paginatedResponseSchema } from './pagination';
@@ -34,7 +35,10 @@ export const PublicFunctionSchema = z.object({
   trust_label: z
     .enum(CALLABLE_FUNCTION_TRUST_LABELS)
     .nullable()
-    .describe('`verified` when a cited worked example passed on the server at promotion; otherwise `unverified`.'),
+    .describe(
+      '`verified` when a cited worked example passed on the server at promotion; otherwise `unverified`. ' +
+        '`platform` is a `verified` function curated and checked by Bike4Mind.'
+    ),
   pin_version: z.number().int().describe('The artifact version the function runs.'),
   pin_seq: z.number().int().nullable().describe('The promotion that made this pin live: 1 for the first.'),
   updated_at: z.string(),
@@ -131,9 +135,12 @@ export const GetFunctionCallResponseSchema = z.object({
     .enum(['queued', 'running', 'finished'])
     .describe('`queued` and `running` carry nothing else; poll again. `finished` carries how the call ended.'),
   outcome: z
-    .enum(CALLABLE_FUNCTION_CALL_OUTCOMES)
+    .enum(CALLABLE_FUNCTION_RESULT_OUTCOMES)
     .optional()
-    .describe('How a finished call ended: `ok` carries `output`; any other outcome carries `error`.'),
+    .describe(
+      'How a finished call ended: `ok` carries `output`; any other outcome carries `error`. `cancelled` means ' +
+        'its caller cancelled it, and nothing it returned is kept.'
+    ),
   output: z.record(z.string(), z.unknown()).optional().describe('The outputs, checked against `output_schema`.'),
   stamp: FunctionStampSchema.optional(),
   error: z.string().optional(),

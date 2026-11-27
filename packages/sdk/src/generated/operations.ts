@@ -25,6 +25,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/files/bulk-delete',
   },
+  cancelFunctionCall: {
+    method: 'POST',
+    path: '/api/v1/functions/calls/{call_id}/cancel',
+  },
   cancelImageJob: {
     method: 'POST',
     path: '/api/v1/image-jobs/{id}/cancel',

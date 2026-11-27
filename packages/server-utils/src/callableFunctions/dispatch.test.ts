@@ -803,6 +803,16 @@ describe('the stamp', () => {
       calledAt: new Date('2026-11-23T12:00:00.000Z'),
     });
     expect(stamp).toMatchObject({ pin_version: 3, pin_seq: 2, trust_label: 'verified' });
+    const marked = { ...live, platform: { setBy: 'admin-1', setAt: new Date() } };
+    const platform = buildCallableFunctionStamp({
+      fn: marked as never,
+      inputHash: functionInputHash(ARGS),
+      run: ok(),
+      surface: 'test',
+      calledAt: new Date('2026-11-23T12:00:00.000Z'),
+    });
+    expect(platform.trust_label).toBe('platform');
+    expect(JSON.stringify(platform)).not.toContain('admin-1');
   });
 
   it('hashes the inputs the same whatever their key order', () => {
