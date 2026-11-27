@@ -477,6 +477,13 @@ export async function assignOAuthClientRole(params: {
     const client = toOAuthClientView(doc);
     const role = client.roles.find(existing => existing.key === params.role);
     if (!role) throw new BadRequestError(`This client does not offer a role "${params.role}"`);
+    // A real User write orders this grant with account deletion and its post-commit role purge.
+    const admission = await User.updateOne(
+      { _id: user.id, deletedAt: { $exists: false } },
+      { $inc: { __v: 1 } },
+      { session, timestamps: false, runValidators: true }
+    ).exec();
+    if (!admission.matchedCount) throw new NotFoundError('User not found');
     const { created } = await oauthClientRoleAssignmentRepository.assign(
       {
         userId: user.id,

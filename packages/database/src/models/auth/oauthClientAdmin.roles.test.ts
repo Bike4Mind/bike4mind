@@ -369,6 +369,77 @@ const nextParentWrite = () => {
 };
 
 describe('role reset transaction ordering', () => {
+  it('rejects a grant resumed after the user delete and assignment purge complete', async () => {
+    const client = await makeClient();
+    await addOAuthClientRole(client.id, { key: 'admin', label: 'Admin' });
+    const userId = await makeUser();
+    const entered = deferred();
+    const release = deferred();
+    const findAndUpdate = OAuthClientModel.findOneAndUpdate.bind(OAuthClientModel);
+    vi.spyOn(OAuthClientModel, 'findOneAndUpdate').mockImplementationOnce((...args) => {
+      const query = findAndUpdate(...args);
+      const execute = query.exec.bind(query);
+      query.exec = async () => {
+        entered.resolve();
+        await release.promise;
+        return execute();
+      };
+      return query;
+    });
+    const pending = assignOAuthClientRole({ userId, clientId: client.clientId, role: 'admin', assignedBy: 'a' });
+    try {
+      await entered.promise;
+      await User.deleteOne({ _id: userId });
+      await oauthClientRoleAssignmentRepository.deleteAllForUser(userId);
+    } finally {
+      release.resolve();
+    }
+    await expect(pending).rejects.toBeInstanceOf(NotFoundError);
+    expect(await OAuthClientRoleAssignmentModel.countDocuments({ userId })).toBe(0);
+    expect((await listOAuthClientRoles(client.id)).holders).toEqual([]);
+  });
+
+  it('orders an admitted grant before user deletion and its assignment purge', async () => {
+    const client = await makeClient();
+    await addOAuthClientRole(client.id, { key: 'admin', label: 'Admin' });
+    const userId = await makeUser();
+    const entered = deferred();
+    const release = deferred();
+    const assign = oauthClientRoleAssignmentRepository.assign.bind(oauthClientRoleAssignmentRepository);
+    vi.spyOn(oauthClientRoleAssignmentRepository, 'assign').mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return assign(...args);
+    });
+    const pending = assignOAuthClientRole({ userId, clientId: client.clientId, role: 'admin', assignedBy: 'a' });
+    let deletionAttempted = false;
+    const databaseClient = mongoose.connection.getClient();
+    const listener = (event: { commandName: string; command: Record<string, unknown> }) => {
+      if (event.commandName === 'delete' && event.command.delete === User.collection.name) {
+        deletionAttempted = true;
+      }
+    };
+    databaseClient.on('commandStarted', listener);
+    const eraseUser = async () => {
+      await User.deleteOne({ _id: userId });
+      await oauthClientRoleAssignmentRepository.deleteAllForUser(userId);
+    };
+    let deletion: Promise<void> | undefined;
+    try {
+      await entered.promise;
+      deletion = eraseUser();
+      await vi.waitFor(() => expect(deletionAttempted).toBe(true));
+    } finally {
+      release.resolve();
+      databaseClient.off('commandStarted', listener);
+      await pending;
+      await deletion;
+    }
+    expect(await User.exists({ _id: userId })).toBeNull();
+    expect(await OAuthClientRoleAssignmentModel.countDocuments({ userId })).toBe(0);
+    expect((await listOAuthClientRoles(client.id)).holders).toEqual([]);
+  });
+
   it('orders a validated assignment before removal and clears it before re-add', async () => {
     const client = await makeClient();
     await addOAuthClientRole(client.id, { key: 'admin', label: 'Old' });
@@ -486,6 +557,7 @@ describe('role reset transaction ordering', () => {
     const client = await makeClient();
     const added = await addOAuthClientRole(client.id, { key: 'admin', label: 'Admin' });
     const userId = await makeUser();
+    const originalUser = await User.collection.findOne({ _id: new mongoose.Types.ObjectId(userId) });
     const assign = oauthClientRoleAssignmentRepository.assign.bind(oauthClientRoleAssignmentRepository);
     const stub = vi.spyOn(oauthClientRoleAssignmentRepository, 'assign').mockImplementationOnce(async (...args) => {
       await assign(...args);
@@ -496,10 +568,14 @@ describe('role reset transaction ordering', () => {
     ).rejects.toThrow('assignment failed');
     stub.mockRestore();
     expect(await OAuthClientRoleAssignmentModel.countDocuments({ clientId: client.clientId })).toBe(0);
+    const rolledBackUser = await User.collection.findOne({ _id: new mongoose.Types.ObjectId(userId) });
+    expect(rolledBackUser?.__v).toBe(originalUser?.__v);
     const granted = await assignOAuthClientRole({ userId, clientId: client.clientId, role: 'admin', assignedBy: 'a' });
     const revoked = await unassignOAuthClientRole({ userId, clientId: client.clientId, role: 'admin' });
     expect(granted.client.updatedAt).toBe(added.client.updatedAt);
     expect(revoked.client.updatedAt).toBe(added.client.updatedAt);
+    const admittedUser = await User.collection.findOne({ _id: new mongoose.Types.ObjectId(userId) });
+    expect(admittedUser?.updatedAt).toEqual(originalUser?.updatedAt);
     const stored = await OAuthClientModel.findById(client.id).lean();
     expect(stored).not.toHaveProperty('roleMutationVersion');
     expect(granted.client).not.toHaveProperty('roleMutationVersion');
