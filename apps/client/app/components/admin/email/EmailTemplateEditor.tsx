@@ -333,10 +333,13 @@ export default function EmailTemplateEditor({ templateId, existingSlugs, onBack,
     <Box sx={{ height: 'calc(100vh - 200px)', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       {/* Header */}
       <Box
+        data-testid="email-template-editor-header"
         sx={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 1,
           p: 2,
           borderBottom: '1px solid',
           borderColor: 'divider',
@@ -380,16 +383,32 @@ export default function EmailTemplateEditor({ templateId, existingSlugs, onBack,
         </Stack>
       </Box>
 
-      {/* Main Content - Two Column Layout with Resizable Divider */}
-      <Box ref={containerRef} sx={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
+      {/* Main Content - two columns with a resizable divider from md up, stacked and scrolling as one below */}
+      <Box
+        ref={containerRef}
+        data-testid="email-template-editor-columns"
+        sx={{
+          display: 'flex',
+          flexDirection: { xs: 'column', md: 'row' },
+          flex: 1,
+          overflowX: 'hidden',
+          overflowY: { xs: 'auto', md: 'hidden' },
+          minHeight: 0,
+        }}
+      >
         {/* Left Column - Form */}
         <Box
+          data-testid="email-template-editor-form-column"
           sx={{
-            width: `${100 - previewWidth}%`,
-            overflow: 'auto',
-            p: 3,
+            width: { xs: '100%', md: `${100 - previewWidth}%` },
+            flexShrink: { xs: 0, md: 1 },
+            minWidth: 0,
+            overflow: { xs: 'visible', md: 'auto' },
+            p: { xs: 2, md: 3 },
             minHeight: 0,
-            height: '100%',
+            height: { xs: 'auto', md: '100%' },
+            borderBottom: { xs: '1px solid', md: 'none' },
+            borderColor: 'divider',
           }}
         >
           <Stack spacing={3}>
@@ -586,11 +605,12 @@ export default function EmailTemplateEditor({ templateId, existingSlugs, onBack,
 
         {/* Resizable Divider */}
         <Box
+          data-testid="email-template-editor-divider"
           onMouseDown={handleMouseDown}
           sx={{
             width: 8,
             cursor: 'col-resize',
-            display: 'flex',
+            display: { xs: 'none', md: 'flex' },
             alignItems: 'center',
             justifyContent: 'center',
             bgcolor: 'background.level2',
@@ -606,20 +626,26 @@ export default function EmailTemplateEditor({ templateId, existingSlugs, onBack,
 
         {/* Right Column - Preview */}
         <Box
+          data-testid="email-template-editor-preview-column"
           sx={{
-            width: `${previewWidth}%`,
+            width: { xs: '100%', md: `${previewWidth}%` },
+            flexShrink: { xs: 0, md: 1 },
+            minWidth: 0,
             display: 'flex',
             flexDirection: 'column',
             bgcolor: 'background.level1',
-            minHeight: 0,
-            height: '100%',
+            minHeight: { xs: 480, md: 0 },
+            height: { xs: 'auto', md: '100%' },
           }}
         >
           <Box
+            data-testid="email-template-editor-preview-header"
             sx={{
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: 1,
               p: 2,
               borderBottom: '1px solid',
               borderColor: 'divider',
