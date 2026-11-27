@@ -470,6 +470,8 @@ export interface BuildToolsArgs {
   sessionDisabledTools?: readonly string[];
   /** See `BuildSharedToolsOptions.orgToolPolicy`. */
   orgToolPolicy?: ReadOrgModelPolicy;
+  /** See `BuildSharedToolsOptions.contributedToolNames`. */
+  contributedToolNames?: ReadonlySet<string>;
   mcpToolsByServer?: Record<string, Array<{ name: string } & ICompletionOptionTools>>;
   quest: IChatHistoryItemDocument;
   saveQuest: (quest: IChatHistoryItemDocument) => Promise<IChatHistoryItemDocument | null>;
@@ -1007,6 +1009,7 @@ export class ToolBuilder {
     offerOnlyNamedTools,
     sessionDisabledTools,
     orgToolPolicy,
+    contributedToolNames,
     mcpToolsByServer = {},
     quest,
     saveQuest,
@@ -1253,6 +1256,7 @@ export class ToolBuilder {
         offerOnlyNamedTools,
         sessionDisabledTools,
         orgToolPolicy,
+        contributedToolNames,
         mcpToolsByServer,
         config,
         agentOnlyMcpServers,

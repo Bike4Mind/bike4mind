@@ -12,6 +12,8 @@
  * Each list is intentionally short (3-4 entries) so a rarely-seen phrase does
  * not land at a key demo moment and feel random.
  */
+import type { PremiumToolRunningCopy } from '@client/app/premiumContract';
+import { premiumToolRunningCopy } from '@client/app/premium-generated/premiumToolRunningCopy.generated';
 
 // Tool-specific labels for the inline "Running tool - waiting for result"
 // placeholder. Fallback covers any tool not listed (including ones added
@@ -51,19 +53,16 @@ const TOOL_RUNNING_COPY: Record<string, string> = {
   chess_engine: 'Calculating the next move…',
   recharts: 'Drawing the chart…',
   thinking: 'Working through it…',
-  // OptiHashi autonomous-optimizer loop: name the current rung of the walk so a
-  // multi-minute decompose -> formulate -> solve -> advance run reads as purposeful
-  // progress rather than a generic spinner.
-  optihashi_decompose: 'Breaking the scenario into sub-problems…',
-  optihashi_formulate: 'Formulating the optimization model…',
-  optihashi_edit_problem: 'Refining the model…',
-  optihashi_schedule: 'Racing solvers…',
-  optihashi_solve: 'Racing solvers…',
 };
 
-export function copyForRunningTool(toolName: string | undefined): string {
+export function copyForRunningTool(
+  toolName: string | undefined,
+  overlayCopy: PremiumToolRunningCopy = premiumToolRunningCopy
+): string {
   if (!toolName) return 'Working on it…';
-  return TOOL_RUNNING_COPY[toolName] ?? `Running ${humanize(toolName)}…`;
+  if (Object.hasOwn(TOOL_RUNNING_COPY, toolName)) return TOOL_RUNNING_COPY[toolName];
+  if (Object.hasOwn(overlayCopy, toolName)) return overlayCopy[toolName];
+  return `Running ${humanize(toolName)}…`;
 }
 
 function humanize(snake: string): string {

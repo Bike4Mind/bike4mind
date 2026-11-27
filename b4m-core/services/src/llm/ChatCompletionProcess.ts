@@ -75,6 +75,7 @@ import {
   filterRunnableModels,
   type LLMModelConfig,
   applyWorkspaceSessionSettings,
+  withoutNonOwnerSessionAuthoring,
   respondFromWorkspace,
   respondFromCoreTutorial,
   createReasoningWithholder,
@@ -158,7 +159,8 @@ import {
   reasonsWithinOutputBudget,
   getAvailableModels,
   getLlmByModel,
-  withFederatedSharedKeys,
+  parseProviderCredentialMode,
+  withProviderCredentialPlan,
   type ICompletionOptions,
   PipelineTimer,
   resolveDeprecatedModelId,
@@ -252,7 +254,7 @@ import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
 import { z } from 'zod';
 import { admitsPrivateFileInputs } from './questStartBody';
-import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
+import { getEffectiveLLMApiKeys, sharedAdminKeyProviders, userKeyProviders } from '../apiKeyService';
 import { findKeyModerationExceptionCategories, moderationExceptionCovers } from './moderationException';
 import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
 import { resolveToolAvailability } from './toolAvailability';
@@ -2218,6 +2220,7 @@ export class ChatCompletionProcess {
     prefetchedSession,
     prefetchedOrganization,
     externalTools,
+    contributedToolNames,
     videoToolConfigResolver,
     musicToolConfigResolver,
     imageJobsResolver,
@@ -2235,6 +2238,8 @@ export class ChatCompletionProcess {
     prefetchedOrganization?: IOrganizationDocument | null;
     /** External tool definitions (e.g., Slack tools) that can't be serialized through EventBridge */
     externalTools?: Record<string, ToolDefinition>;
+    /** Premium tool map keys: the only externalTools names the org tool policy governs (externalTools also carries admin/slack/lattice tools). */
+    contributedToolNames: ReadonlySet<string>;
     /** Resolves the video tool's capability; only invoked when video_generation is enabled. */
     videoToolConfigResolver?: () => Promise<VideoToolConfig | null>;
     /** Resolves the music tool's capability; only invoked when music_generation is enabled. */
@@ -2546,7 +2551,7 @@ export class ChatCompletionProcess {
         return;
       }
       const workspaceSession = await applyWorkspaceSessionSettings(
-        loadedSession,
+        withoutNonOwnerSessionAuthoring(loadedSession, this.user.id),
         { user: this.user, logger },
         this.workspaceSessionSettings
       );
@@ -2923,9 +2928,18 @@ export class ChatCompletionProcess {
       // The model id handed to features and tools that call the backend themselves: the
       // post-resolution id, never a retired pin the provider would reject.
       const runModel = shadowModelInfo ? shadowModelInfo.id : resolvedModelId;
-      // Reuse trusted federation provenance across primary and fallback chat backends.
-      // Direct-SDK consumers below keep the original static key table.
-      const chatApiKeyTable = withFederatedSharedKeys(apiKeyTable, sharedAdminKeyProviders(apiKeyTable));
+      // Reuse trusted key provenance (platform vs user key) and the per-provider credential mode
+      // across primary and fallback chat backends. Direct-SDK consumers below keep the original
+      // static key table.
+      const chatApiKeyTable = withProviderCredentialPlan(apiKeyTable, {
+        platformKeys: sharedAdminKeyProviders(apiKeyTable),
+        userKeys: userKeyProviders(apiKeyTable),
+        modes: {
+          openai: parseProviderCredentialMode(getSettingsValue('openaiCredentialMode', defaultAdminSettings)),
+          anthropic: parseProviderCredentialMode(getSettingsValue('anthropicCredentialMode', defaultAdminSettings)),
+        },
+        logger,
+      });
       const llm = getLlmByModel(chatApiKeyTable, {
         modelInfo,
         logger,
@@ -3942,6 +3956,7 @@ export class ChatCompletionProcess {
         // parentTools.
         sessionDisabledTools: deniedTools,
         orgToolPolicy: readOrgModelPolicy(organization?.modelPolicy),
+        contributedToolNames,
         mcpToolsByServer,
         quest,
         saveQuest,
@@ -3997,7 +4012,11 @@ export class ChatCompletionProcess {
         allTools = allTools.filter(t => !denied.has(t.toolSchema.name));
       }
       if (allTools) {
-        const orgFiltered = applyOrgToolPolicy(allTools, readOrgModelPolicy(organization?.modelPolicy));
+        const orgFiltered = applyOrgToolPolicy(
+          allTools,
+          readOrgModelPolicy(organization?.modelPolicy),
+          contributedToolNames
+        );
         if (orgFiltered.stripped.length > 0) {
           logger.info('[OrgToolPolicy] stripped tools the organization does not allow', {
             tools: orgFiltered.stripped,

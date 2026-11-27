@@ -1,5 +1,14 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync, chmodSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  readFileSync,
+  utimesSync,
+  chmodSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
@@ -10,6 +19,7 @@ import {
   hostNetworkGitArgs,
   hostWorkTreeGitArgs,
   RepositoryFilterError,
+  UnpinnableGitConfigError,
   type ScopedConfigReader,
 } from './hostGitArgs';
 
@@ -71,6 +81,167 @@ describe('hostGitArgs', () => {
     }
   });
 
+  it.skipIf(process.platform === 'win32')(
+    'runs no filter or diff program a checked-out submodule config sets, nested ones included',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'host-git-'));
+      try {
+        const marker = join(dir, 'marker');
+        const script = join(dir, 'filter.sh');
+        writeFileSync(script, `#!/bin/sh\ntouch '${marker}'\ncat\n`);
+        chmodSync(script, 0o755);
+        const git = (cwd: string, args: string[]) =>
+          execFileSync(
+            'git',
+            ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'protocol.file.allow=always', ...args],
+            { cwd, stdio: 'ignore' }
+          );
+        const repo = (name: string) => {
+          const path = join(dir, name);
+          mkdirSync(path);
+          git(path, ['init', '--quiet']);
+          writeFileSync(join(path, 'file.txt'), 'one\n');
+          git(path, ['add', 'file.txt']);
+          git(path, ['commit', '--quiet', '-m', 'first']);
+          return path;
+        };
+        const inner = repo('inner');
+        const middle = repo('middle');
+        git(middle, ['submodule', 'add', '--quiet', inner, 'inner']);
+        git(middle, ['commit', '--quiet', '-m', 'inner']);
+        const top = repo('top');
+        git(top, ['submodule', 'add', '--quiet', middle, 'mods/middle']);
+        git(top, ['submodule', 'update', '--init', '--recursive', '--quiet']);
+        mkdirSync(join(top, 'src'));
+        const checkouts = [join(top, 'mods', 'middle'), join(top, 'mods', 'middle', 'inner')];
+        for (const checkout of checkouts) {
+          git(checkout, ['config', 'filter.evil.clean', script]);
+          git(checkout, ['config', 'diff.evil.textconv', script]);
+          writeFileSync(join(checkout, '.gitattributes'), '* filter=evil diff=evil\n');
+          writeFileSync(join(checkout, 'file.txt'), 'two\n');
+        }
+        const run = (cwd: string, args: string[]) => execFileSync('git', args, { cwd, stdio: 'ignore' });
+
+        for (const cwd of [top, join(top, 'src')]) {
+          run(cwd, await hostWorkTreeGitArgs(['status', '--porcelain'], cwd));
+          run(cwd, await hostWorkTreeGitArgs(['diff', '--numstat', 'HEAD', '--'], cwd));
+          run(cwd, await hostWorkTreeGitArgs(['diff', '--submodule=diff', 'HEAD', '--'], cwd));
+        }
+        expect(existsSync(marker)).toBe(false);
+        // The same status without the submodule pins does run the program.
+        run(top, hostGitArgs(['status', '--porcelain'], top));
+        expect(existsSync(marker)).toBe(true);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  );
+
+  async function withFilteredSubmodule(
+    run: (fixture: {
+      top: string;
+      child: string;
+      globalConfig: string;
+      git: (cwd: string, args: string[]) => string;
+    }) => Promise<void>
+  ) {
+    const directory = mkdtempSync(join(tmpdir(), 'host-git-recursion-'));
+    const globalConfig = join(directory, 'global.config');
+    writeFileSync(globalConfig, '');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', globalConfig);
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
+    const git = (cwd: string, args: string[]) =>
+      execFileSync(
+        'git',
+        [
+          '-c',
+          'user.name=t',
+          '-c',
+          'user.email=t@example.com',
+          '-c',
+          'protocol.file.allow=always',
+          '-c',
+          'core.hooksPath=/dev/null',
+          ...args,
+        ],
+        { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
+      ).trim();
+    try {
+      const source = join(directory, 'source');
+      const top = join(directory, 'top');
+      mkdirSync(source);
+      mkdirSync(top);
+      git(source, ['init', '--quiet', '--initial-branch=main']);
+      git(source, ['config', 'filter.crypt.clean', 'sed s/^/ENC:/']);
+      git(source, ['config', 'filter.crypt.smudge', 'sed s/^ENC://']);
+      writeFileSync(join(source, '.gitattributes'), 'secret.txt filter=crypt\n');
+      writeFileSync(join(source, 'secret.txt'), 'v1\n');
+      git(source, ['add', '.']);
+      git(source, ['commit', '--quiet', '-m', 'one']);
+      const first = git(source, ['rev-parse', 'HEAD']);
+      writeFileSync(join(source, 'secret.txt'), 'v2\n');
+      git(source, ['add', '.']);
+      git(source, ['commit', '--quiet', '-m', 'two']);
+      const second = git(source, ['rev-parse', 'HEAD']);
+      git(top, ['init', '--quiet', '--initial-branch=main']);
+      git(top, ['submodule', 'add', '--quiet', source, 's']);
+      const child = join(top, 's');
+      git(child, ['config', 'filter.crypt.clean', 'sed s/^/ENC:/']);
+      git(child, ['config', 'filter.crypt.smudge', 'sed s/^ENC://']);
+      git(child, ['reset', '--hard', first]);
+      git(top, ['add', '.']);
+      git(top, ['commit', '--quiet', '-m', 'first child']);
+      git(top, ['switch', '--quiet', '-c', 'other']);
+      git(child, ['reset', '--hard', second]);
+      git(top, ['add', 's']);
+      git(top, ['commit', '--quiet', '-m', 'second child']);
+      git(top, ['switch', '--quiet', '--no-recurse-submodules', 'main']);
+      git(child, ['reset', '--hard', first]);
+      // A non-racy index lets Git trust the clean snapshot before the app pins its filter.
+      utimesSync(join(child, 'secret.txt'), new Date(0), new Date(0));
+      git(child, ['update-index', '--refresh']);
+      await run({ top, child, globalConfig, git });
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+
+  it.skipIf(process.platform === 'win32')(
+    'refuses a recursive switch before it can write a submodule stored bytes',
+    async () => {
+      await withFilteredSubmodule(async ({ top, child, globalConfig, git }) => {
+        git(top, ['config', '--file', globalConfig, 'submodule.recurse', 'true']);
+        let refused = false;
+        try {
+          git(top, await hostWorkTreeGitArgs(['switch', '--quiet', '--no-guess', 'other'], top));
+        } catch (error) {
+          if (!(error instanceof RepositoryFilterError)) throw error;
+          refused = true;
+        }
+        expect({ refused, content: readFileSync(join(child, 'secret.txt'), 'utf8') }).toEqual({
+          refused: true,
+          content: 'v1\n',
+        });
+      });
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'refuses incompatible trusted driver values from a child conditional include',
+    async () => {
+      await withFilteredSubmodule(async ({ top, child, globalConfig, git }) => {
+        const trustedConfig = join(top, '..', 'child-trusted.config');
+        git(top, ['config', '--file', trustedConfig, 'filter.crypt.clean', 'sed s/^/ENC:/']);
+        git(top, ['config', '--file', trustedConfig, 'filter.crypt.smudge', 'sed s/^ENC://']);
+        git(top, ['config', '--file', globalConfig, 'includeIf.gitdir:**/modules/s.path', trustedConfig]);
+        // The user configured the trusted value only for this child, so one shared -c value cannot preserve both contexts.
+        expect(git(child, ['config', '--show-scope', '--get-all', 'filter.crypt.smudge'])).toContain('global');
+        await expect(hostWorkTreeGitArgs(['status', '--porcelain'], top)).rejects.toThrow(UnpinnableGitConfigError);
+      });
+    }
+  );
+
   describe('hostWorkTreeGitArgs', () => {
     const read = (entries: Array<[string, string, string]>) => async () =>
       entries.map(([scope, key, value]) => ({ scope, key, value }));
@@ -125,6 +296,72 @@ describe('hostGitArgs', () => {
           ])
         )
       ).resolves.toContain('filter.lfs.smudge=git-lfs smudge -- %f');
+    });
+
+    it('pins a filter only a submodule sets for an explicitly non-recursive write', async () => {
+      const args = await hostWorkTreeGitArgs(['switch', '--no-recurse-submodules', 'main'], '/repo', async () => [
+        { scope: 'local', key: 'filter.crypt.smudge', value: 'git-crypt smudge', submodule: true },
+      ]);
+      expect(args).toContain('filter.crypt.smudge=');
+    });
+
+    it.each(['switch', 'checkout', 'reset', 'restore', 'read-tree'])(
+      'guards recursive %s writes and pins an admitted non-recursive mode',
+      async command => {
+        const readChild = async () => [
+          { scope: 'local', key: 'filter.crypt.smudge', value: 'untrusted', submodule: true },
+        ];
+        await expect(
+          hostWorkTreeGitArgs([command, 'main'], '/repo', readChild, process.platform, async () => true)
+        ).rejects.toThrow(RepositoryFilterError);
+        await expect(
+          hostWorkTreeGitArgs([command, 'main'], '/repo', readChild, process.platform, async () => null)
+        ).rejects.toThrow(UnpinnableGitConfigError);
+        await expect(
+          hostWorkTreeGitArgs([command, 'main'], '/repo', readChild, process.platform, async () => false)
+        ).resolves.toContain('submodule.recurse=false');
+      }
+    );
+
+    it('honors explicit recursion options in order and does not parse options after the path separator', async () => {
+      const readChild = async () => [
+        { scope: 'local', key: 'filter.crypt.smudge', value: 'untrusted', submodule: true },
+      ];
+      const readRecursion = vi.fn(async () => true);
+      for (const args of [
+        ['switch', '--no-recurse-submodules', 'main'],
+        ['switch', '--recurse-submodules=false', 'main'],
+        ['switch', '--recurse-submodules', '--no-recurse-submodules', 'main'],
+      ])
+        await expect(hostWorkTreeGitArgs(args, '/repo', readChild, process.platform, readRecursion)).resolves.toContain(
+          'submodule.recurse=false'
+        );
+      expect(readRecursion).not.toHaveBeenCalled();
+      await expect(
+        hostWorkTreeGitArgs(
+          ['switch', '--no-recurse-submodules', '--recurse-submodules', 'main'],
+          '/repo',
+          readChild,
+          process.platform,
+          async () => false
+        )
+      ).rejects.toThrow(RepositoryFilterError);
+      await expect(
+        hostWorkTreeGitArgs(
+          ['restore', '--', '--no-recurse-submodules'],
+          '/repo',
+          readChild,
+          process.platform,
+          readRecursion
+        )
+      ).rejects.toThrow(RepositoryFilterError);
+      for (const command of ['status', 'diff', 'stash', 'merge']) {
+        const unused = vi.fn(async () => true);
+        await expect(
+          hostWorkTreeGitArgs([command], '/repo', readChild, process.platform, unused)
+        ).resolves.toBeDefined();
+        expect(unused).not.toHaveBeenCalled();
+      }
     });
 
     it('refuses when the settings cannot be read or a name cannot be pinned', async () => {

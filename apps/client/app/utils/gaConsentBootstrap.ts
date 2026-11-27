@@ -54,6 +54,10 @@ export function getGaMeasurementIds(): string[] {
  * One `config` per property (getGaMeasurementIds), all after the consent default and all with the
  * same cookie domain, so every property reads the one `_ga` client id. Events sent without a
  * `send_to` reach every configured property, so sign_up and purchase go to each.
+ *
+ * `page_location` is set to the URL without its fragment before `config`, and re-set on every
+ * history change (which is what GA's own SPA page_views follow), because some pages carry a
+ * token in the fragment (sign-in callbacks, share links) that must never reach a GA hit.
  */
 export function gaBootstrapScript(measurementIds: readonly string[], cookieDomain?: string): string {
   const config = cookieDomain ? `, ${JSON.stringify({ cookie_domain: cookieDomain })}` : '';
@@ -83,6 +87,23 @@ window.__b4mGaConsentDefault = (function () {
 })();
 gtag('consent', 'default', { analytics_storage: window.__b4mGaConsentDefault });
 gtag('js', new Date());
+(function () {
+  function setPageLocation() {
+    var l = window.location;
+    gtag('set', { page_location: l.origin + l.pathname + l.search });
+  }
+  setPageLocation();
+  ['pushState', 'replaceState'].forEach(function (method) {
+    var original = history[method];
+    history[method] = function () {
+      var result = original.apply(this, arguments);
+      setPageLocation();
+      return result;
+    };
+  });
+  window.addEventListener('popstate', setPageLocation);
+  window.addEventListener('hashchange', setPageLocation);
+})();
 ${configs}
 `;
 }

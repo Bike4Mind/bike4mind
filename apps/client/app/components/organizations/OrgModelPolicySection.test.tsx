@@ -11,7 +11,8 @@ import { getThemeConfig } from '@client/app/utils/themes';
 
 const { mocks } = vi.hoisted(() => ({
   mocks: {
-    view: undefined as { policy: StoredOrgModelPolicy; invalidStored: boolean } | undefined,
+    view: undefined as
+      { policy: StoredOrgModelPolicy; invalidStored: boolean; contributedTools?: string[] } | undefined,
     save: vi.fn(),
     reset: vi.fn(),
     choicesOrgId: undefined as string | undefined,
@@ -84,7 +85,7 @@ describe('OrgModelPolicySection', () => {
     });
   });
 
-  it('allows saving no built-in tools at all', () => {
+  it('allows saving no tools at all', () => {
     renderSection();
     toggleSwitch('tools');
     fireEvent.click(saveButton());
@@ -139,6 +140,50 @@ describe('OrgModelPolicySection', () => {
     expect(screen.getByText(/A retired model ID also allows its configured successor/)).toBeTruthy();
   });
 
+  it('lists contributed tools the server reports as their own rows', () => {
+    mocks.view = {
+      policy: { ...UNRESTRICTED, allowedTools: ['web_search', 'contributed_tool'] },
+      invalidStored: false,
+      contributedTools: ['contributed_tool'],
+    };
+    renderSection();
+    expect(screen.getByTestId('org-model-policy-tool-contributed_tool')).toBeTruthy();
+    expect(screen.queryByLabelText('contributed_tool (unrecognized; remove to save)')).toBeNull();
+  });
+
+  it('preserves an explicitly selected companion when saving an unrelated policy edit', () => {
+    mocks.view = {
+      policy: { ...UNRESTRICTED, allowedTools: ['retrieve_knowledge_content'] },
+      invalidStored: false,
+    };
+    renderSection();
+    toggleSwitch('providers');
+    tick(`org-model-policy-provider-${ModelBackend.OpenAI}`);
+
+    expect(saveButton().disabled).toBe(false);
+    expect(screen.queryByTestId('org-model-policy-tool-retrieve_knowledge_content')).toBeNull();
+    fireEvent.click(saveButton());
+    expect(mocks.save).toHaveBeenCalledWith({
+      allowedProviders: [ModelBackend.OpenAI],
+      allowedModels: null,
+      allowedTools: ['retrieve_knowledge_content'],
+    });
+  });
+
+  it('renders a tool once when it is in both the built-in and contributed lists', () => {
+    mocks.view = {
+      policy: UNRESTRICTED,
+      invalidStored: false,
+      contributedTools: ['web_search'],
+    };
+    renderSection();
+    toggleSwitch('tools');
+    expect(screen.getAllByTestId('org-model-policy-tool-web_search')).toHaveLength(1);
+    tick('org-model-policy-tool-web_search');
+    fireEvent.click(saveButton());
+    expect(mocks.save).toHaveBeenCalledWith({ ...UNRESTRICTED, allowedTools: ['web_search'] });
+  });
+
   it('shows obsolete selections and requires their explicit removal before a strict save', () => {
     mocks.view = {
       policy: {
@@ -161,5 +206,17 @@ describe('OrgModelPolicySection', () => {
       allowedModels: null,
       allowedTools: ['web_search'],
     });
+  });
+
+  it('does not block save on unrecognized tools once the tool restriction is switched off', () => {
+    mocks.view = {
+      policy: { ...UNRESTRICTED, allowedTools: ['web_search', 'removed_tool'] },
+      invalidStored: false,
+    };
+    renderSection();
+    toggleSwitch('tools');
+    expect(saveButton().disabled).toBe(false);
+    fireEvent.click(saveButton());
+    expect(mocks.save).toHaveBeenCalledWith({ ...UNRESTRICTED, allowedTools: null });
   });
 });

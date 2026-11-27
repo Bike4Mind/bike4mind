@@ -45,11 +45,13 @@ describe('telemetry hash lookup', () => {
       vi.restoreAllMocks();
     });
 
-    it('without a dedicated secret, salts the date key with the raw encryption key', () => {
+    it('without a dedicated secret, covers the derived and the raw encryption key for every day', () => {
       const salts = deriveTelemetrySalts();
-      expect(salts).toHaveLength(91);
-      for (const { salt, dateKey } of salts) {
-        expect(salt).toBe(dailySalt('test-telemetry-hmac-secret', dateKey));
+      const keys = [derive('test-telemetry-hmac-secret'), 'test-telemetry-hmac-secret'];
+      expect(salts).toHaveLength(91 * keys.length);
+      for (const dateKey of new Set(salts.map(s => s.dateKey))) {
+        const forDay = salts.filter(s => s.dateKey === dateKey).map(s => s.salt);
+        expect(forDay).toEqual(keys.map(key => dailySalt(key, dateKey)));
       }
     });
 
@@ -126,8 +128,12 @@ describe('telemetry hash lookup', () => {
 
     it('keeps salting with the shipped placeholder encryption key, as the writer does', () => {
       secrets.values = { SECRET_ENCRYPTION_KEY: 'my-secret-placeholder-value' };
-      const [{ salt, dateKey }] = deriveTelemetrySalts();
-      expect(salt).toBe(dailySalt('my-secret-placeholder-value', dateKey));
+      const salts = deriveTelemetrySalts();
+      const { dateKey } = salts[0];
+      const forDay = salts.filter(s => s.dateKey === dateKey).map(s => s.salt);
+      expect(forDay).toEqual(
+        [derive('my-secret-placeholder-value'), 'my-secret-placeholder-value'].map(key => dailySalt(key, dateKey))
+      );
     });
   });
 });

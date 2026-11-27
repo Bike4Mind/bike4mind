@@ -34,6 +34,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
     return chain;
   },
 }));
+vi.mock('@bike4mind/server-utils/premium-generated/premiumLlmTools.generated', () => ({
+  premiumLlmTools: { contributed_tool: {} },
+}));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: <T>(handler: T) => handler }));
 import '../model-policy';
 
@@ -156,7 +159,11 @@ describe('model policy HTTP transaction boundaries', () => {
       { _id: org._id },
       { $set: { modelPolicy: { allowedProviders: 'openai' } } }
     );
-    expect((await request('get', org.id))._getJSONData()).toEqual({ policy: unrestricted, invalidStored: true });
+    expect((await request('get', org.id))._getJSONData()).toEqual({
+      policy: unrestricted,
+      invalidStored: true,
+      contributedTools: ['contributed_tool'],
+    });
     await request('put', org.id, {});
     await request('put', org.id, {});
     expect((await Organization.findById(org.id).lean())?.modelPolicy).toBeUndefined();
@@ -172,6 +179,7 @@ describe('model policy HTTP transaction boundaries', () => {
     expect((await request('get', org.id))._getJSONData()).toEqual({
       policy: { ...unrestricted, ...stored },
       invalidStored: false,
+      contributedTools: ['contributed_tool'],
     });
     await expect(request('put', org.id, stored)).rejects.toMatchObject({ statusCode: 400 });
     expect((await Organization.findById(org.id).lean())?.modelPolicy).toEqual(stored);

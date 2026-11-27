@@ -132,6 +132,7 @@ vi.mock('@bike4mind/database', async () => {
   vi.spyOn(actual.agentExecutionRepository, 'markComplete').mockResolvedValue(undefined as never);
   vi.spyOn(actual.agentExecutionRepository, 'incrementCreditsUsed').mockResolvedValue(undefined as never);
   vi.spyOn(actual.agentExecutionRepository, 'markFailed').mockResolvedValue(undefined as never);
+  vi.spyOn(actual.agentExecutionRepository, 'markFailedIfActive').mockResolvedValue(true as never);
   vi.spyOn(actual.agentExecutionRepository, 'markAborted').mockResolvedValue(undefined as never);
   vi.spyOn(actual.agentExecutionRepository, 'checkAbortFlag').mockResolvedValue(false as never);
   vi.spyOn(actual.usageEventRepository, 'record').mockResolvedValue(undefined as never);
@@ -305,7 +306,7 @@ describe('processSubagentDispatch tool deps', () => {
 
     expect(resolveWorkspaceSettings).toHaveBeenCalledTimes(1);
     expect(buildSharedToolsMock).not.toHaveBeenCalled();
-    expect(agentExecutionRepository.markFailed).toHaveBeenCalledExactlyOnceWith(
+    expect(agentExecutionRepository.markFailedIfActive).toHaveBeenCalledExactlyOnceWith(
       'child-1',
       expect.objectContaining({
         message: 'Workspace session settings resolver for "settings-workspace" failed',

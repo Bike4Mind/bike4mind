@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
+import { LOCAL_HOST_ID } from '@shared/hostBridge';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
@@ -101,6 +102,7 @@ const PULL_REQUEST: PrBarState = {
 };
 
 const binding: ProjectBindingController = {
+  hostId: LOCAL_HOST_ID,
   busy: false,
   error: null,
   dismissError: vi.fn(),

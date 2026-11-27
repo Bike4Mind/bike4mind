@@ -24,6 +24,30 @@ final class WidgetSnapshotRecorderTests: XCTestCase {
     XCTAssertEqual(reloader.reloads, [[WidgetKind.credits], [WidgetKind.credits]])
   }
 
+  func testRenamingARunningSessionRetitlesTheWidgetAndIgnoresOthers() async {
+    let (recorder, store, _) = makeRecorder()
+    await recorder.recordTurns(sessionID: "a", sessionTitle: "Alpha", turns: [turn("1", status: .running)])
+
+    await recorder.recordRename(sessionID: "a", title: "Trip notes")
+    await recorder.recordRename(sessionID: "idle", title: "Not running")
+
+    let running = store.load()?.runningAgents
+    XCTAssertEqual(running?.count, 1)
+    XCTAssertEqual(running?.top, .init(sessionID: "a", title: "Trip notes", status: "running"))
+  }
+
+  func testDeletingASessionDropsItFromRunningAgents() async {
+    let (recorder, store, reloader) = makeRecorder()
+    await recorder.recordTurns(sessionID: "a", sessionTitle: "Alpha", turns: [turn("1", status: .running)])
+    let reloadsBefore = reloader.reloads.count
+
+    await recorder.recordDeleted(sessionID: "a")
+    await recorder.recordDeleted(sessionID: "never-running")
+
+    XCTAssertEqual(store.load()?.runningAgents?.count ?? 0, 0)
+    XCTAssertEqual(reloader.reloads.count, reloadsBefore + 1)
+  }
+
   func testRunningTurnsAggregateAcrossSessionsAndLeadWithTheMostRecentlyTouched() async {
     let clock = Clock()
     let store = InMemoryWidgetSnapshotStore()

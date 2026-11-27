@@ -92,6 +92,7 @@ vi.mock('../apiKeyService', () => ({
   getEffectiveApiKey: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
   sharedAdminKeyProviders: vi.fn(),
+  userKeyProviders: vi.fn(() => new Set()),
   getOpenWeatherKey: vi.fn().mockResolvedValue(undefined),
   getWolframAlphaKey: vi.fn().mockResolvedValue(undefined),
   getFmpApiKey: vi.fn().mockResolvedValue(undefined),
@@ -125,6 +126,8 @@ type TurnInput = {
   requestMcpServers?: string[];
   externalTools?: Record<string, ToolDefinition>;
   message?: string;
+  orgAllowedTools?: string[];
+  contributedToolNames?: ReadonlySet<string>;
 };
 
 type TurnResult = {
@@ -293,7 +296,20 @@ describe('ChatCompletionProcess admin assistant gate', () => {
       projectId: undefined,
       organizationId: undefined,
     };
-    await service.process({ body, logger, externalTools: input.externalTools } as never);
+    await service.process({
+      body,
+      logger,
+      externalTools: input.externalTools,
+      contributedToolNames: input.contributedToolNames,
+      ...(input.orgAllowedTools
+        ? {
+            prefetchedOrganization: {
+              id: 'org1',
+              modelPolicy: { allowedProviders: null, allowedModels: null, allowedTools: input.orgAllowedTools },
+            },
+          }
+        : {}),
+    } as never);
 
     const [, messages, options] = complete.mock.calls.at(-1) ?? [];
     const offeredToolNames = ((options?.tools ?? []) as Array<{ toolSchema: { name: string } }>).map(
@@ -349,6 +365,18 @@ describe('ChatCompletionProcess admin assistant gate', () => {
 
     offersNoAdminTool(turn);
     carriesNoAdminPrompt(turn);
+  });
+
+  it('org tool policy leaves external admin tools alone when they are not in the contributed set', async () => {
+    const turn = await runTurn({
+      isAdmin: true,
+      surface: 'admin-assistant',
+      externalTools: allAdminExternalTools(),
+      orgAllowedTools: [],
+      contributedToolNames: new Set(['unrelated_contributed']),
+    });
+
+    expect(turn.offeredToolNames).toEqual(expect.arrayContaining([...ADMIN_NAMES]));
   });
 
   it('admin-assistant session, admin, admin definitions in externalTools: offers the admin tools and navigate_view, and the session prompt message starts with ADMIN_ASSISTANT_SYSTEM_PROMPT', async () => {
