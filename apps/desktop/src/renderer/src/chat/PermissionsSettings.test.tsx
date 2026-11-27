@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
@@ -152,6 +153,7 @@ describe('PermissionsSettings capability ledger', () => {
       .fn()
       .mockResolvedValue({ ...ledger, grants: [{ ...ledger.grants[0], revokedAt: '2026-01-02T00:00:00.000Z' }] });
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: { getState: async () => state },
       capabilities: { getState: async () => ledger, revoke },
@@ -188,6 +190,7 @@ describe('PermissionsSettings capability ledger', () => {
       source: 'approval' as const,
     };
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       capabilities: {
         getState: async () => ({
@@ -222,6 +225,7 @@ describe('PermissionsSettings capability ledger', () => {
       grantId: `audit-${String(249 - index).padStart(3, '0')}`,
     }));
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       capabilities: { getState: async () => ({ grants: [], audit }) },
     };
@@ -239,7 +243,10 @@ describe('PermissionsSettings collapsing', () => {
   let root: Root;
 
   beforeEach(async () => {
-    (window as unknown as { b4m: unknown }).b4m = { chat: { listRecentFolders: async () => [] } };
+    (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
+      chat: { listRecentFolders: async () => [] },
+    };
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -322,6 +329,7 @@ describe('PermissionsSettings mutation failures', () => {
     onState.mockReset();
     setRules = vi.fn();
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: { setRules, exportApprovalSummary },
     };
@@ -442,6 +450,7 @@ describe('usePermissions recovery', () => {
   it('retries a failed load instead of leaving settings loading forever', async () => {
     const getState = vi.fn().mockRejectedValueOnce(new Error('unreadable')).mockResolvedValueOnce(state);
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: { getState },
     };
@@ -524,6 +533,7 @@ describe('PermissionsSettings ledger synchronization', () => {
     const getState = vi.fn().mockResolvedValueOnce(state).mockResolvedValue(nextState);
     const setRules = vi.fn().mockResolvedValue({ ok: true, state: { ...nextState, user: [] } });
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: { getState, setRules },
       capabilities: { getState: async () => ruleLedger, revoke: async () => revokedLedger },
@@ -540,6 +550,7 @@ describe('PermissionsSettings ledger synchronization', () => {
   it('refreshes ledger grants after a permission rule save', async () => {
     const getLedger = vi.fn().mockResolvedValue(ruleLedger);
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: {
         getState: async () => state,
@@ -568,6 +579,7 @@ describe('PermissionsSettings ledger synchronization', () => {
     );
     const setRules = vi.fn();
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: { getState: async () => state, setRules },
       capabilities: { getState: async () => ruleLedger, revoke },
@@ -596,6 +608,7 @@ describe('PermissionsSettings ledger synchronization', () => {
       .mockResolvedValue(nextState);
     const setRules = vi.fn();
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: { getState, setRules },
       capabilities: { getState: async () => ruleLedger, revoke: async () => revokedLedger },
@@ -619,6 +632,7 @@ describe('PermissionsSettings ledger synchronization', () => {
     const setRules = vi.fn().mockResolvedValue({ ok: true, state: { ...nextState, user: [] } });
     const revoke = vi.fn().mockRejectedValue(new Error('audit write failed'));
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: { getState, setRules },
       capabilities: { getState: async () => ruleLedger, revoke },
@@ -644,6 +658,7 @@ describe('PermissionsSettings ledger synchronization', () => {
       .mockResolvedValue(nextState);
     const setRules = vi.fn();
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: { listRecentFolders: async () => [] },
       permissions: { getState, setRules },
       capabilities: {

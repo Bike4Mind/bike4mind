@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import type { BranchCheckout } from '@shared/chat';
-import { gitCommand, gitCommandEnv, hostGitArgs, hostNetworkGitArgs } from '../../git/hostGitArgs';
+import { gitCommand, gitCommandEnv, hostGitArgs, hostNetworkGitArgs, hostWorkTreeGitArgs } from '../../git/hostGitArgs';
 import { toWindowsPath, wslLocation } from '../../wsl/wslPath';
 import { hostRealpath } from '../tools/paths';
 
@@ -82,8 +82,27 @@ export function readableGitMessage(stderr: string): string {
   return message.length <= MAX_GIT_MESSAGE_CHARS ? message : `${message.slice(0, MAX_GIT_MESSAGE_CHARS - 3)}...`;
 }
 
-export function git(directory: string, args: readonly string[], options: GitOptions = {}): Promise<string> {
-  return runGit(directory, args, hostGitArgs(args, directory), options);
+/** Subcommands this file runs that read no work-tree file content, so no filter or diff driver can run. */
+const CONTENT_FREE = new Set([
+  'rev-parse',
+  'rev-list',
+  'symbolic-ref',
+  'show-ref',
+  'for-each-ref',
+  'merge-base',
+  'remote',
+  'config',
+  'branch',
+  'log',
+  'ls-files',
+]);
+
+export async function git(directory: string, args: readonly string[], options: GitOptions = {}): Promise<string> {
+  if (CONTENT_FREE.has(args[0] ?? '')) return runGit(directory, args, hostGitArgs(args, directory), options);
+  const full = await hostWorkTreeGitArgs(args, directory).catch((error: unknown) => {
+    throw new GitError(args, error instanceof Error ? error.message : '');
+  });
+  return runGit(directory, args, full, options);
 }
 
 /** A path git printed for `directory`, as this host reaches it: git in a WSL folder prints Linux paths. */

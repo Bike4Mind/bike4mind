@@ -1,4 +1,10 @@
-import { AdminSupportAccessAction, ApiKeyScope, type PromptMeta, redactPromptMetaForViewer } from '@bike4mind/common';
+import {
+  AdminSupportAccessAction,
+  ApiKeyScope,
+  assertFullAdmin,
+  type PromptMeta,
+  redactPromptMetaForViewer,
+} from '@bike4mind/common';
 import type { Types } from 'mongoose';
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -7,7 +13,7 @@ import { z } from 'zod';
 import { NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 import {
-  assertOwnerNotPendingDeletion,
+  assertSupportReadableOwner,
   authorizeSupportCase,
   recordSupportAccess,
 } from '@server/utils/adminSupportAccess';
@@ -49,13 +55,14 @@ const handler = adminApi({
     }
 
     const ownerUserId = await resolveLogOwner(quest);
-    // The same deletion-grace refusal the notebook read applies, so the owner's prompt text is not
-    // served here while their notebook is refused.
-    if (ownerUserId) await assertOwnerNotPendingDeletion(ownerUserId);
+    // The same owner refusals the notebook read applies, so the owner's prompt text is not served
+    // here while their notebook is refused.
+    if (ownerUserId) await assertSupportReadableOwner(req.user, ownerUserId);
+    else assertFullAdmin(req.user, 'read a model log whose owner cannot be resolved');
 
     // An owner that cannot be resolved (no recorded owner, session gone) still gets the read served
-    // and recorded: the row keeps the session and quest, and `ownerUnresolved` marks why a query on
-    // targetUserId will not find it.
+    // to a full admin and recorded: the row keeps the session and quest, and `ownerUnresolved` marks
+    // why a query on targetUserId will not find it.
     await recordSupportAccess(
       ctx,
       AdminSupportAccessAction.ModelLogRead,

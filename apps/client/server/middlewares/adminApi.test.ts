@@ -51,6 +51,13 @@ describe('adminApi', () => {
     expect(() => runGuard('PATCH', [], true)).toThrow('no permission declared');
   });
 
+  it('requires full admin on fullAdminMethods while the declared permission still opens the rest', () => {
+    adminApi({ adminPermissions: { GET: 'settings:manage', POST: 'settings:manage' }, fullAdminMethods: ['POST'] });
+    expect(() => runGuard('POST', ['settings:manage'])).toThrow('Only full administrators');
+    expect(runGuard('GET', ['settings:manage'])).toHaveBeenCalledOnce();
+    expect(runGuard('POST', [], true)).toHaveBeenCalledOnce();
+  });
+
   it('rejects routes with no permission declarations', () => {
     expect(() => adminApi({ adminPermissions: {} })).toThrow('must declare');
     expect(() => adminApi({ adminPermissions: { GET: [] } })).toThrow('must not be empty');

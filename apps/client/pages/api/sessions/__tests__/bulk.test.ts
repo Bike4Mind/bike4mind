@@ -158,7 +158,7 @@ beforeEach(() => {
     isValid: true,
     keyId: 'k1',
     userId: 'user-1',
-    scopes: [],
+    scopes: ['notebooks:write'],
     rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
   });
   mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
@@ -524,12 +524,22 @@ describe('POST /api/sessions/bulk - tags', () => {
     expect(mockTag.findTaggable).not.toHaveBeenCalled();
   });
 
-  it('keeps the bulk delete open to a key without notebooks:write', async () => {
-    withScopes([]);
+  it('refuses the bulk delete to a key without notebooks:write', async () => {
+    withScopes(['notebooks:read']);
+    const { req, res } = fire([id(1)]);
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockDeleteSession).not.toHaveBeenCalled();
+  });
+
+  it('allows the bulk delete to a key holding notebooks:write', async () => {
+    withScopes(['notebooks:write']);
     const { req, res } = fire([id(1)]);
     await handler(req, res);
 
     expect(res._getStatusCode()).toBe(200);
+    expect(mockDeleteSession).toHaveBeenCalledTimes(1);
   });
 
   it('checks credits once for every accessible session before queueing any', async () => {

@@ -296,3 +296,81 @@ describe('POST /api/oauth/ai-token payer standing', () => {
     expect(mintedMetadata()).not.toHaveProperty('payerStanding');
   });
 });
+
+describe('POST /api/oauth/ai-token functions scopes', () => {
+  const FUNCTIONS_CLIENT = {
+    ...CLIENT,
+    name: 'App',
+    clientType: 'relying-party',
+    allowedScopes: ['ai:generate', 'me:read', 'functions:invoke', 'functions:author'],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.verifyClientSecret.mockResolvedValue(FUNCTIONS_CLIENT);
+    h.tryIncrement.mockResolvedValue({ success: true });
+    h.verifyFederatedIdToken.mockResolvedValue({ b4mUserId: 'user-1' });
+    h.checkFederatedGrant.mockResolvedValue(null);
+    h.isApiKeyAccessAllowed.mockResolvedValue(true);
+    h.getActiveSubscriptions.mockResolvedValue([]);
+    h.findByUserId.mockResolvedValue([]);
+    h.findById.mockResolvedValue({ id: 'user-1', aupAcceptedVersion: 'v1' });
+    h.createExchangeKey.mockResolvedValue({ id: 'key-1', key: 'raw-key' });
+  });
+
+  it('mints one key with the functions scopes beside the chat scopes, under an enforced grant', async () => {
+    const res = await run({ scope: 'ai:generate me:read functions:invoke functions:author' });
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({
+      api_key: 'raw-key',
+      scope: 'ai:generate me:read functions:invoke functions:author',
+    });
+    expect(h.createExchangeKey.mock.calls[0][1].scopes).toEqual([
+      'ai:generate',
+      'me:read',
+      'functions:invoke',
+      'functions:author',
+    ]);
+    expect(h.checkFederatedGrant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scopes: ['ai:generate', 'me:read', 'functions:invoke', 'functions:author'],
+        enforce: true,
+      })
+    );
+  });
+
+  it('leaves a chat-only exchange on the grant gate default', async () => {
+    expect((await run({ scope: 'ai:generate' }))._getStatusCode()).toBe(200);
+    expect(h.checkFederatedGrant.mock.calls[0][0]).not.toHaveProperty('enforce');
+  });
+
+  it('refuses a functions scope the client was not granted, before any grant read or mint', async () => {
+    h.verifyClientSecret.mockResolvedValue({ ...FUNCTIONS_CLIENT, allowedScopes: ['ai:generate'] });
+    const res = await run({ scope: 'ai:generate functions:invoke' });
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toEqual({
+      error: 'invalid_scope',
+      error_description: 'Scopes not registered for this client: functions:invoke',
+    });
+    expect(h.checkFederatedGrant).not.toHaveBeenCalled();
+    expect(h.createExchangeKey).not.toHaveBeenCalled();
+  });
+
+  it('answers the grant gate refusal when the person never consented to a functions scope', async () => {
+    h.checkFederatedGrant.mockResolvedValue({
+      status: 403,
+      error: 'access_denied',
+      error_description: 'User has not authorized the following scope(s) for this client: functions:author',
+    });
+    const res = await run({ scope: 'ai:generate functions:author' });
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toMatchObject({ error: 'access_denied' });
+    expect(h.createExchangeKey).not.toHaveBeenCalled();
+  });
+
+  it('still refuses every other confined scope', async () => {
+    const res = await run({ scope: 'ai:generate embed:chat' });
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData()).toMatchObject({ error: 'invalid_scope' });
+  });
+});

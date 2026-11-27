@@ -1,5 +1,103 @@
 # @bike4mind/services
 
+## 31.3.3
+
+### Patch Changes
+
+- Updated dependencies [[`36528fc`](https://github.com/Bike4Mind/bike4mind/commit/36528fc1f58b57e3df068623182179f189a544a4)]:
+  - @bike4mind/common@31.4.0
+  - @bike4mind/agents@1.8.12
+  - @bike4mind/auth@1.5.8
+  - @bike4mind/db-core@0.10.3
+  - @bike4mind/fab-pipeline@3.3.5
+  - @bike4mind/llm-adapters@2.10.3
+  - @bike4mind/mcp@2.2.15
+  - @bike4mind/utils@13.1.5
+
+## 31.3.2
+
+### Patch Changes
+
+- [#8753](https://github.com/Bike4Mind/bike4mind/pull/8753) [`cce8f4c`](https://github.com/Bike4Mind/bike4mind/commit/cce8f4ce0b2912a23d561d1e12145cf03a1aef4d) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - tighten response fields for viewers of shared notebooks
+
+- Updated dependencies [[`cce8f4c`](https://github.com/Bike4Mind/bike4mind/commit/cce8f4ce0b2912a23d561d1e12145cf03a1aef4d)]:
+  - @bike4mind/common@31.3.2
+  - @bike4mind/agents@1.8.11
+  - @bike4mind/auth@1.5.7
+  - @bike4mind/db-core@0.10.2
+  - @bike4mind/fab-pipeline@3.3.4
+  - @bike4mind/llm-adapters@2.10.2
+  - @bike4mind/mcp@2.2.14
+  - @bike4mind/utils@13.1.4
+
+## 31.3.1
+
+### Patch Changes
+
+- Updated dependencies [[`4dcc1f9`](https://github.com/Bike4Mind/bike4mind/commit/4dcc1f9cee9fdddb842c844617152106f11cd001)]:
+  - @bike4mind/common@31.3.1
+  - @bike4mind/agents@1.8.10
+  - @bike4mind/auth@1.5.6
+  - @bike4mind/db-core@0.10.1
+  - @bike4mind/fab-pipeline@3.3.3
+  - @bike4mind/llm-adapters@2.10.1
+  - @bike4mind/mcp@2.2.13
+  - @bike4mind/utils@13.1.3
+
+## 31.3.0
+
+### Minor Changes
+
+- [#8723](https://github.com/Bike4Mind/bike4mind/pull/8723) [`e1dee9d`](https://github.com/Bike4Mind/bike4mind/commit/e1dee9da4be4aef95f2efacd97cc022c0b5c7273) Thanks [@onoya](https://github.com/onoya)! - sync web notebooks from a change feed instead of a full re-list
+
+### Patch Changes
+
+- [#8702](https://github.com/Bike4Mind/bike4mind/pull/8702) [`57cb747`](https://github.com/Bike4Mind/bike4mind/commit/57cb7473b476d4032b2b0f0540d7d56788264864) Thanks [@vinchi777](https://github.com/vinchi777)! - tighten shell command classification and session approvals
+
+- [#8705](https://github.com/Bike4Mind/bike4mind/pull/8705) [`2461e22`](https://github.com/Bike4Mind/bike4mind/commit/2461e2267ee7583121e554393aba27126cdccd70) Thanks [@vinchi777](https://github.com/vinchi777)! - require matching API key scopes on artifact, notebook, lake and integration routes
+
+- [#8718](https://github.com/Bike4Mind/bike4mind/pull/8718) [`8792f27`](https://github.com/Bike4Mind/bike4mind/commit/8792f27429dc3a9913edcb78e9b9b65ce167c880) Thanks [@vinchi777](https://github.com/vinchi777)! - bind Slack requests to their installation and scope Slack data
+
+- [#8722](https://github.com/Bike4Mind/bike4mind/pull/8722) [`56e6187`](https://github.com/Bike4Mind/bike4mind/commit/56e61877fc1120b0f7300eb3735ff282be194844) Thanks [@onoya](https://github.com/onoya)! - keyset-page the notebook list and stop writing on read
+
+- [#8749](https://github.com/Bike4Mind/bike4mind/pull/8749) [`b25356b`](https://github.com/Bike4Mind/bike4mind/commit/b25356bef91f562d363749d1174246e0d51dd186) Thanks [@vinchi777](https://github.com/vinchi777)! - open admin assistant tools only in the acting admin's own session
+
+- [#8750](https://github.com/Bike4Mind/bike4mind/pull/8750) [`2244e8c`](https://github.com/Bike4Mind/bike4mind/commit/2244e8cfa4a77790f8db454748f48c2bdd3a12e0) Thanks [@vinchi777](https://github.com/vinchi777)! - keep prompt text, summaries and credentials out of logs and analytics
+
+- Updated dependencies [[`25d3b82`](https://github.com/Bike4Mind/bike4mind/commit/25d3b82431087b7e5b393bc049ce6c53804d7a48), [`cf0972e`](https://github.com/Bike4Mind/bike4mind/commit/cf0972ebfac550839150f9a0773fa27ed103c9bc), [`2461e22`](https://github.com/Bike4Mind/bike4mind/commit/2461e2267ee7583121e554393aba27126cdccd70), [`1338927`](https://github.com/Bike4Mind/bike4mind/commit/1338927868a5f77b806633effcc8a86da7841927), [`8792f27`](https://github.com/Bike4Mind/bike4mind/commit/8792f27429dc3a9913edcb78e9b9b65ce167c880), [`56e6187`](https://github.com/Bike4Mind/bike4mind/commit/56e61877fc1120b0f7300eb3735ff282be194844), [`e1dee9d`](https://github.com/Bike4Mind/bike4mind/commit/e1dee9da4be4aef95f2efacd97cc022c0b5c7273), [`a86ed73`](https://github.com/Bike4Mind/bike4mind/commit/a86ed73ee8fd025c32849b4fcf9b605633688a80), [`5b285a2`](https://github.com/Bike4Mind/bike4mind/commit/5b285a2304fd865fba39fd15130a69339424d99a), [`b25356b`](https://github.com/Bike4Mind/bike4mind/commit/b25356bef91f562d363749d1174246e0d51dd186), [`2244e8c`](https://github.com/Bike4Mind/bike4mind/commit/2244e8cfa4a77790f8db454748f48c2bdd3a12e0), [`8e8cbf2`](https://github.com/Bike4Mind/bike4mind/commit/8e8cbf2285aef973abf3b72c055c48e80f55963b)]:
+  - @bike4mind/common@31.3.0
+  - @bike4mind/llm-adapters@2.10.0
+  - @bike4mind/db-core@0.10.0
+  - @bike4mind/agents@1.8.9
+  - @bike4mind/auth@1.5.5
+  - @bike4mind/fab-pipeline@3.3.2
+  - @bike4mind/mcp@2.2.12
+  - @bike4mind/utils@13.1.2
+
+## 31.2.0
+
+### Minor Changes
+
+- [#8656](https://github.com/Bike4Mind/bike4mind/pull/8656) [`515eea3`](https://github.com/Bike4Mind/bike4mind/commit/515eea3b9edb3304ef88282cfd40d73ccc295410) Thanks [@vinchi777](https://github.com/vinchi777)! - reuse saved characters as shot references in Productions
+
+### Patch Changes
+
+- [#8512](https://github.com/Bike4Mind/bike4mind/pull/8512) [`1f3511b`](https://github.com/Bike4Mind/bike4mind/commit/1f3511bbf98ae6bba50295f687462199c0744273) Thanks [@jarlacut](https://github.com/jarlacut)! - allocate artifact version numbers atomically
+
+- [#8629](https://github.com/Bike4Mind/bike4mind/pull/8629) [`0c77e8a`](https://github.com/Bike4Mind/bike4mind/commit/0c77e8a5d935de1f4625c230b6cad45283922ec5) Thanks [@onoya](https://github.com/onoya)! - retry a reply that came back as hidden thinking only
+
+- [#8709](https://github.com/Bike4Mind/bike4mind/pull/8709) [`fee111c`](https://github.com/Bike4Mind/bike4mind/commit/fee111c3f3b31cab78eac80fab7d63589c72627f) Thanks [@vinchi777](https://github.com/vinchi777)! - grandfather only pre-cutoff keys and apply key scope to rotation, fanout and billing
+
+- Updated dependencies [[`1f3511b`](https://github.com/Bike4Mind/bike4mind/commit/1f3511bbf98ae6bba50295f687462199c0744273), [`0c77e8a`](https://github.com/Bike4Mind/bike4mind/commit/0c77e8a5d935de1f4625c230b6cad45283922ec5), [`515eea3`](https://github.com/Bike4Mind/bike4mind/commit/515eea3b9edb3304ef88282cfd40d73ccc295410), [`bc52a90`](https://github.com/Bike4Mind/bike4mind/commit/bc52a9071c39c82dad846a7c167c442035b34dd4), [`dd11de0`](https://github.com/Bike4Mind/bike4mind/commit/dd11de0152114690f0056afadab899ec83c4bc4c), [`fee111c`](https://github.com/Bike4Mind/bike4mind/commit/fee111c3f3b31cab78eac80fab7d63589c72627f)]:
+  - @bike4mind/common@31.2.0
+  - @bike4mind/llm-adapters@2.9.1
+  - @bike4mind/utils@13.1.1
+  - @bike4mind/agents@1.8.8
+  - @bike4mind/auth@1.5.4
+  - @bike4mind/db-core@0.9.7
+  - @bike4mind/fab-pipeline@3.3.1
+  - @bike4mind/mcp@2.2.11
+
 ## 31.1.0
 
 ### Minor Changes

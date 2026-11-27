@@ -1,10 +1,17 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge, chatStubs } from '../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { PendingTaskDecision } from '@shared/orchestration';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { TASK_DECISION_LIST_MAX_HEIGHT, TaskDecisionCards, decisionsFor } from './TaskDecisionCards';
+import {
+  TASK_DECISION_LIST_MAX_HEIGHT,
+  TaskDecisionCard,
+  TaskDecisionCards,
+  decisionsFor,
+  useTaskDecisions,
+} from './TaskDecisionCards';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -40,7 +47,7 @@ const pending = (sessionId: string, rootId: string, id: string): PendingTaskDeci
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 const answerTaskDecision = vi.fn(async () => undefined);
-(window as unknown as { b4m: unknown }).b4m = { chat: { answerTaskDecision } };
+(window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat: { answerTaskDecision } };
 
 afterEach(() => {
   act(() => root?.unmount());
@@ -123,6 +130,35 @@ describe('TaskDecisionCards', () => {
     expect(one('chat-question-card')).toBeTruthy();
   });
 
+  it('reports an answer that went through, and stays silent when it was refused', async () => {
+    const onAnswered = vi.fn();
+    const renderCard = () => {
+      host = document.createElement('div');
+      document.body.appendChild(host);
+      root = createRoot(host);
+      act(() => {
+        root?.render(
+          <CssVarsProvider>
+            <TaskDecisionCard
+              sessionId="w1"
+              title="Agent w1"
+              decision={decisions[0].decision}
+              onAnswered={onAnswered}
+            />
+          </CssVarsProvider>
+        );
+      });
+    };
+    answerTaskDecision.mockRejectedValueOnce(new Error('This decision is no longer pending.'));
+    renderCard();
+    await click(one('chat-question-skip'));
+    expect(one('task-decision-error')).toBeTruthy();
+    expect(onAnswered).not.toHaveBeenCalled();
+
+    await click(one('chat-question-skip'));
+    expect(onAnswered).toHaveBeenCalledTimes(1);
+  });
+
   it('opens the asking agent from the root card', async () => {
     const onOpen = mount('root', decisions);
     await click(one('task-decision-agent-link'));
@@ -143,5 +179,59 @@ describe('decisionsFor', () => {
 
   it('keeps nothing for an unsaved conversation', () => {
     expect(decisionsFor(null, decisions)).toEqual([]);
+  });
+});
+
+describe('useTaskDecisions', () => {
+  function Probe() {
+    const decisions = useTaskDecisions();
+    return <div data-testid="decision-ids">{decisions.map(entry => entry.decision.id).join(',')}</div>;
+  }
+
+  function mountProbe() {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => root?.render(<Probe />));
+  }
+
+  const flush = () => act(async () => undefined);
+  const ids = () => one('decision-ids')?.textContent;
+
+  function stubDecisions(seed: Promise<PendingTaskDecision[]>) {
+    let push: (decisions: PendingTaskDecision[]) => void = () => undefined;
+    const chat = chatStubs();
+    chat.listTaskDecisions = () => seed;
+    chat.onTaskDecisions = listener => {
+      push = listener;
+      return () => undefined;
+    };
+    return (decisions: PendingTaskDecision[]) => act(() => push(decisions));
+  }
+
+  it('shows the seeded decisions', async () => {
+    stubDecisions(Promise.resolve([pending('w1', 'root', 'd1')]));
+    mountProbe();
+    await flush();
+    expect(ids()).toBe('d1');
+  });
+
+  it('replaces the list with each pushed one', async () => {
+    const push = stubDecisions(Promise.resolve([pending('w1', 'root', 'd1')]));
+    mountProbe();
+    await flush();
+    push([pending('w2', 'root', 'd2'), pending('w3', 'root', 'd3')]);
+    expect(ids()).toBe('d2,d3');
+    push([]);
+    expect(ids()).toBe('');
+  });
+
+  it('keeps a push that lands before the seed answer', async () => {
+    let answerSeed: (decisions: PendingTaskDecision[]) => void = () => undefined;
+    const push = stubDecisions(new Promise(resolve => (answerSeed = resolve)));
+    mountProbe();
+    push([pending('w2', 'root', 'd2')]);
+    await act(async () => answerSeed([pending('w1', 'root', 'd1')]));
+    expect(ids()).toBe('d2');
   });
 });

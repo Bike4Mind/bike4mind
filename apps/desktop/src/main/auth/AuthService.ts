@@ -10,6 +10,7 @@ import {
   type TokenStore,
 } from '@bike4mind/client-auth';
 import type { OAuthDeviceClientId } from '@bike4mind/common';
+import { isExternallyOpenable } from '@shared/externalLinks';
 import { z } from 'zod';
 import type {
   AccountPage,
@@ -706,6 +707,10 @@ export class AuthService {
   }
 
   private async tryOpenExternal(url: string): Promise<boolean> {
+    if (!isExternallyOpenable(url)) {
+      this.deps.logger.warn('AUTH: not opening a link that is not a web or mail address');
+      return false;
+    }
     try {
       await this.deps.openExternal(url);
       return true;

@@ -56,6 +56,24 @@ describe('ToolCatalog MCP and skill defaults', () => {
   it('refuses to register into the MCP namespace', () => {
     expect(() => new ToolCatalog().register('mcp__github__create_issue', moduleReader)).toThrow(/reserved namespace/);
   });
+
+  it('gives a tool marked as MCP the MCP descriptor, whatever its name', () => {
+    const catalog = new ToolCatalog();
+    expect(catalog.resolve('github__create_issue')).toBeUndefined();
+    catalog.markMcpTool('github__create_issue');
+    expect(catalog.resolve('github__create_issue')?.source).toEqual({ kind: 'mcp', server: 'github' });
+    expect(catalog.category('github__create_issue')).toBe('prompt_always');
+    expect(catalog.canTrust('github__create_issue')).toBe(false);
+    expect(catalog.isReadOnly('github__create_issue')).toBe(false);
+  });
+
+  it('leaves other names with __ unclassified until marked', () => {
+    expect(new ToolCatalog().resolve('plugin__lookup')).toBeUndefined();
+  });
+
+  it('refuses to mark a core tool as MCP', () => {
+    expect(() => new ToolCatalog().markMcpTool('bash_execute')).toThrow(/core tool/);
+  });
 });
 
 describe('CLI session bookkeeping and delegation categories', () => {

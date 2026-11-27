@@ -102,7 +102,7 @@ import type { VideoToolConfig } from './tools/implementation/videoGeneration';
 import type { MusicToolConfig } from './tools/implementation/musicGeneration';
 import { SYSTEM_PROMPT_PRIORITY, TURN_CONTEXT_END, TURN_CONTEXT_HEADER } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
-import { LakeMemoryFeature } from './ChatCompletionFeatures';
+import { LakeMemoryFeature, KnowledgeRetrievalFeature } from './ChatCompletionFeatures';
 import type { ISkill, IDataLakeDocument } from '@bike4mind/common';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
 import { INCOMPLETE_ANSWER_NOTICE, TRUNCATED_ANSWER_NOTICE } from './earlyStopStamp';
@@ -10324,6 +10324,13 @@ describe('ChatCompletionProcess', () => {
     // so `enabledToolsArg` below is exactly what the model would actually be offered.
     const runKnowledgeGatingCase = async (opts: {
       knowledgeIds?: string[];
+      turn?: { authOrigin: 'apiKey' | 'session' | 'internal'; apiKeyId?: string; fileInputsAllowed?: boolean };
+      realFileLoader?: boolean;
+      realFeatureBuild?: boolean;
+      projectSummaryLookup?: () => Promise<Array<{ id: string }>>;
+      projectId?: string;
+      messageFileIds?: string[];
+      sessionFabFileIds?: string[];
       files?: Array<Partial<{ id: string; fileName: string; vectorized: boolean; chunkCount: number }>>;
       getAccessibleFilesImpl?: () => Promise<unknown>;
       dataLakeTags?: string[];
@@ -10365,7 +10372,10 @@ describe('ChatCompletionProcess', () => {
       const getAccessibleFiles = opts.getAccessibleFilesImpl
         ? vi.fn().mockImplementation(opts.getAccessibleFilesImpl)
         : vi.fn().mockResolvedValue(opts.files ?? []);
-      mockDb.fabfiles = { getAccessibleFiles };
+      mockDb.fabfiles = {
+        getAccessibleFiles,
+        ...(opts.projectSummaryLookup ? { find: opts.projectSummaryLookup } : {}),
+      };
       (service as any).user.isAdmin = opts.userIsAdmin;
       if (opts.countGateExcludedLakesImpl || opts.lakesByTag) {
         mockDb.dataLakes = {
@@ -10448,12 +10458,33 @@ describe('ChatCompletionProcess', () => {
       mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
       mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
 
+      if (opts.realFeatureBuild) {
+        const internals = service as unknown as { buildOptimizedFeatures: () => Promise<void> };
+        if (vi.isMockFunction(internals.buildOptimizedFeatures))
+          vi.mocked(internals.buildOptimizedFeatures).mockRestore();
+      }
+      if (opts.realFileLoader) {
+        if (vi.isMockFunction(service.fabFilesToMessages)) vi.mocked(service.fabFilesToMessages).mockRestore();
+        mockedFetchAndConvertFabFiles.mockClear();
+        mockedProcessFabFilesServer.mockImplementation(async () => ({
+          userMessages: (mockedFetchAndConvertFabFiles.mock.calls.at(-1)?.[0] ?? []).map(id => ({
+            role: 'user' as const,
+            content: `FILE_CONTENT_${id}`,
+          })),
+          fileNotices: [],
+          deliveredFileIds: [],
+          fullyDeliveredFileIds: [],
+        }));
+      }
       const body = {
         ...startQuestParams,
+        ...opts.turn,
+        messageFileIds: opts.messageFileIds ?? [],
+        fabFileIds: opts.sessionFabFileIds ?? [],
         ...(opts.promptMode ? { promptMode: opts.promptMode } : {}),
         ...(opts.skipAutoOffers ? { skipAutoOffers: true } : {}),
         tools: opts.requestTools ?? [],
-        projectId: undefined,
+        projectId: opts.projectId,
         organizationId: undefined,
       };
 
@@ -10462,6 +10493,9 @@ describe('ChatCompletionProcess', () => {
       // Read the recorded call BEFORE restoring - mockRestore() also clears mock.calls.
       const enabledToolsArg: string[] = (buildToolsSpy.mock.calls[0]?.[0] as any)?.enabledTools ?? [];
       const contextAndSystemMessages: IMessage[] = mockedBuildAndSortMessages.mock.calls.at(-1)?.[1] ?? [];
+      const attachedFileIds =
+        (buildToolsSpy.mock.instances[0] as unknown as { deps: { attachedFileIds?: string[] } })?.deps
+          .attachedFileIds ?? [];
       const savedQuest = vi.mocked(mockDb.quests.update).mock.calls.at(-1)?.[0] as {
         promptMeta?: { retrieval?: unknown; offeredTools?: string[] };
       };
@@ -10470,6 +10504,7 @@ describe('ChatCompletionProcess', () => {
       buildToolPromptSpy.mockRestore();
 
       return {
+        attachedFileIds,
         enabledToolsArg,
         getAccessibleFiles,
         contextAndSystemMessages,
@@ -10477,6 +10512,103 @@ describe('ChatCompletionProcess', () => {
         offeredTools: savedQuest?.promptMeta?.offeredTools,
       };
     };
+
+    it.each([
+      ['denied key', { authOrigin: 'apiKey' as const, apiKeyId: 'key1', fileInputsAllowed: false }, false],
+      ['legacy key', { authOrigin: 'apiKey' as const, apiKeyId: 'key1' }, false],
+      ['inconsistent key origin', { authOrigin: 'session' as const, apiKeyId: 'key1' }, false],
+      ['read-capable key', { authOrigin: 'apiKey' as const, apiKeyId: 'key1', fileInputsAllowed: true }, true],
+      ['session without new metadata', { authOrigin: 'session' as const }, true],
+    ])('admits pinned file content only for an authorized %s', async (_name, turn, allowed) => {
+      const { contextAndSystemMessages, getAccessibleFiles, attachedFileIds } = await runKnowledgeGatingCase({
+        knowledgeIds: ['private-canary'],
+        promptMode: 'raw',
+        turn,
+        realFileLoader: true,
+      });
+      const assembled = JSON.stringify(contextAndSystemMessages);
+      expect(assembled.includes('FILE_CONTENT_private-canary')).toBe(allowed);
+      const fetchedIds = mockedFetchAndConvertFabFiles.mock.calls.flatMap(call => call[0]);
+      expect(fetchedIds.includes('private-canary')).toBe(allowed);
+      expect(attachedFileIds.includes('private-canary')).toBe(allowed);
+      if (!allowed) expect(getAccessibleFiles).not.toHaveBeenCalled();
+      expect(mockSession.knowledgeIds).toEqual(['private-canary']);
+    });
+
+    it('keeps global files while filtering private inputs across allowed-denied-allowed cached turns', async () => {
+      const user = (service as unknown as { user: { systemFiles?: Array<{ fileId: string; enabled: boolean }> } }).user;
+      user.systemFiles = [{ fileId: 'user-canary', enabled: true }];
+      mockedGetSettingsValue.mockImplementation(((key: string) =>
+        key === 'SystemFiles' ? 'global-canary' : undefined) as typeof getSettingsValue);
+      onTestFinished(() => {
+        delete user.systemFiles;
+        mockedGetSettingsValue.mockReset();
+      });
+      for (const allowed of [true, false, true]) {
+        const { contextAndSystemMessages } = await runKnowledgeGatingCase({
+          knowledgeIds: ['pinned-canary'],
+          messageFileIds: ['message-canary'],
+          sessionFabFileIds: ['session-canary'],
+          promptMode: 'raw',
+          realFileLoader: true,
+          turn: { authOrigin: 'apiKey', apiKeyId: 'key1', fileInputsAllowed: allowed },
+        });
+        const assembled = JSON.stringify(contextAndSystemMessages);
+        expect(assembled).toContain('FILE_CONTENT_global-canary');
+        for (const id of ['user-canary', 'pinned-canary', 'message-canary', 'session-canary']) {
+          expect(assembled.includes(`FILE_CONTENT_${id}`)).toBe(allowed);
+        }
+        expect(user.systemFiles).toEqual([{ fileId: 'user-canary', enabled: true }]);
+        expect(mockSession.knowledgeIds).toEqual(['pinned-canary']);
+      }
+    });
+
+    it.each([false, true])(
+      'gates secondary project notebook and summary file reads with admission %s',
+      async allowed => {
+        const findNotebooks = vi
+          .fn()
+          .mockResolvedValue([{ id: 'other-notebook', knowledgeIds: ['project-pinned-canary'] }]);
+        const findSummaries = vi.fn().mockResolvedValue([{ id: 'summary-canary' }]);
+        mockDb.sessions.findAllByIds = findNotebooks;
+        mockDb.projects.shareable = {
+          findAccessibleById: vi.fn().mockResolvedValue({
+            id: 'project1',
+            sessionIds: ['session1', 'other-notebook'],
+            systemPrompts: [],
+            fileIds: [],
+          }),
+        };
+        // runKnowledgeGatingCase resets the attachment repository; retain the project-summary edge there.
+        const { contextAndSystemMessages } = await runKnowledgeGatingCase({
+          skipAutoOffers: true,
+          projectId: 'project1',
+          realFeatureBuild: true,
+          realFileLoader: true,
+          turn: { authOrigin: 'apiKey', apiKeyId: 'key1', fileInputsAllowed: allowed },
+          projectSummaryLookup: findSummaries,
+        });
+        expect(findNotebooks.mock.calls.length > 0).toBe(allowed);
+        expect(findSummaries.mock.calls.length > 0).toBe(allowed);
+        const assembled = JSON.stringify(contextAndSystemMessages);
+        expect(assembled.includes('FILE_CONTENT_project-pinned-canary')).toBe(allowed);
+        expect(assembled.includes('FILE_CONTENT_summary-canary')).toBe(allowed);
+      }
+    );
+
+    it.each([false, true])('gates forced file retrieval before its producer with admission %s', async allowed => {
+      mockSession.forceKnowledgeRetrieval = true;
+      const retrieval = vi
+        .spyOn(KnowledgeRetrievalFeature.prototype, 'getContextMessages')
+        .mockResolvedValue([{ role: 'system', content: 'FORCED_PRIVATE_CANARY' }]);
+      onTestFinished(() => retrieval.mockRestore());
+      const { contextAndSystemMessages } = await runKnowledgeGatingCase({
+        realFeatureBuild: true,
+        turn: { authOrigin: 'apiKey', apiKeyId: 'key1', fileInputsAllowed: allowed },
+      });
+      expect(retrieval.mock.calls.length > 0).toBe(allowed);
+      expect(JSON.stringify(contextAndSystemMessages).includes('FORCED_PRIVATE_CANARY')).toBe(allowed);
+    });
 
     // #2228: a file that never reached the model used to leave no trace at all - the model answered
     // as though it had the content and the user saw nothing. Both halves of the fix are asserted

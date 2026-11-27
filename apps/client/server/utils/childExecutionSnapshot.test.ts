@@ -43,7 +43,7 @@ describe('buildChildExecutionSnapshots — isTimeout sourced from error.timedOut
     ]);
     mockFindChildExecutions.mockResolvedValueOnce([]); // recursive: no grandchildren
 
-    const snapshots = await buildChildExecutionSnapshots('parent-1');
+    const snapshots = await buildChildExecutionSnapshots('parent-1', { isOwner: true });
 
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0].isTimeout).toBe(true);
@@ -57,7 +57,7 @@ describe('buildChildExecutionSnapshots — isTimeout sourced from error.timedOut
     ]);
     mockFindChildExecutions.mockResolvedValueOnce([]); // recursive: no grandchildren
 
-    const snapshots = await buildChildExecutionSnapshots('parent-1');
+    const snapshots = await buildChildExecutionSnapshots('parent-1', { isOwner: true });
 
     expect(snapshots[0].isTimeout).toBe(false);
   });
@@ -73,7 +73,7 @@ describe('buildChildExecutionSnapshots — isTimeout sourced from error.timedOut
     ]);
     mockFindChildExecutions.mockResolvedValueOnce([]); // recursive: no grandchildren
 
-    const snapshots = await buildChildExecutionSnapshots('parent-1');
+    const snapshots = await buildChildExecutionSnapshots('parent-1', { isOwner: true });
 
     expect(snapshots[0].isTimeout).toBeUndefined();
   });
@@ -84,7 +84,7 @@ describe('buildChildExecutionSnapshots — isTimeout sourced from error.timedOut
     ]);
     mockFindChildExecutions.mockResolvedValueOnce([]); // recursive: no grandchildren
 
-    const snapshots = await buildChildExecutionSnapshots('parent-1');
+    const snapshots = await buildChildExecutionSnapshots('parent-1', { isOwner: true });
 
     expect(snapshots[0].isTimeout).toBeUndefined();
   });
@@ -109,7 +109,7 @@ describe('buildChildExecutionSnapshots — recursive grandchild inclusion', () =
     // Third call (recursive): children of leaf-1 - none (leaf node).
     mockFindChildExecutions.mockResolvedValueOnce([]);
 
-    const snapshots = await buildChildExecutionSnapshots('parent-1');
+    const snapshots = await buildChildExecutionSnapshots('parent-1', { isOwner: true });
 
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0].executionId).toBe('sub-1');
@@ -126,8 +126,41 @@ describe('buildChildExecutionSnapshots — recursive grandchild inclusion', () =
     // Recursive call returns empty - no grandchildren.
     mockFindChildExecutions.mockResolvedValueOnce([]);
 
-    const snapshots = await buildChildExecutionSnapshots('parent-1');
+    const snapshots = await buildChildExecutionSnapshots('parent-1', { isOwner: true });
 
     expect(snapshots[0].children).toBeUndefined();
+  });
+
+  it('strips owner-only step data in nested steps for a viewer who is not the owner', async () => {
+    const steps = [
+      {
+        type: 'action',
+        content: 'search',
+        metadata: { toolName: 'search', toolInput: { query: 'owner-only-argument' }, timestamp: 1 },
+      },
+      {
+        type: 'observation',
+        content: 'tool output text',
+        metadata: { toolName: 'search', confidenceReason: 'owner-only reasoning', timestamp: 2 },
+      },
+    ];
+    mockFindChildExecutions.mockResolvedValueOnce([
+      makeChild({ id: 'sub-1', status: 'completed', result: { answer: 'a', steps } }),
+    ]);
+    mockFindChildExecutions.mockResolvedValueOnce([
+      makeChild({ id: 'leaf-1', status: 'completed', result: { answer: 'b', steps } }),
+    ]);
+    mockFindChildExecutions.mockResolvedValueOnce([]);
+
+    const snapshots = await buildChildExecutionSnapshots('parent-1', { isOwner: false });
+
+    expect(JSON.stringify(snapshots)).not.toContain('tool output text');
+    expect(JSON.stringify(snapshots)).not.toContain('owner-only-argument');
+    expect(JSON.stringify(snapshots)).not.toContain('owner-only reasoning');
+    expect(snapshots[0].steps.map(step => step.type)).toEqual(['action', 'observation']);
+    expect(snapshots[0].steps[0].metadata?.toolName).toBe('search');
+    expect(snapshots[0].steps[1].content).toBe('');
+    expect(snapshots[0].children?.[0].steps[0].metadata?.toolName).toBe('search');
+    expect(snapshots[0].children?.[0].steps[1].content).toBe('');
   });
 });

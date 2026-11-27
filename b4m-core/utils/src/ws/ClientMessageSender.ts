@@ -1,5 +1,5 @@
 import { GoneException } from '@aws-sdk/client-apigatewaymanagementapi';
-import { IConnection, MessageDataToClient } from '@bike4mind/common';
+import { IConnection, MessageDataToClient, receivesUserFanout } from '@bike4mind/common';
 import { z } from 'zod';
 import { Logger } from '@bike4mind/observability';
 import { sendToConnection } from './utils';
@@ -74,7 +74,7 @@ export class ClientMessageSender {
   }
 
   async sendToClient(userId: string, endpoint: string, action: z.infer<typeof MessageDataToClient>): Promise<void> {
-    const connections = await this.getConnections(userId);
+    const connections = (await this.getConnections(userId)).filter(receivesUserFanout);
 
     const sendResults = await Promise.allSettled(
       connections.map(connection => sendToConnection(connection.connectionId, endpoint, action))

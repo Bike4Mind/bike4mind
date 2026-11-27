@@ -16,6 +16,9 @@ import {
   ReplyCompleteContext,
 } from './PromptReplies';
 import PromptReplies from './PromptReplies';
+
+// jsdom has no Element.scrollTo, and the reply's auto-scroll timer can fire after a test ends.
+Element.prototype.scrollTo = vi.fn();
 import type { ReactArtifactGroupRole } from '../../utils/reactArtifactGroup';
 
 const { postMock } = vi.hoisted(() => ({ postMock: vi.fn() }));
@@ -69,6 +72,12 @@ vi.mock('./artifacts/ArtifactRenderer', async () => {
       </div>
     ),
   };
+});
+
+// Pass-through spy so a test can count how many parses a reply's markdown went through.
+vi.mock('react-markdown', async importOriginal => {
+  const actual = await importOriginal<typeof import('react-markdown')>();
+  return { ...actual, default: vi.fn(actual.default) };
 });
 
 const { persistArtifactsMock } = vi.hoisted(() => ({ persistArtifactsMock: vi.fn(() => Promise.resolve()) }));
@@ -887,6 +896,43 @@ describe('deep research panel settle wiring in a rendered reply', () => {
 
   it('keeps the running state while the turn is streaming', () => {
     expect(renderStatus('running')).not.toMatch(/stopped|complete/i);
+  });
+});
+
+describe('streaming split is scoped to a running quest', () => {
+  const appTheme = extendTheme({ ...getThemeConfig() });
+  const text = 'first paragraph\n\nsecond paragraph\n\nthird';
+
+  const renderWithStatus = (status: string | undefined) => {
+    vi.mocked(ReactMarkdown).mockClear();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <CssVarsProvider theme={appTheme}>
+          <PromptReplies
+            messageData={{ id: `quest-${status}`, sessionId: 'session-1', replies: [text], status } as never}
+            onSendMessage={async () => {}}
+          />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+    return vi
+      .mocked(ReactMarkdown)
+      .mock.calls.map(([props]) => props.children)
+      .filter((children): children is string => typeof children === 'string' && children.includes('third'));
+  };
+
+  it.each([
+    ['stopped', 'stopped'],
+    ['status-less', undefined],
+  ])('renders a %s quest through one ReactMarkdown holding the whole reply', (_label, status) => {
+    const parses = renderWithStatus(status);
+    expect(parses.length).toBeGreaterThan(0);
+    expect(parses.every(children => children.includes('first paragraph'))).toBe(true);
+  });
+
+  it('splits a running quest so the tail parses on its own', () => {
+    const parses = renderWithStatus('running');
+    expect(parses.some(children => !children.includes('first paragraph'))).toBe(true);
   });
 });
 

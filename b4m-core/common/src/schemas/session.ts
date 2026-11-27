@@ -158,6 +158,17 @@ export const SessionResponseSchema = z.object({
   // zod-to-openapi then renders as a falsely-nullable field in the generated spec.
   firstCreated: z.date(),
   lastUpdated: z.date(),
+  updatedAt: z
+    .date()
+    .optional()
+    .describe(
+      'When anything on the session last changed, including a rename or a delete. `lastUpdated` moves only ' +
+        'with chat activity. Absent only on sessions older than this field.'
+    ),
+  deletedAt: z
+    .date()
+    .optional()
+    .describe('Set only on a deleted session, which only `GET /api/v1/sessions` with `updated_since` returns.'),
 });
 
 export type SessionResponse = z.infer<typeof SessionResponseSchema>;
@@ -193,6 +204,15 @@ export const ListSessionsQuerySchema = PaginationQuerySchema.extend({
     .enum(SESSION_ORIGIN_CHANNELS)
     .optional()
     .describe('Lists only sessions created through this channel. `web` also matches sessions with no recorded origin.'),
+  updated_since: z.iso
+    .datetime({ offset: true })
+    .optional()
+    .describe(
+      'Lists only sessions changed at or after this time, oldest change first, including deleted sessions ' +
+        '(with `deletedAt` set) so a sync can drop its copy. Pass the latest `updatedAt` you have read, ' +
+        'ideally minus a few minutes to absorb clock skew between servers; rows you already have come back ' +
+        'and can be skipped.'
+    ),
 });
 
 export type ListSessionsQuery = z.infer<typeof ListSessionsQuerySchema>;

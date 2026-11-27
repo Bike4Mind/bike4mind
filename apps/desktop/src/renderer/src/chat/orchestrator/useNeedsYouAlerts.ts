@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AttentionOpenEvent } from '@shared/attention';
 import type { ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
+import { hostChat } from '../../host/hostChat';
 import { useNotifyScope } from '../notifyScopeSetting';
 import { playChime } from './chime';
 import { readPresenter } from './orchestratorPrefs';
@@ -144,6 +145,6 @@ async function notify(sessionId: string, sessions: readonly ChatSessionSummary[]
   }
   const title = needsYouTitle(sessions, sessionId, rootId);
   // A session that cannot be read still gets its notice, just without the request spelled out.
-  const session = await window.b4m.chat.getSession(sessionId).catch(() => null);
+  const session = await hostChat.getSession(sessionId).catch(() => null);
   await window.b4m.attention.notify({ sessionId, rootId, title, body: needsYouBody(session?.messages ?? []) });
 }

@@ -4,6 +4,9 @@ import os from 'os';
 import { htmlBodyInner, htmlErrorTitle, htmlFirstH1, replaceHtmlTags } from './htmlErrorTitle.js';
 import { isValidSessionId, SESSION_ID_PATTERN } from './validateSessionId.js';
 
+const DEBUG_DIR_MODE = 0o700;
+const DEBUG_FILE_MODE = 0o600;
+
 export class Logger {
   private static instance: Logger | null = null;
   private logFilePath: string | null = null;
@@ -32,13 +35,15 @@ export class Logger {
     this.sessionId = sessionId;
     const debugDir = path.join(os.homedir(), '.bike4mind', 'debug');
 
-    // Ensure debug directory exists
-    await fs.mkdir(debugDir, { recursive: true });
+    await fs.mkdir(debugDir, { recursive: true, mode: DEBUG_DIR_MODE });
+    // mkdir's mode is ignored for a directory an older CLI already created. Best-effort:
+    // chmod fails on a directory another user owns, and that must not stop the CLI.
+    await fs.chmod(debugDir, DEBUG_DIR_MODE).catch(() => {});
 
     this.logFilePath = path.join(debugDir, `${sessionId}.txt`);
 
-    // Write session start marker
     await this.writeToFile('INFO', '=== CLI SESSION START ===');
+    await fs.chmod(this.logFilePath, DEBUG_FILE_MODE).catch(() => {});
   }
 
   /**
@@ -111,7 +116,7 @@ export class Logger {
     try {
       const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
       const logEntry = `[${timestamp}] [${level}] ${message}\n`;
-      await fs.appendFile(this.logFilePath, logEntry, 'utf-8');
+      await fs.appendFile(this.logFilePath, logEntry, { encoding: 'utf-8', mode: DEBUG_FILE_MODE });
     } catch (error) {
       // Silent fail - don't break CLI if logging fails
       console.error('File logging failed:', error);

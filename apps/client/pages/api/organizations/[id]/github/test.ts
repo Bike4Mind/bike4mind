@@ -22,7 +22,7 @@ import { orgGitHubConnectionRepository } from '@bike4mind/database';
 
 const logger = new Logger({ metadata: { component: 'org-github-test' } });
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   // P1: Rate limit to prevent abuse (30 tests/hour - makes real API calls)
   .use(
     rateLimit({

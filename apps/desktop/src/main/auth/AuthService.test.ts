@@ -178,6 +178,29 @@ describe('AuthService', () => {
     service.dispose();
   });
 
+  it('opens only a web or mail verification address', async () => {
+    process.env[BAKED] = HOSTED;
+    const device = fakeDeviceFlow({
+      initiateDeviceFlow: vi.fn().mockResolvedValue({
+        device_code: 'device-code',
+        user_code: 'WDJB-MJHT',
+        verification_uri: 'file:///Applications/Calculator.app',
+        verification_uri_complete: 'smb://example.com/share',
+        expires_in: 600,
+        interval: 5,
+      }),
+    });
+    const { service, states, openExternal } = build({ device });
+
+    await service.initialize();
+    await service.signIn();
+    await service.openAccountPage('verification');
+
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(states.filter(state => state.status === 'awaiting-approval').at(-1)?.pending?.browserOpened).toBe(false);
+    service.dispose();
+  });
+
   it('surfaces the browser handoff failing without failing the sign-in', async () => {
     process.env[BAKED] = HOSTED;
     const { service, states } = build({

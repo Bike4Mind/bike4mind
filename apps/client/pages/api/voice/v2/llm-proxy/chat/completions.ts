@@ -215,6 +215,7 @@ async function runFullPipeline(
     userId: sessionCtx.userId,
     authOrigin: sessionCtx.authOrigin,
     apiKeyId: sessionCtx.apiKeyId,
+    fileInputsAllowed: sessionCtx.fileInputsAllowed,
     apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
   });
   if (!quest) throw new Error('Voice v2: failed to create quest');
@@ -232,6 +233,7 @@ async function runFullPipeline(
       // from this body only.
       authOrigin: sessionCtx.authOrigin,
       apiKeyId: sessionCtx.apiKeyId,
+      fileInputsAllowed: sessionCtx.fileInputsAllowed,
       apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
       embeddingModel,
       queryComplexity: 'simple',

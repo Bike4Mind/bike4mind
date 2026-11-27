@@ -39,14 +39,19 @@ import {
 import {
   countWebNotebooks,
   describeWebError,
+  fetchWebNotebook,
   importNotebook,
+  listWebNotebookChanges,
   listWebNotebooks,
   needsWebImport,
   webCounts,
   webSessionId,
   webNotebookWasDeleted,
   type WebApi,
+  type WebNotebookChanges,
+  type WebNotebookList,
 } from './WebSessionSync';
+import type { WebNotebook } from './webSessionMapper';
 
 /** Low on purpose: an import is background work and must never compete with a reply. */
 const IMPORT_CONCURRENCY = 2;
@@ -64,6 +69,13 @@ const WEB_FOCUS_INTERVAL_MS = 60_000;
 const WEB_POLL_INTERVAL_MS = 3 * 60_000;
 /** Each failed poll doubles the wait, up to this many doublings (3 min -> 48 min). */
 const WEB_POLL_MAX_BACKOFF_STEPS = 4;
+/**
+ * Between full lists a web sync reads only the change feed; this often (ms) it lists everything
+ * instead, which catches what the feed cannot show, such as a notebook hard-deleted by retention.
+ */
+const WEB_RECONCILE_INTERVAL_MS = 24 * 60 * 60_000;
+/** Failed notebooks a change-feed run re-reads by id; the rest wait for a later run. */
+const WEB_FAILED_RETRIES_PER_RUN = 10;
 
 export interface ClaudeImportLogger {
   warn(message: string): void;
@@ -96,6 +108,8 @@ export class ClaudeImportService {
   private lastError: string | undefined;
   private webRun: Promise<void> | null = null;
   private webRerun = false;
+  /** Set by Sync now; the next web run lists everything rather than reading the change feed. */
+  private webReconcileRequested = false;
   private webError: string | undefined;
   /** When a web run last started or ended: the focus and poll throttles count from the later. */
   private webRanAt = 0;
@@ -416,9 +430,13 @@ export class ClaudeImportService {
     await this.syncWeb();
   }
 
-  /** Coalesces like syncCode. Reads only the signed-in account's notebooks, into its own scope. */
-  syncWeb(): Promise<void> {
+  /**
+   * Coalesces like syncCode. Reads only the signed-in account's notebooks, into its own scope.
+   * `reconcile` forces a full list instead of the change feed.
+   */
+  syncWeb(options: { reconcile?: boolean } = {}): Promise<void> {
     if (this.removing) return Promise.resolve();
+    if (options.reconcile) this.webReconcileRequested = true;
     if (this.webRun) {
       this.webRerun = true;
       return this.webRun;
@@ -451,32 +469,45 @@ export class ClaudeImportService {
     if (!(await this.states.readSettings()).web.enabled) return;
     const started = Date.now();
     const scope = await this.states.scope(scopeKey);
-    let listed: Awaited<ReturnType<typeof listWebNotebooks>>;
-    try {
-      listed = await listWebNotebooks(api);
-    } catch (error) {
-      this.webError = `Could not read your notebooks from Bike4Mind web (${describeWebError(error)}).`;
-      this.deps.logger.warn(`WEB IMPORT: could not list notebooks: ${String(error)}`);
-      return;
-    }
-    // A partial list still imports, newest first; the error says why some notebooks are missing.
-    this.webError = listed.stopReason
-      ? `Synced ${listed.notebooks.length} of your Bike4Mind web notebooks; the list ${listed.stopReason}.`
-      : undefined;
-    if (listed.stopReason) this.deps.logger.warn(`WEB IMPORT: partial notebook list: ${listed.stopReason}`);
+    const reconcile =
+      this.webReconcileRequested ||
+      scope.webChangeMark === null ||
+      scope.webFullListAt === null ||
+      started - scope.webFullListAt >= WEB_RECONCILE_INTERVAL_MS;
+    this.webReconcileRequested = false;
+
+    const listed = await this.listWeb(api, scope.webChangeMark, reconcile);
+    if (!listed) return;
     if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) return;
     if (!(await this.states.readSettings()).web.enabled) return;
-    if (listed.complete) await this.pruneWebNotebooks(scope, scopeKey, new Set(listed.notebooks.map(n => n.id)), api);
+    let notebooks = listed.notebooks;
+    if (listed.kind === 'full') {
+      if (listed.complete) {
+        await this.dropWebNotebooks(scope, scopeKey, this.unlistedWebNotebooks(scope, listed.notebooks), id =>
+          webNotebookWasDeleted(api, id)
+        );
+      }
+    } else {
+      await this.dropWebNotebooks(scope, scopeKey, listed.deletedIds, async () => true);
+      notebooks = [...notebooks, ...(await this.retryFailedWebNotebooks(scope, scopeKey, api, notebooks))];
+    }
 
     const tag = importScopeTag(scopeKey);
-    const queue = listed.notebooks.filter(notebook => needsWebImport(notebook, scope.webNotebooks[notebook.id]));
+    const queue = notebooks.filter(notebook => needsWebImport(notebook, scope.webNotebooks[notebook.id]));
     const pickModel = once(this.deps.pickModel);
     let done = 0;
+    let finished = true;
     this.webProgress = { done: 0, total: queue.length };
     this.pushState();
     await runQueue(queue, IMPORT_CONCURRENCY, async notebook => {
-      if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) return;
-      if (!(await this.states.readSettings()).web.enabled) return;
+      if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) {
+        finished = false;
+        return;
+      }
+      if (!(await this.states.readSettings()).web.enabled) {
+        finished = false;
+        return;
+      }
       const previous = scope.webNotebooks[notebook.id];
       const sessionId = webSessionId(notebook.id, tag);
       try {
@@ -495,7 +526,10 @@ export class ClaudeImportService {
           this.sessionsChanged();
         }
       } catch (error) {
-        if (error instanceof ImportScopeChangedError) return;
+        if (error instanceof ImportScopeChangedError) {
+          finished = false;
+          return;
+        }
         scope.webNotebooks[notebook.id] = {
           sessionId,
           version: previous?.version ?? '',
@@ -513,23 +547,107 @@ export class ClaudeImportService {
       }
     });
 
+    // The mark moves only once every listed notebook has been dealt with: a run cut short reads the
+    // same changes again. A notebook that failed keeps its 'failed' cursor and is retried by id.
+    if (finished) {
+      if (listed.kind === 'full' && listed.complete) {
+        scope.webChangeMark = listed.latestChange;
+        scope.webFullListAt = started;
+      } else if (listed.kind === 'changes' && listed.latestChange) {
+        scope.webChangeMark = laterOf(scope.webChangeMark, listed.latestChange);
+      }
+    }
     scope.webLastSyncAt = new Date().toISOString();
     scope.webLastSyncMs = Date.now() - started;
     await this.states.saveScope(scopeKey);
   }
 
-  /** A notebook deleted on the web takes its untouched copy with it; a continued one stays. */
-  private async pruneWebNotebooks(
+  /**
+   * The change feed since `mark`, or the full list when reconciling, when there is no mark yet, or
+   * when the server has no change feed. Null when the listing failed outright; `webError` says why.
+   */
+  private async listWeb(
+    api: WebApi,
+    mark: string | null,
+    reconcile: boolean
+  ): Promise<({ kind: 'changes' } & WebNotebookChanges) | ({ kind: 'full' } & WebNotebookList) | null> {
+    try {
+      const changes = reconcile || !mark ? null : await listWebNotebookChanges(api, mark);
+      if (changes) {
+        this.webError = changes.stopReason
+          ? `Synced ${changes.notebooks.length} changed Bike4Mind web notebooks; the list ${changes.stopReason}.`
+          : undefined;
+        if (changes.stopReason) this.deps.logger.warn(`WEB IMPORT: partial change list: ${changes.stopReason}`);
+        return { kind: 'changes', ...changes };
+      }
+      const listed = await listWebNotebooks(api);
+      // A partial list still imports, newest first; the error says why some notebooks are missing.
+      this.webError = listed.stopReason
+        ? `Synced ${listed.notebooks.length} of your Bike4Mind web notebooks; the list ${listed.stopReason}.`
+        : undefined;
+      if (listed.stopReason) this.deps.logger.warn(`WEB IMPORT: partial notebook list: ${listed.stopReason}`);
+      return { kind: 'full', ...listed };
+    } catch (error) {
+      this.webError = `Could not read your notebooks from Bike4Mind web (${describeWebError(error)}).`;
+      this.deps.logger.warn(`WEB IMPORT: could not list notebooks: ${String(error)}`);
+      return null;
+    }
+  }
+
+  /** Imported notebooks a complete full list did not return: deletion candidates. */
+  private unlistedWebNotebooks(scope: ScopeImportState, listed: readonly WebNotebook[]): string[] {
+    const ids = new Set(listed.map(notebook => notebook.id));
+    return Object.keys(scope.webNotebooks).filter(id => !ids.has(id));
+  }
+
+  /**
+   * The change feed only shows a notebook again when it changes, so a read that failed is retried by
+   * id here, a few per run; a full list retries the rest. One found deleted is dropped.
+   */
+  private async retryFailedWebNotebooks(
     scope: ScopeImportState,
     scopeKey: string,
-    listed: Set<string>,
-    api: WebApi
+    api: WebApi,
+    listed: readonly WebNotebook[]
+  ): Promise<WebNotebook[]> {
+    const listedIds = new Set(listed.map(notebook => notebook.id));
+    const failed = Object.entries(scope.webNotebooks)
+      .filter(([id, cursor]) => cursor.status === 'failed' && !listedIds.has(id))
+      .slice(0, WEB_FAILED_RETRIES_PER_RUN)
+      .map(([id]) => id);
+    const retries: WebNotebook[] = [];
+    const deleted: string[] = [];
+    for (const id of failed) {
+      if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) break;
+      try {
+        const notebook = await fetchWebNotebook(api, id);
+        if (notebook === 'deleted') deleted.push(id);
+        else retries.push(notebook);
+      } catch (error) {
+        this.deps.logger.warn(`WEB IMPORT: could not re-read a failed notebook: ${describeWebError(error)}`);
+      }
+    }
+    await this.dropWebNotebooks(scope, scopeKey, deleted, async () => true);
+    return retries;
+  }
+
+  /**
+   * A notebook deleted on the web takes its untouched copy with it; a continued one stays.
+   * `confirmDeleted` vouches for each candidate: the 404 check for one a full list missed, or
+   * nothing for a tombstone the change feed returned.
+   */
+  private async dropWebNotebooks(
+    scope: ScopeImportState,
+    scopeKey: string,
+    candidates: readonly string[],
+    confirmDeleted: (id: string) => Promise<boolean>
   ): Promise<void> {
-    for (const [id, cursor] of Object.entries(scope.webNotebooks)) {
-      if (listed.has(id) || cursor.status === 'forked') continue;
+    for (const id of candidates) {
+      const cursor = scope.webNotebooks[id];
+      if (!cursor || cursor.status === 'forked') continue;
       if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) return;
       if (!(await this.states.readSettings()).web.enabled) return;
-      if (!(await webNotebookWasDeleted(api, id))) continue;
+      if (!(await confirmDeleted(id))) continue;
       if (this.disposed || this.removing || this.deps.scopeKey() !== scopeKey) return;
       if (!(await this.states.readSettings()).web.enabled) return;
       const outcome = await this.deps.deleteImported(cursor.sessionId, scopeKey);
@@ -977,6 +1095,11 @@ function pendingCursor(cursor: FileCursor): FileCursor {
     status: 'pending',
     ...(cursor.cwd ? { cwd: cursor.cwd } : {}),
   };
+}
+
+/** The later of two ISO timestamps; a mark never moves backwards. */
+function laterOf(current: string | null, next: string): string {
+  return current && Date.parse(current) > Date.parse(next) ? current : next;
 }
 
 /** One lookup per run: a sync while offline would otherwise wait out a timeout per transcript. */

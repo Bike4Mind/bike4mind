@@ -34,7 +34,7 @@ const RotatePATSchema = z.object({
   patExpiresAt: z.iso.datetime().optional(),
 });
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
       limit: 3,

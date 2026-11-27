@@ -1,6 +1,7 @@
 import {
   CALLABLE_FUNCTION_APPROVAL_MODES,
   type CallableFunctionApprovalMode,
+  type CallableFunctionReviewedInterface,
   type ICallableFunctionReviewDocument,
   type IMongoDocument,
 } from '@bike4mind/common';
@@ -17,6 +18,7 @@ const CallableFunctionReviewSchema = new Schema<ICallableFunctionReviewDocument>
     approval: { type: String, enum: CALLABLE_FUNCTION_APPROVAL_MODES, required: true, default: 'default' },
     enabled: { type: Boolean, required: true, default: true },
     reviewedAt: { type: Date, required: true },
+    reviewed: { type: Schema.Types.Mixed },
   },
   { timestamps: true, strict: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
@@ -50,12 +52,13 @@ class CallableFunctionReviewRepository extends BaseRepository<ICallableFunctionR
     userId: string;
     reviewHash: string;
     approval: CallableFunctionApprovalMode;
+    reviewed?: CallableFunctionReviewedInterface;
   }): Promise<ICallableFunctionReviewDocument> {
-    const { functionId, userId, reviewHash, approval } = review;
+    const { functionId, userId, reviewHash, approval, reviewed } = review;
     const save = () =>
       this.model.findOneAndUpdate(
         { functionId, userId },
-        { $set: { reviewHash, approval, enabled: true, reviewedAt: new Date() } },
+        { $set: { reviewHash, approval, enabled: true, reviewedAt: new Date(), ...(reviewed ? { reviewed } : {}) } },
         { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
       );
     // Two upserts racing on the unique key: the loser updates the row the winner just inserted.

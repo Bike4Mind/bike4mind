@@ -19,9 +19,16 @@ import fish4Front from '../../../assets/orchestrator/aquarium/fish-4-front.png';
 import fish4Rest from '../../../assets/orchestrator/aquarium/fish-4-rest.png';
 import fish4Sleep from '../../../assets/orchestrator/aquarium/fish-4-sleep.png';
 import fish4Pale from '../../../assets/orchestrator/aquarium/fish-4-pale.png';
+import keeperCheering from '../../../assets/orchestrator/aquarium/keeper-cheering.svg';
+import keeperIdle from '../../../assets/orchestrator/aquarium/keeper-idle.svg';
+import keeperReading from '../../../assets/orchestrator/aquarium/keeper-reading.svg';
+import keeperWalking from '../../../assets/orchestrator/aquarium/keeper-walking.svg';
+import keeperWriting from '../../../assets/orchestrator/aquarium/keeper-writing.svg';
+import type { HostPose } from '../scene/sceneDefinition';
 
 /** A fish's look per state (see the assets README): side-on swimming, nose to the glass, resting, asleep, pale. */
-export type FishPose = 'swim' | 'front' | 'rest' | 'sleep' | 'pale';
+export const FISH_POSES = ['swim', 'front', 'rest', 'sleep', 'pale'] as const;
+export type FishPose = (typeof FISH_POSES)[number];
 
 export const AQUARIUM_BACKDROP: string = backdrop;
 
@@ -32,31 +39,18 @@ const SHEETS: readonly Record<FishPose, string>[] = [
   { swim: fish4Swim, front: fish4Front, rest: fish4Rest, sleep: fish4Sleep, pale: fish4Pale },
 ];
 
-/** How many distinct fish the art gives before tinting: four sheets, each in four hues. */
+/** Four drawings, each in four hues: sixteen fish before any two in a tank look alike. */
 const HUES = [0, 70, 150, 220] as const;
-export const FISH_LOOKS = SHEETS.length * HUES.length;
 
-export interface FishLook {
-  sheet: number;
-  /** Degrees for a CSS hue-rotate; 0 for the sheet as drawn. */
-  hue: number;
-}
+export const FISH_CAST: readonly { look: string; hue: number; sprites: Record<FishPose, string> }[] = HUES.flatMap(
+  hue => SHEETS.map((sprites, index) => ({ look: `fish-${index + 1}${hue ? `-hue-${hue}` : ''}`, hue, sprites }))
+);
 
-/** A small stable hash, so an agent keeps its fish as the roster around it changes. */
-export function idHash(id: string): number {
-  let hash = 2166136261;
-  for (let index = 0; index < id.length; index++) {
-    hash ^= id.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-export function fishLook(id: string): FishLook {
-  const look = idHash(id) % FISH_LOOKS;
-  return { sheet: look % SHEETS.length, hue: HUES[Math.floor(look / SHEETS.length)] };
-}
-
-export function fishSprite(look: FishLook, pose: FishPose): string {
-  return SHEETS[look.sheet][pose];
-}
+/** The Keeper, the tank's octopus host (drawn by scripts/orchestrator-art/keeper.mjs). */
+export const KEEPER_ART: Record<HostPose, string> = {
+  idle: keeperIdle,
+  writing: keeperWriting,
+  reading: keeperReading,
+  walking: keeperWalking,
+  cheering: keeperCheering,
+};

@@ -6,6 +6,17 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { WebClient } from '@slack/web-api';
 
 vi.mock('sst', () => ({ Resource: {} }));
+vi.mock('@server/slack/resolveSlackInstallation', () => ({ resolveSlackInstallation: vi.fn() }));
+const testSlackInstallation = {
+  ok: true as const,
+  installation: {
+    kind: 'dev' as const,
+    signingSecret: 'secret',
+    botToken: 'xoxb-test',
+    workspace: { id: 'workspace-1', name: 'Test workspace' } as never,
+    workspaceWithCreds: { id: 'workspace-1', name: 'Test workspace', slackBotName: 'test-bot' } as never,
+  },
+};
 vi.mock('@bike4mind/server-utils/integrations/slack/slackPackageInit', () => ({ initializeSlackPackage: vi.fn() }));
 vi.mock('@bike4mind/server-utils/utils/config', () => ({
   Config: { MONGODB_URI: 'mongodb://test', STAGE: 'test' },
@@ -40,10 +51,6 @@ vi.mock('@bike4mind/database', async () => {
     Session: { findOne: vi.fn() },
   };
 });
-vi.mock('@bike4mind/database/infra', async () => {
-  const actual = await vi.importActual<typeof import('@bike4mind/database/infra')>('@bike4mind/database/infra');
-  return { ...actual, SlackDevWorkspace: { findOne: vi.fn() } };
-});
 vi.mock('@bike4mind/slack', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/slack')>('@bike4mind/slack');
   class StubResource {
@@ -58,7 +65,7 @@ vi.mock('@bike4mind/slack', async () => {
 });
 
 import { User, Quest, Session } from '@bike4mind/database';
-import { SlackDevWorkspace } from '@bike4mind/database/infra';
+import { resolveSlackInstallation } from '@server/slack/resolveSlackInstallation';
 import {
   cancelPendingActionOnQuest,
   claimPendingAction,
@@ -127,15 +134,7 @@ describe('POST /api/slack/interactive confirmation buttons', () => {
     vi.spyOn(WebClient.prototype, 'apiCall').mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
     vi.mocked(User.findOne).mockResolvedValue({ id: 'user-1' } as never);
-    vi.mocked(SlackDevWorkspace.findOne).mockReturnValue({
-      select: () =>
-        Promise.resolve({
-          id: 'workspace-1',
-          name: 'Test workspace',
-          slackOAuthSigningSecret: 'secret',
-          slackBotToken: 'encrypted',
-        }),
-    } as never);
+    vi.mocked(resolveSlackInstallation).mockResolvedValue(testSlackInstallation);
     vi.mocked(executePendingAction).mockResolvedValue({ success: true, message: 'Created' });
     vi.mocked(cancelPendingActionOnQuest).mockResolvedValue({ success: true, message: 'Cancelled' });
     vi.mocked(isPendingActionRequester).mockResolvedValue(true);
@@ -405,10 +404,7 @@ describe('POST /api/slack/interactive on a message posted through the API', () =
     vi.spyOn(WebClient.prototype, 'apiCall').mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
     vi.mocked(User.findOne).mockResolvedValue({ id: 'user-1' } as never);
-    vi.mocked(SlackDevWorkspace.findOne).mockReturnValue({
-      select: () =>
-        Promise.resolve({ id: 'workspace-1', name: 'Test', slackOAuthSigningSecret: 'secret', slackBotToken: 'e' }),
-    } as never);
+    vi.mocked(resolveSlackInstallation).mockResolvedValue(testSlackInstallation);
     vi.mocked(executePendingAction).mockResolvedValue({ success: true, message: 'Created' });
     vi.mocked(isPendingActionRequester).mockResolvedValue(true);
     vi.mocked(isFeatureEnabled).mockResolvedValue(true);
@@ -458,10 +454,7 @@ describe('POST /api/slack/interactive set_default_notebook', () => {
     vi.spyOn(WebClient.prototype, 'apiCall').mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
     vi.mocked(User.findOne).mockResolvedValue({ id: 'user-1', slackSettings: {} } as never);
-    vi.mocked(SlackDevWorkspace.findOne).mockReturnValue({
-      select: () =>
-        Promise.resolve({ id: 'workspace-1', name: 'Test', slackOAuthSigningSecret: 'secret', slackBotToken: 'e' }),
-    } as never);
+    vi.mocked(resolveSlackInstallation).mockResolvedValue(testSlackInstallation);
     (User as unknown as { findByIdAndUpdate?: unknown }).findByIdAndUpdate = vi.fn();
   });
 
@@ -505,9 +498,7 @@ describe('POST /api/slack/interactive image model picker', () => {
     vi.clearAllMocks();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
     vi.mocked(User.findOne).mockResolvedValue({ id: 'user-1' } as never);
-    vi.mocked(SlackDevWorkspace.findOne).mockReturnValue({
-      select: () => Promise.resolve({ id: 'workspace-1', slackOAuthSigningSecret: 'secret', slackBotToken: 'enc' }),
-    } as never);
+    vi.mocked(resolveSlackInstallation).mockResolvedValue(testSlackInstallation);
     vi.mocked(Quest.findById).mockResolvedValue({
       pendingAction: {
         tool: 'image_generation',

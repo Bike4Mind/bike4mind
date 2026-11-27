@@ -2,6 +2,7 @@ import {
   adminRotateApiKeyResponseSchema,
   ApiKeyScope,
   ApiKeyStatus,
+  assertFullAdmin,
   ConflictError,
   ForbiddenError,
   type IUserApiKeyDocument,
@@ -21,6 +22,7 @@ import {
   readApiKeyIdParam,
 } from '@server/utils/adminApiKeyActions';
 import { respond } from '@server/utils/respond';
+import { isAdminProvisionedApiKeyScope } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
 
 /**
  * POST /api/admin/user-api-keys/[id]/rotate  { reason }
@@ -56,6 +58,10 @@ const handler = adminApi({ auth: 'jwtOnly', adminPermissions: { POST: 'keys:revo
 
     const key = await loadApiKeyOrThrow(keyId);
     await assertCanActOnKeyOwner(req.user, key.userId, 'rotate API keys of');
+    // Matches the mint route: a secret for an admin-provisioned scope is only ever issued to a full admin.
+    if (key.scopes?.some(isAdminProvisionedApiKeyScope)) {
+      assertFullAdmin(req.user, 'rotate API keys with admin-provisioned scopes');
+    }
     assertRotatable(key);
 
     const target = await ownerAuditTarget(key.userId);

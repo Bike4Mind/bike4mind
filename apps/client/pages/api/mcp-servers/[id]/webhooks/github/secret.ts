@@ -14,7 +14,7 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
 
 const logger = new Logger({ metadata: { service: 'github-webhook-config' } });
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   /**
    * PATCH - Regenerate webhook secret
    *

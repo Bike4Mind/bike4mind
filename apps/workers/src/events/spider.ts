@@ -263,7 +263,7 @@ export async function processSession(
   eventPublisher?: RateLimitedEventPublisher
 ): Promise<SessionGroomingResult> {
   if (!session.id) {
-    deps.logger.error(`Session missing id field, skipping. Session name: ${session.name || 'Unknown'}`);
+    deps.logger.error('Session missing id field, skipping');
     return {
       sessionId: 'unknown',
       sessionName: session.name || 'Unknown',
@@ -316,7 +316,7 @@ export async function processSession(
         });
       } else {
         await deps.publishCuration(payload);
-        deps.logger.info(`Triggered curation for session ${session.id} (${session.name})`);
+        deps.logger.info(`Triggered curation for session ${session.id}`);
       }
     }
 
@@ -337,7 +337,7 @@ export async function processSession(
         });
       } else {
         await deps.publishSummarize(payload);
-        deps.logger.info(`Triggered summarization for session ${session.id} (${session.name})`);
+        deps.logger.info(`Triggered summarization for session ${session.id}`);
       }
     }
 
@@ -357,7 +357,7 @@ export async function processSession(
         });
       } else {
         await deps.publishTag(payload);
-        deps.logger.info(`Triggered tagging for session ${session.id} (${session.name})`);
+        deps.logger.info(`Triggered tagging for session ${session.id}`);
       }
     }
 
@@ -371,7 +371,7 @@ export async function processSession(
       );
       result.messagesEmbedded = embeddedCount;
       if (embeddedCount > 0) {
-        deps.logger.info(`Generated ${embeddedCount} embeddings for session ${session.id} (${session.name})`);
+        deps.logger.info(`Generated ${embeddedCount} embeddings for session ${session.id}`);
       }
     }
 
@@ -622,7 +622,7 @@ export const handler = withEventContext(async (event, logger) => {
         wouldEmbed: stats.messagesEmbedded,
         wouldSkip: stats.skipped,
         sampleResults: results.slice(0, 10).map(r => ({
-          name: r.sessionName,
+          sessionId: r.sessionId,
           operations: r.operations,
           skipped: r.skipped,
         })),

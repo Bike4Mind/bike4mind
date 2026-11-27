@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { globFilesTool } from './index';
 import { mkdtemp, writeFile, mkdir, rm } from 'fs/promises';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { tmpdir } from 'os';
 
 describe('globFiles', () => {
@@ -41,5 +41,38 @@ describe('globFiles', () => {
   it('rejects a pattern that climbs out with ..', async () => {
     const tool = globFilesTool.implementation(mockContext);
     await expect(tool.toolFn({ pattern: '../**/*' })).rejects.toThrow('Access denied');
+  });
+
+  describe('brace expansion', () => {
+    let outsideDir: string;
+
+    beforeAll(async () => {
+      outsideDir = await mkdtemp(join(tmpdir(), 'glob-outside-'));
+      await writeFile(join(outsideDir, 'secret-name.txt'), 'x');
+    });
+
+    afterAll(async () => {
+      await rm(outsideDir, { recursive: true, force: true });
+    });
+
+    it('still expands braces inside the directory', async () => {
+      const tool = globFilesTool.implementation(mockContext);
+      const result = await tool.toolFn({ pattern: 'src/{a,b}.ts' });
+      expect(result).toContain('a.ts');
+      expect(result).toContain('b.ts');
+    });
+
+    it('drops matches a brace-wrapped parent segment expands to outside the directory', async () => {
+      const tool = globFilesTool.implementation(mockContext);
+      const result = await tool.toolFn({ pattern: `{..,src}/${basename(outsideDir)}/*.txt` });
+      expect(result).not.toContain('secret-name');
+    });
+
+    it('drops matches a brace-wrapped absolute segment expands to', async () => {
+      const tool = globFilesTool.implementation(mockContext);
+      const result = await tool.toolFn({ pattern: `{${outsideDir},src}/*.txt` });
+      expect(result).not.toContain('secret-name');
+      expect(result).toContain('1 match(es) outside the allowed directories were skipped');
+    });
   });
 });

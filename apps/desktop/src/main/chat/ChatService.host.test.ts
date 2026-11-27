@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { AuthenticatedApiClient } from '@bike4mind/client-auth';
 import type { ChatSessionSummary, ChatStreamEvent } from '@shared/chat';
+import { formatSessionMention } from '@shared/sessionMention';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatService } from './ChatService';
 import { SessionStore } from './SessionStore';
@@ -186,6 +187,26 @@ describe('ChatService app-control tools', () => {
     const listing = settled('session_list')[0]?.preview ?? '';
     expect(listing).toContain(mine.id);
     expect(listing).not.toContain(theirs.id);
+  });
+
+  it('lists another project with no reply excerpt until the user mentions that conversation', async () => {
+    const mine = await codeSession(projectA);
+    const theirs = await codeSession(projectB);
+    const at = new Date().toISOString();
+    await store.appendMessage(theirs.id, { id: 'r1', role: 'assistant', content: 'private reply', createdAt: at });
+
+    await service.send(mine.id, 'list everything');
+    callTool(await awaitStreamOf('list everything'), 'c1', 'session_list', { scope: 'all' });
+    await vi.waitUntil(() => settled('session_list').length === 1, { timeout: 5000, interval: 5 });
+    expect(settled('session_list')[0]?.preview).toContain(theirs.id);
+    expect(settled('session_list')[0]?.preview).not.toContain('private reply');
+
+    const told = await codeSession(projectA);
+    const prompt = `what did ${formatSessionMention(theirs.id, theirs.title)} say?`;
+    await service.send(told.id, prompt);
+    callTool(await awaitStreamOf(prompt), 'c2', 'session_list', { scope: 'all' });
+    await vi.waitUntil(() => settled('session_list').length === 2, { timeout: 5000, interval: 5 });
+    expect(settled('session_list')[1]?.preview).toContain('private reply');
   });
 
   it('refuses to delete a conversation belonging to another project', async () => {

@@ -1,5 +1,6 @@
 import {
   ApiKeyScope,
+  assertFullAdmin,
   ForbiddenError,
   MethodNotAllowedError,
   hasAdminPermission,
@@ -16,6 +17,8 @@ type AdminApiOptions = Omit<BaseApiOptions, 'auth' | 'allowedMethods'> & {
   auth?: true | 'jwtOnly';
   /** A list admits any one of its permissions, so a write permission can also open its own page's reads. */
   adminPermissions: Partial<Record<AdminMethod, AdminPermissionRequirement>>;
+  /** Methods that also need full admin: the declared permission opens the page, never the action. */
+  fullAdminMethods?: readonly AdminMethod[];
 };
 type PermissionRequest = {
   user?: Parameters<typeof hasAdminPermission>[0];
@@ -35,7 +38,7 @@ export function requireAdminPermission(req: PermissionRequest, requirement: Admi
 }
 
 export function adminApi<Req extends Request = Request, Res extends Response = Response>(options: AdminApiOptions) {
-  const { adminPermissions, ...baseOptions } = options;
+  const { adminPermissions, fullAdminMethods = [], ...baseOptions } = options;
   const methods = Object.keys(adminPermissions);
   if (methods.length === 0) throw new Error('Admin routes must declare at least one permission');
   if (Object.values(adminPermissions).some(requirement => requirement?.length === 0)) {
@@ -47,6 +50,7 @@ export function adminApi<Req extends Request = Request, Res extends Response = R
     const requirement = adminPermissions[method as AdminMethod];
     if (!requirement) throw new MethodNotAllowedError('Admin route has no permission declared for this method');
     requireAdminPermission(req, requirement);
+    if (fullAdminMethods.includes(method as AdminMethod)) assertFullAdmin(req.user, 'perform this action');
     next();
   });
 }

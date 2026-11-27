@@ -72,4 +72,21 @@ describe('GET /api/agent-executions/[id]', () => {
 
     expect(res._getJSONData().error).toBeNull();
   });
+
+  it.each([true, false])('builds the child snapshots for a viewer whose isOwner is %s', async isOwner => {
+    mockLoadTrace.mockResolvedValue({
+      status: 'completed',
+      answer: 'done',
+      error: null,
+      steps: [],
+      totalIterations: 1,
+      isOwner,
+    });
+    const { req, res } = get('exec1');
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (handler as any)(req, res);
+
+    expect(mockChildren).toHaveBeenCalledWith('exec1', { isOwner });
+  });
 });

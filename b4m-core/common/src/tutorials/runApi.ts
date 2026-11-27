@@ -1,4 +1,4 @@
-import type { TutorialProgressEntry, TutorialStatus, TutorialStep } from './tutorial';
+import type { TutorialProgressEntry, TutorialStatus, TutorialStep, TutorialTrack } from './tutorial';
 
 export type TutorialRunRequest =
   | { action: 'progress' }
@@ -29,6 +29,8 @@ export interface TutorialRunModule {
   steps: readonly TutorialStep[];
   canvasSolve?: { nodeId: string; turn: number };
   created?: boolean;
+  /** The picker group; absent on a host that does not group its modules. */
+  track?: TutorialTrack;
 }
 
 /** A recorded quest the advance action inserted. */

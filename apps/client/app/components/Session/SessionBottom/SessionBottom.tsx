@@ -100,6 +100,7 @@ import { useAffordableModelOffer } from '../useAffordableModelOffer';
 import { estimateNextInputTokens } from '@client/app/utils/creditEstimate';
 import { FirstRunEvents } from '@bike4mind/common';
 import { useLogEvent } from '@client/app/hooks/data/analytics';
+import { useTutorialPicker } from '@client/app/components/tutorial/core/tutorialPickerStore';
 
 type Props = {
   /**
@@ -241,6 +242,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // Out of credits replaces the message box outright (see CreditsWarning); the low-credits
   // notice sits above it without blocking typing.
   const lowCreditsThreshold = useLowCreditsThreshold();
+  const tutorialWalk = useTutorialPicker(s => s.walkOnScreen);
   const creditUi = getComposerCreditUi({
     enforceCredits,
     effectiveCredits,
@@ -248,6 +250,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     hasModels,
     lowWarningDismissed: lowCreditsWarningDismissed,
     lowThreshold: lowCreditsThreshold,
+    tutorialWalk,
   });
 
   // FilePond expects the max file size as an MB string, e.g. '100MB'

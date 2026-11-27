@@ -31,6 +31,7 @@ import {
   type PermissionScope,
   type PermissionsState,
 } from '@shared/permissions';
+import { hostChat } from '../host/hostChat';
 import { ChevronIcon } from './icons';
 import { thinScrollbarSx } from './layout';
 
@@ -265,7 +266,7 @@ export function PermissionsSettings({
   }, []);
 
   useEffect(() => {
-    window.b4m.chat
+    hostChat
       .listRecentFolders()
       .then(setFolders)
       .catch(() => undefined);

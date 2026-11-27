@@ -26,6 +26,9 @@ private final class LockedKeychainStore: TokenStore, @unchecked Sendable {
   func setRefreshToken(_ token: String?) throws {
     lock.withLock { self.token = token }
   }
+
+  func pendingRevocations() throws -> [PendingRevocation] { [] }
+  func setPendingRevocations(_ revocations: [PendingRevocation]) throws {}
 }
 
 @MainActor

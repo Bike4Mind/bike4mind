@@ -13,6 +13,8 @@ import { adminActionCountsQueryKey, useAdminActionCounts } from '@client/app/hoo
 import { HelpPanel } from '../help';
 import EnvironmentBanner from './AdminEnvironmentBanner';
 import { SidebarNav } from './AdminSidebarNav';
+import { useAdminPageUsage } from './Dashboard/adminPageVisits';
+import { pinnedSidebarSection } from './Dashboard/dashboardNav';
 import { canOpenContributedAdminPage, withContributedPages, type ContributedAdminPage } from './adminContributedPages';
 import { isAdminExtPath } from './adminExtPath';
 import { AdminTab, SIDEBAR_SECTIONS } from './adminSidebarConfig';
@@ -95,11 +97,16 @@ export const AdminLayout = ({
   // A contributed page and the QA pages are no tab, so none is highlighted while one is open.
   const onContributedPage = isAdminExtPath(pathname);
   const activeTab = onContributedPage || isAdminQaPath(pathname) ? null : (detailPageTab ?? storedActiveTab);
-  const sections = useMemo(() => withContributedPages(SIDEBAR_SECTIONS, adminPages), [adminPages]);
   const canOpenPage = useCallback(() => canOpenContributedAdminPage(currentUser), [currentUser]);
 
   // A detail page belongs to its tab, so a delegate who cannot open that tab cannot open the page.
   const canOpenTab = useCallback((tab: AdminTab) => canOpenAdminTab(currentUser, tab), [currentUser]);
+  const pins = useAdminPageUsage(currentUser?.id).pins;
+  const sections = useMemo(() => {
+    const pinned = pinnedSidebarSection(pins, canOpenTab);
+    const withPages = withContributedPages(SIDEBAR_SECTIONS, adminPages);
+    return pinned ? [pinned, ...withPages] : withPages;
+  }, [adminPages, pins, canOpenTab]);
   const deniedTabOf = (path: string) => {
     const tab = detailPageTabFor(path);
     return tab !== undefined && !canOpenTab(tab) ? tab : undefined;

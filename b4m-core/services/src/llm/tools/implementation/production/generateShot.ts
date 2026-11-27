@@ -5,6 +5,7 @@ import {
   VIDEO_MODEL_CATALOG,
   productImageReferenceFileIds,
   productReferenceFileIds,
+  shotCharacters,
   type StudioShot,
 } from '@bike4mind/common';
 import { IMAGE_JOB_BATCH_MAX } from '../../../../imageJobs/types';
@@ -58,7 +59,8 @@ type GenerateShotArgs = z.infer<typeof schema>;
 
 const description =
   'Make the takes and clips for the shots of a Studio production. For each shot without a chosen take it starts ' +
-  'image jobs from the shot prompt with the product images as references (with none, it first makes one product ' +
+  "image jobs from the shot prompt with the product images, then the shot's saved characters, as references (with " +
+  'no product image, it first makes one product ' +
   'look from the brief and saves it to the brand kit), picks the first finished take, then ' +
   'animates it into a video clip. Waits for the jobs; if some are still running when it returns, call it again with ' +
   'the same arguments to keep waiting (nothing is started twice). Then call production_add_audio.';
@@ -71,6 +73,8 @@ type ShotReport = {
   clipFileId?: string;
   pending?: string[];
   problem?: string;
+  /** Characters the shot features left out of the references: image over the model's cap, or not usable as one. */
+  charactersDropped?: { names: string[]; model?: string };
 };
 
 const patchShot = (shots: StudioShot[], id: string, patch: (shot: StudioShot) => StudioShot): StudioShot[] =>
@@ -137,7 +141,8 @@ async function makeTakes(
   if (toShoot.length === 0) return { shots: [...shots] };
 
   const composition = await config.compositions.get(compositionId);
-  const states = await config.referenceImages(productReferenceFileIds(composition));
+  const characterFileIds = composition.brandKit.characters.map(character => character.fileId);
+  const states = await config.referenceImages([...productReferenceFileIds(composition), ...characterFileIds]);
   let references = productImageReferenceFileIds(composition, states);
   let referencesChecking = references.some(id => states.get(id) === 'checking');
   let look: ProductLook | undefined;
@@ -153,14 +158,33 @@ async function makeTakes(
   }
   const aspectRatio = primaryAspectRatio(composition);
   const started = new Map<string, string[]>();
+  const dropped = new Map<string, NonNullable<ShotReport['charactersDropped']>>();
   for (const shot of toShoot) {
     const prompt = buildShotImagePrompt(shot.prompt as string, composition.brandKit.colors, references.length > 0);
+    const featured = shotCharacters(shot, composition.brandKit.characters);
+    const characters = featured.filter(character => states.has(character.fileId));
+    const unusable = featured.filter(character => !states.has(character.fileId)).map(character => character.name);
+    if (unusable.length > 0) dropped.set(shot.id, { names: unusable });
     const submitted = await submitShotImages(
       context,
       config,
-      { prompt, references, referencesChecking, aspectRatio, compositionId, shotId: shot.id },
+      {
+        prompt,
+        references,
+        characters,
+        referencesChecking: referencesChecking || characters.some(c => states.get(c.fileId) === 'checking'),
+        aspectRatio,
+        compositionId,
+        shotId: shot.id,
+      },
       takes
     );
+    if (submitted.ok && submitted.charactersDropped) {
+      dropped.set(shot.id, {
+        names: [...(dropped.get(shot.id)?.names ?? []), ...submitted.charactersDropped],
+        model: submitted.model,
+      });
+    }
     if (submitted.ok) started.set(shot.id, submitted.jobIds);
     else if (submitted.notReady) reports.set(shot.id, { id: shot.id, pending: [`takes: ${submitted.message}`] });
     else reports.set(shot.id, { id: shot.id, problem: submitted.message });
@@ -181,10 +205,12 @@ async function makeTakes(
   for (const [shotId, jobIds] of started) {
     const pending = unfinished(jobIds, jobs);
     const failed = succeededFiles(jobIds, jobs).length === 0 ? failures(jobIds, jobs) : '';
+    const charactersDropped = dropped.get(shotId);
     reports.set(shotId, {
       id: shotId,
       ...(pending.length > 0 && { pending }),
       ...(failed && { problem: `takes failed: ${failed}` }),
+      ...(charactersDropped && { charactersDropped }),
     });
   }
   return {
@@ -300,6 +326,7 @@ export const productionGenerateShotTool: ToolDefinition = {
               ...(shot.clipFileId && { clipFileId: shot.clipFileId }),
             }));
           const stillRunning = summary.some(shot => shot.pending && shot.pending.length > 0);
+          const anyDropped = summary.some(shot => shot.charactersDropped);
           return JSON.stringify({
             shots: summary,
             ...(taken.productLook && { productLook: taken.productLook }),
@@ -307,6 +334,12 @@ export const productionGenerateShotTool: ToolDefinition = {
             next: stillRunning
               ? 'Some jobs are still running: call production_generate_shot again with the same arguments to wait for them.'
               : 'Call production_add_audio, then production_assemble.',
+            ...(anyDropped && {
+              charactersNote:
+                'Some shots name charactersDropped: the image model has too few reference slots, or the character image ' +
+                'cannot be used as a reference (format or ownership), so they were drawn from the prompt alone. ' +
+                'Tell the user which shots.',
+            }),
           });
         } catch (error) {
           return describeProductionError(error, context.logger, 'production_generate_shot');

@@ -1,4 +1,4 @@
-import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
+import { slackIdentityFilter } from '@bike4mind/common';
 import { initializeSlackPackage } from '@bike4mind/server-utils/integrations/slack/slackPackageInit';
 initializeSlackPackage();
 
@@ -12,13 +12,13 @@ import { Quest } from '@bike4mind/database/content';
 import { McpServer } from '@bike4mind/database/ai';
 import { isPlaceholderValue, ISlackDevWorkspaceDocument, McpServerName, SlackEvents } from '@bike4mind/common';
 import { InternalServerError, NotFoundError, UnauthorizedError } from '@bike4mind/utils';
-import { slackDevWorkspaceRepository } from '@bike4mind/database';
-import { orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
+import { resolveSlackInstallation } from '@server/slack/resolveSlackInstallation';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Request } from 'express';
 import {
   AGENT_REGISTRY,
   buildSystemPrompt,
+  buildUntrustedSlackHistory,
   handleUnlinkedUser,
   createMockUser,
   determineThreadStrategy,
@@ -55,7 +55,6 @@ import { runDataLakeSlackCommand, formatBareDataLakeMentionHint } from '@server/
 import { buildSlackLakeIngestDeps } from '@server/slack/dataLakeIngestDeps';
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { slackChannelConfigRepository } from '@bike4mind/database';
-import { decryptToken } from '@bike4mind/server-utils/security/tokenEncryption';
 import { getGeneratedImageStorage } from '@bike4mind/server-utils/utils/storage/index';
 import { buildPendingActionButtons } from '@bike4mind/server-utils/integrations/slack/pendingActionButtons';
 import { getClientIp } from '@bike4mind/server-utils/utils/ip';
@@ -182,64 +181,33 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     req
   );
 
-  let signingSecret: string | undefined;
-  let slackBotToken: string | undefined;
   let botType: string;
   let workspace: ISlackDevWorkspaceDocument | null = null;
   let workspaceWithCreds: ISlackDevWorkspaceDocument | null = null;
   let orgWorkspaceId: string | undefined;
   let orgWorkspaceName: string | undefined;
 
-  // Fetch Slack App credentials
-  if (apiAppId && teamId) {
-    workspace = await slackDevWorkspaceRepository.findBySlackAppIdAndTeamId(apiAppId, teamId);
-    if (workspace) {
-      workspaceWithCreds = await slackDevWorkspaceRepository.findByIdWithCredentials(workspace.id);
-      if (!workspaceWithCreds) {
-        throw new Error('Failed to load workspace credentials');
-      }
-
-      signingSecret = workspaceWithCreds.slackOAuthSigningSecret;
-      slackBotToken = decryptToken(workspaceWithCreds.slackBotToken) ?? '';
-      botType = 'dev-oauth';
-      logger.debug('✅ [MULTI-WORKSPACE] Using OAuth workspace token', {
-        workspaceName: workspaceWithCreds.name,
-        teamId: workspaceWithCreds.slackTeamId,
-        botName: workspaceWithCreds.slackBotName,
-      });
-    } else {
-      // Fallback: check org-level Slack workspaces
-      const orgWorkspace = await orgSlackWorkspaceRepository.findBySlackTeamIdWithToken(teamId);
-      if (orgWorkspace) {
-        if (!orgWorkspace.slackBotToken) {
-          logger.error('[ORG-WORKSPACE] Org workspace found but bot token is missing', {
-            teamId: orgWorkspace.slackTeamId,
-            organizationId: orgWorkspace.organizationId,
-          });
-          throw new InternalServerError('Org workspace bot token not configured');
-        }
-
-        // Get signing secret from the system app (shared across all installs)
-        const appWorkspace = await slackDevWorkspaceRepository.findBySlackAppId(apiAppId);
-        if (!appWorkspace) {
-          throw new Error('System Slack app not found for signing secret');
-        }
-
-        signingSecret = appWorkspace.slackOAuthSigningSecret;
-        slackBotToken = decryptToken(orgWorkspace.slackBotToken) ?? '';
-        botType = 'org-oauth';
-        orgWorkspaceId = orgWorkspace.id;
-        orgWorkspaceName = orgWorkspace.slackTeamName || orgWorkspace.slackTeamId;
-        logger.debug('✅ [ORG-WORKSPACE] Using org workspace token', {
-          teamId: orgWorkspace.slackTeamId,
-          organizationId: orgWorkspace.organizationId,
-        });
-      } else {
-        throw new NotFoundError(`Workspace not found for app ${apiAppId} and team ${teamId}`);
-      }
+  const resolved = await resolveSlackInstallation(apiAppId, teamId);
+  if (!resolved.ok) {
+    if (resolved.reason === 'bot_token_missing') {
+      logger.error('[ORG-WORKSPACE] Org workspace found but bot token is missing', { teamId });
+      throw new InternalServerError('Org workspace bot token not configured');
     }
+    if (resolved.reason === 'credentials_missing') throw new Error('Failed to load workspace credentials');
+    throw new NotFoundError(`Workspace not found for app ${apiAppId} and team ${teamId}`);
+  }
+
+  const installation = resolved.installation;
+  const signingSecret = installation.signingSecret;
+  const slackBotToken: string | undefined = installation.botToken;
+  if (installation.kind === 'dev') {
+    workspace = installation.workspace;
+    workspaceWithCreds = installation.workspaceWithCreds;
+    botType = 'dev-oauth';
   } else {
-    throw new NotFoundError(`Missing app_id or team_id: appId=${apiAppId}, teamId=${teamId}`);
+    botType = 'org-oauth';
+    orgWorkspaceId = installation.orgWorkspace.id;
+    orgWorkspaceName = installation.orgWorkspace.slackTeamName || installation.orgWorkspace.slackTeamId;
   }
 
   logger.debug('🤖 Slack bot detected:', {
@@ -348,10 +316,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       // let Slack show cached view, then update directly to new content.
 
       // Look up B4M user by Slack ID
-      const b4mUser = await User.findOne({
-        'slackSettings.slackUserId': slackUserId,
-        ...VERIFIED_SLACK_IDENTITY_FILTER,
-      });
+      const b4mUser = await User.findOne(slackIdentityFilter(slackUserId, teamId));
 
       // Update audit context with B4M user ID if found
       if (b4mUser) {
@@ -554,7 +519,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     };
 
     // Create handler and process
-    const workflowStepHandler = new WorkflowStepHandler(slackClient, logger);
+    const workflowStepHandler = new WorkflowStepHandler(slackClient, logger, teamId);
 
     // Process the function execution and wait for completion
     // Note: function_executed events have longer timeout allowance from Slack
@@ -658,7 +623,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   }
 
   // Find user by Slack ID using SlackEvent helper
-  let user = await slackEvent.getInternalUser();
+  let user = await slackEvent.getInternalUser(teamId);
 
   // TEMPORARY: If database lookup fails, create a mock user for testing
   if (!user) {
@@ -908,12 +873,15 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         }
       : undefined,
     channelMessages: contextMessages as Array<{ bot_id?: string; user?: string; text?: string }>,
-    getUserName: (userId: string) => slackClient.getUserName(userId),
     user,
     slackUserId: slackEvent.user,
     channelId: slackEvent.channel,
     logger,
   });
+  const untrustedHistory = await buildUntrustedSlackHistory(
+    contextMessages as Array<{ bot_id?: string; user?: string; text?: string }>,
+    (userId: string) => slackClient.getUserName(userId)
+  );
   req.logger.info('Slack system prompt built', { systemPromptLength: systemPrompt.length });
 
   // Build command with file metadata context for upload tools
@@ -956,7 +924,8 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     fabFileIds,
     slackNotificationData, // Pass to store on Quest immediately after creation
     false, // Return early for large tables - Quest Processor handles response
-    pendingActionTools // Cancel tool when a pending action exists
+    pendingActionTools, // Cancel tool when a pending action exists
+    untrustedHistory
   );
 
   // Replace thinking message with AI response

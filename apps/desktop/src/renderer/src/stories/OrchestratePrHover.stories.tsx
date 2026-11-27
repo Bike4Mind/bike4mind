@@ -1,4 +1,5 @@
 import Box from '@mui/joy/Box';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 import { assignPersonas } from '@shared/agentPersona';
 import type { PrBarSnapshot, PrBarState, PrSummary } from '@shared/pullRequest';
 import type { OrchestratorViewId } from '../chat/orchestrator/orchestratorViews';
@@ -87,10 +88,9 @@ function stubMonitor() {
       onStateChanged: () => () => undefined,
     },
     shell: { openExternal: async () => undefined },
+    host: chatBackedHostBridge(),
     chat: {
       getSession: async () => null,
-      onStreamEvent: () => () => undefined,
-      onQueueChanged: () => () => undefined,
     },
   };
 }

@@ -22,9 +22,34 @@ describe('git host overrides', () => {
   });
 
   it('prefixes the config overrides on every call, running git from its resolved path', async () => {
-    await git('/repo', ['status', '--porcelain']);
+    await git('/repo', ['rev-parse', 'HEAD']);
     expect(execFile.mock.calls[0][0]).toBe('C:\\Git\\cmd\\git.exe');
-    expect(execFile.mock.calls[0][1]).toEqual([...HOST_GIT_CONFIG_ARGS, 'status', '--porcelain']);
+    expect(execFile.mock.calls[0][1]).toEqual([...HOST_GIT_CONFIG_ARGS, 'rev-parse', 'HEAD']);
+  });
+
+  it('pins the drivers the repository sets before a call that reads work-tree files', async () => {
+    execFile.mockImplementation((_cmd, args, _opts, cb) =>
+      args[0] === 'config' ? cb(null, 'local\0filter.x.clean\ntouch marker\0') : cb(null, { stdout: '', stderr: '' })
+    );
+    await git('/repo', ['status', '--porcelain']);
+    expect(execFile.mock.calls.map(([, args]) => args[0])).toEqual(['config', '-c']);
+    expect(execFile.mock.calls[1][1]).toEqual([
+      ...HOST_GIT_CONFIG_ARGS,
+      '-c',
+      'filter.x.clean=',
+      'status',
+      '--porcelain',
+    ]);
+  });
+
+  it('refuses a branch switch, without running it, while a filter only the repository sets is emptied', async () => {
+    execFile.mockImplementation((_cmd, args, _opts, cb) =>
+      args[0] === 'config' ? cb(null, 'local\0filter.x.smudge\ntouch marker\0') : cb(null, { stdout: '', stderr: '' })
+    );
+    await expect(git('/repo-filter', ['switch', '--quiet', 'main'])).rejects.toThrow(
+      expect.objectContaining({ name: 'GitError', message: expect.stringContaining('file filter') })
+    );
+    expect(execFile.mock.calls.map(([, args]) => args[0])).toEqual(['config']);
   });
 
   it('adds the network overrides to fetch', async () => {

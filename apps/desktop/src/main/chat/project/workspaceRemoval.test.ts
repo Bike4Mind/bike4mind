@@ -622,10 +622,13 @@ describe('session deletion integration', () => {
       const running = await nestedWorktree('running');
       const inFlight = vi.spyOn(service as unknown as { hasTurnInFlight(id: string): boolean }, 'hasTurnInFlight');
       inFlight.mockImplementation(id => id === running.id);
-      const result = await service.deleteSessionTree(session.id, [listed.id, unlisted.id, running.id], true, [
-        listed.id,
-        running.id,
-      ]);
+      const result = await service.deleteSessionTree(
+        session.id,
+        [listed.id, unlisted.id, running.id],
+        true,
+        [listed.id, running.id],
+        { allowDiscard: true }
+      );
       expect(result.error).toBeNull();
       expect(result.deleted).toEqual(expect.arrayContaining([listed.id, unlisted.id, running.id, session.id]));
       const exists = (path: string) =>

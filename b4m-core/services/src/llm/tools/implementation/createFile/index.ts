@@ -2,7 +2,7 @@ import { ToolDefinition } from '../../base/types';
 import { promises as fs } from 'fs';
 import { existsSync } from 'fs';
 import path from 'path';
-import { assertPathAllowed } from '../../utils/pathValidation';
+import { assertWritablePath } from '../../utils/pathValidation';
 
 interface CreateFileParams {
   path: string;
@@ -14,7 +14,7 @@ async function createFile(params: CreateFileParams, allowedDirectories?: string[
   const { path: filePath, content, createDirectories = true } = params;
 
   // Validate path is within allowed directories (cwd is always included)
-  const resolvedPath = assertPathAllowed(filePath, allowedDirectories, 'create');
+  const resolvedPath = assertWritablePath(filePath, allowedDirectories, 'create');
 
   // Check if file already exists
   const fileExists = existsSync(resolvedPath);

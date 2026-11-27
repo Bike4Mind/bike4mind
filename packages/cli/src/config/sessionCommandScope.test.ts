@@ -14,7 +14,6 @@ describe('sessionCommandPrefixes', () => {
     ['git status && git log --oneline', ['git status', 'git log']],
     ['git log | head -5', ['git log', 'head']],
     ['(ls packages); pwd', ['ls', 'pwd']],
-    ['git log 2>&1 | grep fix', ['git log', 'grep']],
     ['sort -u names.txt', ['sort']],
     ['npm test', ['npm test']],
     ['npm test -- --watch=false', ['npm test']],
@@ -32,8 +31,14 @@ describe('sessionCommandPrefixes', () => {
     ['date +%Y', ['date']],
     ['uniq -f 1 names.txt', ['uniq']],
     ['git status\n', ['git status']],
+    ['ls src # list', ['ls']],
+    ['ls a#b; pwd', ['ls', 'pwd']],
   ])('scopes %j to %j', (command, expected) => {
     expect(sessionCommandPrefixes(command)).toEqual(expected);
+  });
+
+  it('keeps ambiguous IO-number commands out of session approvals', () => {
+    expect(sessionCommandPrefixes('git log 2>&1 | grep fix')).toBeNull();
   });
 
   it.each([
@@ -77,6 +82,16 @@ describe('sessionCommandPrefixes', () => {
     ['an inherited git constructor', 'git constructor'],
     ['an inherited git prototype', 'git __proto__'],
     ['an inherited git method', 'git toString'],
+    ['a mid-word hash hiding a second command', 'ls a#b; touch pwned'],
+    ['a quoted-empty hash hiding a second command', 'ls ""#; touch pwned'],
+    ['a vertical tab between words', 'ls\vsrc'],
+    ['a form feed between words', 'ls\fsrc'],
+    ['a carriage return between commands', 'ls\rtouch pwned'],
+    ['go double-dash exec', "go test --exec '/tmp/runner' ./pkg"],
+    ['go double-dash exec with value', 'go test --exec=/tmp/runner ./pkg'],
+    ['go double-dash toolexec', 'go build --toolexec /tmp/runner ./...'],
+    ['go double-dash vettool', 'go vet --vettool=/tmp/runner ./...'],
+    ['go single-dash toolexec', 'go build -toolexec /tmp/runner ./...'],
     ['empty', ''],
     ['a program off the allow-list', 'sed -n 1p file'],
     ['cp', 'cp a b'],

@@ -308,13 +308,15 @@ describe('OverviewTab Access card admin access', () => {
     expect(screen.getByTestId('user-profile-fact-admin-permissions')).toHaveTextContent('None');
   });
 
-  it('shows All (Super Admin) and no Edit for a Super Admin, with no Admin roles row', () => {
+  it('shows All (Super Admin) with Edit for the permissions the role does not imply, and no Admin roles row', () => {
     serveRoles([SUPPORT_AGENT]);
-    renderCard({ isAdmin: true, adminRoleIds: [SUPPORT_ROLE] });
+    renderCard({ isAdmin: true, adminRoleIds: [SUPPORT_ROLE], adminPermissions: ['credits:self_grant'] });
 
     expect(screen.getByTestId('user-profile-fact-admin-permissions')).toHaveTextContent('All (Super Admin)');
+    expect(screen.getByTestId('user-profile-admin-permission-credits-self_grant')).toBeInTheDocument();
+    expect(screen.queryByTestId('user-profile-admin-permission-support-read')).not.toBeInTheDocument();
     expect(screen.queryByTestId('user-profile-fact-admin-roles')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('user-profile-admin-permissions-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('user-profile-admin-permissions-btn')).toBeInTheDocument();
   });
 
   it('offers no Edit on the viewer own profile', () => {

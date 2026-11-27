@@ -4,7 +4,11 @@ import {
   FEDERATED_ADMIN_STATUS_SCOPE,
   HOST_DEVICE_CLIENT_ID,
   LEGACY_DEVICE_CLIENT_ID,
+  OAUTH_CLIENT_SCOPES,
   OAUTH_DEVICE_CLIENT_IDS,
+  OAUTH_FEDERATED_DEFAULT_SCOPES,
+  OAUTH_FUNCTIONS_SCOPES,
+  OAUTH_IDENTITY_SCOPES,
   clientIdFromAuthorizeRedirect,
   isOAuthClientIdShape,
   isOAuthSourceTag,
@@ -12,6 +16,7 @@ import {
   oauthClientDisplayName,
   oauthClientSourceSlug,
 } from './oauthClients';
+import { ApiKeyScope, EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES } from '../types/entities/UserApiKeyTypes';
 
 describe('oauthClientDisplayName', () => {
   it('names every allowlisted client', () => {
@@ -132,5 +137,15 @@ describe('nonOptInScopes', () => {
 
   it('returns an empty list for empty input', () => {
     expect(nonOptInScopes([])).toEqual([]);
+  });
+
+  it('lets an admin grant the functions scopes, never by default, and only ones an exchange key may carry', () => {
+    expect(OAUTH_FUNCTIONS_SCOPES).toEqual([ApiKeyScope.FUNCTIONS_INVOKE, ApiKeyScope.FUNCTIONS_AUTHOR]);
+    expect(nonOptInScopes(OAUTH_FUNCTIONS_SCOPES)).toEqual([]);
+    expect(OAUTH_CLIENT_SCOPES).toEqual(expect.arrayContaining([...OAUTH_FUNCTIONS_SCOPES]));
+    expect([...OAUTH_IDENTITY_SCOPES, ...OAUTH_FEDERATED_DEFAULT_SCOPES]).not.toEqual(
+      expect.arrayContaining([ApiKeyScope.FUNCTIONS_INVOKE])
+    );
+    expect([...EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES]).toEqual([...OAUTH_FUNCTIONS_SCOPES]);
   });
 });

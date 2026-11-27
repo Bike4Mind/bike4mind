@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { OAUTH_OPT_IN_SCOPES } from '@bike4mind/common';
 import { toConsentScopes } from './consentScopes';
 
 /**
@@ -26,6 +27,23 @@ describe('toConsentScopes', () => {
   it('labels the federated admin-status scope', () => {
     expect(toConsentScopes(['federated:admin-status'])).toEqual([
       { id: 'federated:admin-status', label: 'See whether you are a Bike4Mind administrator' },
+    ]);
+  });
+
+  it('names each opt-in scope an admin can grant a client in plain words', () => {
+    for (const { id, label } of toConsentScopes(OAUTH_OPT_IN_SCOPES)) {
+      expect(label, id).toEqual(expect.any(String));
+    }
+    expect(toConsentScopes(['functions:invoke', 'functions:author'])).toEqual([
+      {
+        id: 'functions:invoke',
+        label: 'List and run your functions, and see, allow, and run the functions shared with you',
+      },
+      {
+        id: 'functions:author',
+        label:
+          'Create, read, change, test, and delete your functions, including their code and recent calls, and share them with people found by email address',
+      },
     ]);
   });
 

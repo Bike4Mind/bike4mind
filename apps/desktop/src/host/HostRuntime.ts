@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { ActiveContextNotice } from '@shared/chat';
 import { join } from 'node:path';
 import { ChatModels } from '@bike4mind/common';
 import type {
@@ -11,7 +12,7 @@ import type {
   RecentFolder,
   SendMessageRequest,
 } from '@shared/chat';
-import type { TaskDecisionAnswer } from '@shared/orchestration';
+import type { PendingTaskDecision, TaskDecisionAnswer } from '@shared/orchestration';
 import { ApprovalModePreference } from '../main/chat/ApprovalModePreference';
 import { ChatService, type ChatServiceDeps, type ChatServiceLogger } from '../main/chat/ChatService';
 import { createCompletionRunMinter } from '../main/chat/completionRuns';
@@ -284,6 +285,11 @@ export class HostRuntime {
     return this.service.getSession(sessionId, viewed);
   }
 
+  /** The held context notices in force for a session; see ContextNotices. */
+  contextNotices(sessionId: string): ActiveContextNotice[] {
+    return this.service.contextNoticesOf(sessionId);
+  }
+
   createSession(mode?: Exclude<ChatSessionMode, 'code'>) {
     return this.service.createSession(mode);
   }
@@ -354,9 +360,12 @@ export class HostRuntime {
     sessionId: string,
     nestedIds: readonly string[],
     removeWorktree: boolean,
-    nestedWorktreeIds: readonly string[]
+    nestedWorktreeIds: readonly string[],
+    allowDiscard = false
   ) {
-    const result = await this.service.deleteSessionTree(sessionId, nestedIds, removeWorktree, nestedWorktreeIds);
+    const result = await this.service.deleteSessionTree(sessionId, nestedIds, removeWorktree, nestedWorktreeIds, {
+      allowDiscard,
+    });
     for (const id of result.deleted) await this.pullRequests?.().forget(id);
     return result;
   }
@@ -373,6 +382,11 @@ export class HostRuntime {
 
   answerTaskDecision(sessionId: string, decisionId: string, answer: TaskDecisionAnswer): Promise<void> {
     return this.service.answerTaskDecision(sessionId, decisionId, answer);
+  }
+
+  /** Every decision a worker in the signed-in account waits on the user for. */
+  listTaskDecisions(): Promise<PendingTaskDecision[]> {
+    return this.service.listTaskDecisions();
   }
 
   /** The events after `after` for a resubscribing client, or what it must reload when they are gone. */

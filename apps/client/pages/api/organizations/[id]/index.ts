@@ -21,6 +21,8 @@ import { attachOrganizationLogos } from '@server/organizations/attachOrganizatio
 import { recordOrganizationRead } from '@server/utils/orgReadAudit';
 import { endKeyRealtimeConnections } from '@server/utils/adminApiKeyActions';
 import { creditService, organizationService } from '@bike4mind/services';
+import { belongsToOrganization } from '@server/admin/creditGrants/delegateTargets';
+import { isHeldSelfGrant } from '@server/admin/creditGrants/selfGrant';
 import {
   CreditHolderType,
   MAX_STORAGE_LIMIT_MB,
@@ -29,7 +31,7 @@ import {
   OrganizationSharingPolicySchema,
   orgDomainPathIdSchema,
 } from '@bike4mind/common';
-import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
 import { parseAdminActionReason, recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/adminAudit';
 import { Request } from 'express';
 import { subscriptionRepository } from '@bike4mind/server-utils/models/Subscription';
@@ -70,6 +72,13 @@ const applyAdminCreditEdit = async (req: Request, orgId: string, requestedBalanc
   const previousBalance = organization.currentCredits ?? 0;
   const credits = requestedBalance - previousBalance;
   if (credits === 0) return;
+  const selfGrant = belongsToOrganization(req.user!, organization);
+  // Top up holds the same grant for a second admin (selfGrant.ts); this edit applies at once, so it refuses one.
+  if (credits > 0 && isHeldSelfGrant(req.user!, selfGrant)) {
+    throw new ForbiddenError(
+      'Add credits to an organization you belong to with Top up, so another admin can approve the grant.'
+    );
+  }
 
   const reason = parseAdminActionReason((req.body as { creditReason?: unknown } | undefined)?.creditReason);
   const metadata = { adminUserId: req.user!.id, reason, previousBalance, source: 'admin_org_edit' };
@@ -92,7 +101,7 @@ const applyAdminCreditEdit = async (req: Request, orgId: string, requestedBalanc
     summary: `${credits > 0 ? 'granted' : 'deducted'} ${Math.abs(credits)} credits`,
     reason,
     changes: [{ field: 'currentCredits', before: previousBalance, after: requestedBalance }],
-    details: { credits, ownerId: organization.userId },
+    details: { credits, ownerId: organization.userId, selfGrant },
     related: creditTransactionId ? { creditTransactionId } : undefined,
   });
 };

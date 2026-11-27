@@ -1,14 +1,24 @@
 // @vitest-environment jsdom
+import { MANAGER_ART } from './office/officeArt';
+import { KEEPER_ART } from './aquarium/aquariumArt';
+import { chatBackedHostBridge, chatStubs } from '../../__fixtures__/chatBackedHostBridge';
+import type { ChatSession } from '@shared/chat';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ambientHeld } from './ambient';
 import { OrchestratorStage, type OrchestratorViewProps } from './OrchestratorStage';
 import { singlePaneLayout } from './orchestratorLayout';
 import type { AgentView } from './roster';
-import { TavernView } from './tavern/TavernView';
-import { Aquarium } from './aquarium/Aquarium';
-import { snapshotView } from './snapshotView';
+import { sceneView } from './scene/SceneStage';
+import { TAVERN_SCENE } from './tavern/tavernScene';
+import { AQUARIUM_SCENE } from './aquarium/aquariumScene';
+
+const TavernView = sceneView(TAVERN_SCENE);
+const AquariumView = sceneView(AQUARIUM_SCENE);
 import { agentFixture, createThemedMount, el, query, typeInto } from './testUtils';
+
+const sessionReads = () =>
+  chatStubs().getSession as (sessionId: string, viewed?: boolean) => Promise<ChatSession | null>;
 
 const FIXTURE = [
   agentFixture('n', 'needs-you', { credits: 10 }),
@@ -45,6 +55,7 @@ const pressEscape = (init: KeyboardEventInit = {}) =>
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: {
       getSession: vi.fn().mockResolvedValue(null),
       getHeldRelays: vi.fn().mockResolvedValue([]),
@@ -98,7 +109,7 @@ describe('OrchestratorStage', () => {
       await renderEmpty('tavern');
       const empty = el('orchestrator-empty-state');
       expect(empty.querySelector('[data-testid="orchestrator-tavern"]')).not.toBeNull();
-      expect(el('orchestrator-tavern-innkeeper').getAttribute('data-pose')).toBe('idle');
+      expect(el('orchestrator-tavern-host').getAttribute('data-pose')).toBe('idle');
       expect(empty.textContent).toContain(
         'No quests yet. Describe the work and the Innkeeper will split it across agents.'
       );
@@ -127,11 +138,19 @@ describe('OrchestratorStage', () => {
       expect(el('orchestrator-empty-state').textContent).not.toContain('Secret task');
     });
 
-    it('renders the Office scene with zero agents and the plain empty line', async () => {
+    it("says the Office's own archived line once every agent is archived", async () => {
+      await renderEmpty('office', { archivedAgents: [{ id: 'a1', title: 'Write the docs' }] });
+      expect(el('orchestrator-empty-state').textContent).toContain(
+        'Every task is done and its agent archived. Describe more work and the Manager will hand it out.'
+      );
+      expect(el('orchestrator-archived-agents').textContent).toContain('1 archived agent');
+    });
+
+    it("renders the Office scene with zero agents and the Office's empty line", async () => {
       await renderEmpty('office');
       expect(el('orchestrator-empty-state').contains(el('fake-office'))).toBe(true);
       expect(el('orchestrator-empty-state').textContent).toContain(
-        'No agents yet. Describe the work and it will be split across agents.'
+        'No tasks yet. Describe the work and the Manager will split it across the team.'
       );
     });
   });
@@ -170,7 +189,7 @@ describe('OrchestratorStage', () => {
   });
 
   // Office shares the Tavern's parentScene branch.
-  it.each(['tavern', 'aquarium'] as const)(
+  it.each(['tavern', 'aquarium', 'board'] as const)(
     'keeps the %s parent scene action distinct from attention focus',
     async view => {
       const onParentFocus = vi.fn();
@@ -188,8 +207,8 @@ describe('OrchestratorStage', () => {
         />
       );
       await act(async () => el('scene-parent-action').click());
-      expect(onParentToggle).toHaveBeenCalledTimes(view !== 'aquarium' ? 1 : 0);
-      expect(onParentFocus).toHaveBeenCalledTimes(view === 'aquarium' ? 1 : 0);
+      expect(onParentToggle).toHaveBeenCalledTimes(view !== 'board' ? 1 : 0);
+      expect(onParentFocus).toHaveBeenCalledTimes(view === 'board' ? 1 : 0);
     }
   );
 
@@ -311,8 +330,7 @@ describe('OrchestratorStage', () => {
     expect(query('orchestrator-peek-drawer')).toBeNull();
   });
 
-  it('opens compact details inside the Aquarium through its snapshot host', async () => {
-    const AquariumView = snapshotView(Aquarium, { displayName: 'Aquarium' });
+  it('opens compact details inside the Aquarium artwork', async () => {
     await themed.render(
       <OrchestratorStage
         agents={FIXTURE}
@@ -324,7 +342,7 @@ describe('OrchestratorStage', () => {
       />
     );
     const tank = el('orchestrator-aquarium');
-    await act(async () => el('orchestrator-fish-w1').click());
+    await act(async () => el('orchestrator-aquarium-agent-w1').click());
     expect(el('orchestrator-peek-drawer-region').parentElement).toBe(tank);
     expect(el('orchestrator-aquarium')).toBe(tank);
     expect(el('orchestrator-peek-actions').parentElement).toBe(el('orchestrator-peek-action-row'));
@@ -358,11 +376,11 @@ describe('OrchestratorStage', () => {
 
   it('opens the agent conversation when a table row is clicked, with a fresh reply box per agent', async () => {
     // By id: the Needs-you strip reads the waiting agents' sessions too.
-    vi.mocked(window.b4m.chat.getSession).mockImplementation(async id =>
+    vi.mocked(sessionReads()).mockImplementation(async id =>
       id === 'w2'
         ? ({
             messages: [{ id: 'reply-w2', role: 'assistant', content: 'Working on the second task.' }],
-          } as Awaited<ReturnType<typeof window.b4m.chat.getSession>>)
+          } as ChatSession)
         : null
     );
     await renderStage(FIXTURE);
@@ -372,7 +390,7 @@ describe('OrchestratorStage', () => {
     expect(el('orchestrator-peek-drawer').textContent).toContain('Agent w2');
     expect(el('orchestrator-peek-conversation').contains(el('chat-message-assistant'))).toBe(true);
     expect(el('chat-message-assistant').textContent).toContain('Working on the second task.');
-    expect(window.b4m.chat.getSession).toHaveBeenCalledWith('w2', false);
+    expect(sessionReads()).toHaveBeenCalledWith('w2');
     expect((el('orchestrator-peek-reply-input') as HTMLTextAreaElement).value, 'draft is per agent').toBe('');
   });
 
@@ -401,7 +419,7 @@ describe('OrchestratorStage', () => {
     );
     expect(el('orchestrator-ambient-status').textContent).toBe('The office is quiet');
     expect(el('office-settled').dataset.settled).toBe('true');
-    expect(el('orchestrator-needs-you-card').textContent).toContain('The orchestrator needs you');
+    expect(el('orchestrator-needs-you-card').textContent).toContain('The Manager needs you');
     expect(el('orchestrator-stage').textContent).not.toContain('Innkeeper');
     act(() => el('orchestrator-needs-you-open-btn').click());
     expect(wake).toHaveBeenCalledTimes(1);
@@ -473,7 +491,7 @@ describe('OrchestratorStage', () => {
         onStreamEvent: vi.fn(() => () => undefined),
         onQueueChanged: vi.fn(() => () => undefined),
       };
-      (window as unknown as { b4m: unknown }).b4m = { chat };
+      (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat };
       await renderSettled([agentFixture('n', 'needs-you'), agentFixture('w', 'working')]);
       const card = el('orchestrator-needs-you-card');
       expect(card.hasAttribute('data-ambient-quiet')).toBe(true);
@@ -741,11 +759,34 @@ describe('OrchestratorStage', () => {
       expect(el('orchestrator-finale').getAttribute('data-placement')).toBe('scene');
       expect(el('orchestrator-finale').getAttribute('data-look')).toBe('office');
       expect(el('orchestrator-finale').getAttribute('aria-label')).toBe('Shift ended');
+      const portrait = el('orchestrator-finale').querySelector('img')?.getAttribute('src');
+      expect([MANAGER_ART.idle, MANAGER_ART.cheering]).toContain(portrait);
 
       await renderOffice(true);
       expect(query('office-scene')).toBeNull();
       expect(el('orchestrator-finale').getAttribute('data-placement')).toBe('inline');
       expect(query('orchestrator-focus-panel')).not.toBeNull();
+    });
+
+    it("titles the Aquarium's finale from its own copy and shows the Keeper", async () => {
+      await themed.render(
+        <OrchestratorStage
+          agents={finished}
+          rootId="root"
+          report={REPORT}
+          layout={singlePaneLayout('aquarium')}
+          onLayoutChange={onLayoutChange}
+          actions={actions}
+          introPlaying={false}
+          renderView={(_id, props) => <div data-testid="aquarium-scene">{props.sceneOverlay}</div>}
+        />
+      );
+      await settle();
+      expect(el('aquarium-scene').contains(el('orchestrator-finale'))).toBe(true);
+      expect(el('orchestrator-finale').getAttribute('aria-label')).toBe(AQUARIUM_SCENE.copy.stage.finale.ended);
+      expect(el('orchestrator-finale').textContent).not.toContain('Quest');
+      const portrait = el('orchestrator-finale').querySelector('img')?.getAttribute('src');
+      expect([KEEPER_ART.idle, KEEPER_ART.cheering]).toContain(portrait);
     });
 
     it('waits for the parent to write its summary', async () => {

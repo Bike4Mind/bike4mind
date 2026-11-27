@@ -21,7 +21,7 @@ import {
 
 // Mock DI registry
 const mockUser = { findOne: vi.fn() };
-const mockSession = { findById: vi.fn() };
+const mockSession = { findById: vi.fn(), exists: vi.fn() };
 const mockQuest = { findById: vi.fn() };
 const mockCreateSession = vi.fn();
 const mockAddMessageToSession = vi.fn();
@@ -97,7 +97,7 @@ describe('WorkflowStepHandler', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env = { ...originalEnv, APP_URL: 'https://app.test.com' };
-    handler = new WorkflowStepHandler(mockSlackClient as any, mockLogger as any);
+    handler = new WorkflowStepHandler(mockSlackClient as any, mockLogger as any, 'T123');
     mockSlackClient.functionCompleteSuccess.mockResolvedValue(true);
     mockSlackClient.functionCompleteError.mockResolvedValue(true);
     mockCreateSession.mockResolvedValue({ id: FRESH_NOTEBOOK, name: 'Workflow Notebook' });
@@ -212,7 +212,7 @@ describe('WorkflowStepHandler', () => {
 
       expect(User.findOne).toHaveBeenCalledWith({
         'slackSettings.slackUserId': 'U123',
-        'slackSettings.slackTeamId': { $type: 'string', $ne: '' },
+        'slackSettings.slackTeamId': 'T123',
       });
       expect(createSession).toHaveBeenCalled();
       expect(mockSlackClient.functionCompleteSuccess).toHaveBeenCalledWith(
@@ -302,7 +302,7 @@ describe('WorkflowStepHandler', () => {
         mockUser.id,
         expect.objectContaining({
           name: expect.stringContaining('Workflow'),
-          origin: { channel: 'slack' },
+          origin: { channel: 'slack', slackWorkflow: true },
         }),
         expect.any(Object),
         expect.any(Object)
@@ -468,28 +468,86 @@ describe('WorkflowStepHandler', () => {
       );
     });
 
-    it('should use provided notebook_id when specified', async () => {
+    it('uses a provided notebook_id that an earlier workflow step created for the runner', async () => {
       const mockUser = createMockUser();
       vi.mocked(User.findOne).mockResolvedValue(mockUser);
+      vi.mocked(Session.exists).mockResolvedValue({ _id: SAVED_NOTEBOOK } as never);
       vi.mocked(addMessageToSession).mockResolvedValue({
         id: 'quest_123',
-      } as any);
+      } as never);
 
       const event = createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, {
         user_context: ACTING_USER_CONTEXT,
         message: 'Hello',
-        notebook_id: 'specific_notebook_123',
+        notebook_id: SAVED_NOTEBOOK,
         wait_for_response: false,
       });
 
       await handler.handleFunctionExecuted(event);
 
+      expect(Session.exists).toHaveBeenCalledWith({
+        _id: SAVED_NOTEBOOK,
+        userId: mockUser.id,
+        'origin.slackWorkflow': true,
+      });
       expect(addMessageToSession).toHaveBeenCalledWith(
         mockUser.id,
-        'specific_notebook_123',
+        SAVED_NOTEBOOK,
         expect.any(Object),
         expect.any(Object)
       );
+    });
+
+    it.each([
+      ['send', WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE],
+      ['query', WORKFLOW_STEP_CALLBACKS.QUERY],
+    ])(
+      "%s step runs in a fresh notebook when notebook_id names one of the runner's own",
+      async (_label, callbackId) => {
+        const mockUser = createMockUser();
+        vi.mocked(User.findOne).mockResolvedValue(mockUser);
+        vi.mocked(Session.exists).mockResolvedValue(null);
+        vi.mocked(addMessageToSession).mockResolvedValue({ id: 'quest_123' } as never);
+        vi.mocked(Quest.findById).mockResolvedValue({ status: 'done', replies: ['ok'] } as never);
+        vi.mocked(Session.findById).mockResolvedValue({ name: 'Test' } as never);
+
+        await handler.handleFunctionExecuted(
+          createEvent(callbackId, {
+            user_context: ACTING_USER_CONTEXT,
+            message: 'Hello',
+            query: 'What is new?',
+            notebook_id: SAVED_NOTEBOOK,
+            wait_for_response: false,
+          })
+        );
+
+        expect(createSession).toHaveBeenCalledWith(
+          mockUser.id,
+          expect.objectContaining({ origin: { channel: 'slack', slackWorkflow: true } }),
+          expect.any(Object)
+        );
+        expect(addMessageToSession).toHaveBeenCalledWith(
+          mockUser.id,
+          FRESH_NOTEBOOK,
+          expect.any(Object),
+          expect.any(Object)
+        );
+        expect(addMessageToSession).not.toHaveBeenCalledWith(
+          mockUser.id,
+          SAVED_NOTEBOOK,
+          expect.any(Object),
+          expect.any(Object)
+        );
+      }
+    );
+
+    it('resolves no runner when the request carried no team', async () => {
+      const teamless = new WorkflowStepHandler(mockSlackClient as never, mockLogger as never, undefined);
+      await teamless.handleFunctionExecuted(
+        createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, { user_context: ACTING_USER_CONTEXT, message: 'Hello' })
+      );
+      expect(User.findOne).not.toHaveBeenCalled();
+      expect(addMessageToSession).not.toHaveBeenCalled();
     });
 
     it('should wait for AI response when wait_for_response=true', async () => {
@@ -828,11 +886,11 @@ describe('WorkflowStepHandler', () => {
       expect(User.findOne).toHaveBeenCalledTimes(1);
       expect(User.findOne).toHaveBeenCalledWith({
         'slackSettings.slackUserId': 'U123',
-        'slackSettings.slackTeamId': { $type: 'string', $ne: '' },
+        'slackSettings.slackTeamId': 'T123',
       });
       expect(User.findOne).not.toHaveBeenCalledWith({
         'slackSettings.slackUserId': 'UVICTIM',
-        'slackSettings.slackTeamId': { $type: 'string', $ne: '' },
+        'slackSettings.slackTeamId': 'T123',
       });
     });
 
@@ -862,11 +920,11 @@ describe('WorkflowStepHandler', () => {
 
       expect(User.findOne).toHaveBeenCalledWith({
         'slackSettings.slackUserId': 'U123',
-        'slackSettings.slackTeamId': { $type: 'string', $ne: '' },
+        'slackSettings.slackTeamId': 'T123',
       });
       expect(User.findOne).not.toHaveBeenCalledWith({
         'slackSettings.slackUserId': 'UVICTIM',
-        'slackSettings.slackTeamId': { $type: 'string', $ne: '' },
+        'slackSettings.slackTeamId': 'T123',
       });
       // Assert the step actually reached the notification, so the DM target is pinned and not
       // passed vacuously by an error path that never sends one.

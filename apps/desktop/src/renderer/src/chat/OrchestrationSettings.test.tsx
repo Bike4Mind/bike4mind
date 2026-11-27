@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { inheritancePolicy } from '@shared/orchestration';
@@ -23,6 +24,7 @@ const setRolePolicy = vi.fn(async (policy: ReturnType<typeof inheritancePolicy>)
 beforeEach(() => {
   vi.clearAllMocks();
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: { getRolePolicy, setRolePolicy, listModels },
   };
 });

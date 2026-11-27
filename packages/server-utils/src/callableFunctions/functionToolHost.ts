@@ -4,9 +4,7 @@ import {
   projectFunctionSchema,
   reviewHash,
   type CallableFunctionCallSurface,
-  type ICallableFunctionOfferable,
 } from '@bike4mind/common';
-import { callableFunctionRepository } from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import {
   isCustomToolOffered,
@@ -25,7 +23,7 @@ import {
   type DispatchFunctionCallRequest,
   type DispatchFunctionCallResult,
 } from './dispatch';
-import { listOfferedCallableFunctions } from './registry';
+import { findCallerFunction, listCallerFunctions, type CallerFunction } from './callerFunctions';
 
 export { FUNCTION_CONNECTION_ID };
 
@@ -54,18 +52,18 @@ export interface FunctionToolHostDeps {
 const TIMEOUT_MESSAGE = 'The function did not finish within the time this turn allows. Do not call it again this turn.';
 const BUDGET_MESSAGE = 'Too little of this turn is left to run the function. Do not call it again this turn.';
 
-async function toOfferedTool(fn: ICallableFunctionOfferable): Promise<CustomMcpOfferedTool> {
+async function toOfferedTool({ fn, name, approval }: CallerFunction): Promise<CustomMcpOfferedTool> {
   const llm = projectFunctionSchema(fn.contract, 'llm');
   const mcp = projectFunctionSchema(fn.contract, 'mcp');
   const hash = await reviewHash(fn.contract);
   return {
-    name: fn.slug,
+    name,
     description: llm.description,
     inputSchema: { ...llm.parameters },
     outputSchema: { ...mcp.outputSchema },
     // A function runs with no network and no state, so `default` approval runs it without a card.
     annotations: { readOnlyHint: true },
-    approval: fn.approval ?? 'default',
+    approval,
     state: 'active',
     enabled: true,
     descriptionRawHash: hash,
@@ -103,9 +101,10 @@ function toCallResult(call: DispatchFunctionCallResult): CustomMcpToolCallResult
 }
 
 /**
- * Offers the caller's live, turned-on functions under an internal namespace beside custom connectors. Gated by the
- * callable functions setting alone, whatever custom MCP's setting is; every call goes through the dispatcher,
- * which checks the setting, owner, and status again.
+ * Offers the functions the caller can call (`listCallerFunctions`: their own live ones, then those shared with them
+ * and reviewed) under an internal namespace beside custom connectors. Gated by the callable functions setting alone,
+ * whatever custom MCP's setting is; every call goes through the dispatcher, which checks the setting, access,
+ * review, and status again.
  */
 export function createFunctionToolHost(
   surface: FunctionToolSurface,
@@ -118,15 +117,11 @@ export function createFunctionToolHost(
 
     async listConnections(userId, options = {}) {
       if (!(await resolveCallableFunctionsEnabled({ id: userId }))) return [];
-      const functions = (
-        await listOfferedCallableFunctions(
-          { id: userId },
-          { limit: MAX_FUNCTION_TOOLS_PER_TURN, excludeAlwaysAsk: options.headless }
-        )
-      )
-        // No one can answer a card in a headless turn, so an always-ask function would only stall it.
-        .filter(fn => !(options.headless && fn.approval === 'always_ask'))
-        .slice(0, MAX_FUNCTION_TOOLS_PER_TURN);
+      // No one can answer a card in a headless turn, so an always-ask function would only stall it.
+      const functions = await listCallerFunctions(
+        { id: userId },
+        { limit: MAX_FUNCTION_TOOLS_PER_TURN, excludeAlwaysAsk: options.headless }
+      );
       if (functions.length === 0) return [];
       const offer: CustomMcpConnectionOffer = {
         connectionId: FUNCTION_CONNECTION_ID,
@@ -147,19 +142,14 @@ export function createFunctionToolHost(
           await recordRefusal({ caller, functionId: toolName, surface }, 'not_found');
           return { result: textResult({ outcome: 'not_found' }, true) };
         }
-        const fn = await callableFunctionRepository.findBySlugForOwner(toolName, {
-          ownerType: 'user',
-          ownerKey: userId,
-        });
-        if (!fn || fn.state !== 'live') {
-          await recordRefusal(
-            { caller, functionId: fn?.id ?? toolName, surface },
-            fn ? 'not_live' : 'not_found',
-            fn ?? undefined
-          );
+        const lookup = await findCallerFunction(caller, { name: toolName });
+        if (!('found' in lookup)) {
+          const fn = lookup.refused === 'not_live' ? lookup.fn : undefined;
+          await recordRefusal({ caller, functionId: fn?.id ?? toolName, surface }, lookup.refused, fn);
           return { result: textResult({ outcome: 'refused', reason: 'not_live' }, true) };
         }
-        if (fn.approval === 'always_ask' && !approved) {
+        const { fn, approval } = lookup.found;
+        if (approval === 'always_ask' && !approved) {
           await recordRefusal({ caller, functionId: fn.id, surface }, 'approval_required', fn);
           return { result: textResult({ outcome: 'refused', reason: 'approval_required' }, true) };
         }

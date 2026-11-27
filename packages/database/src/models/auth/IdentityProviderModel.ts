@@ -185,6 +185,12 @@ const IdentityProviderSchema = new Schema<IIdentityProviderDocument>(
 IdentityProviderSchema.index({ emailDomain: 1, isActive: 1 });
 IdentityProviderSchema.index({ type: 1, isActive: 1 });
 
+/** Whether two Okta audiences name the same host; trailing slashes and case are not significant. */
+export function isSameOktaAudience(a: string | undefined, b: string | undefined): boolean {
+  const normalize = (value: string | undefined) => (value ?? '').trim().replace(/\/+$/, '').toLowerCase();
+  return normalize(a) === normalize(b);
+}
+
 class IdentityProviderRepository
   extends BaseRepository<IIdentityProviderDocument>
   implements IIdentityProviderRepository
@@ -310,9 +316,15 @@ class IdentityProviderRepository
           ? {
               oktaConfig: {
                 ...data.oktaConfig,
-                // '' only when there is no secret on either side, which is the same
-                // "not configured" the truthiness checks downstream already handle.
-                clientSecret: next.oktaConfig?.clientSecret || current?.oktaConfig?.clientSecret || '',
+                // The secret is sent to whatever host the audience names, so the stored one
+                // carries forward only while the audience is unchanged. '' reads downstream as
+                // "not configured".
+                clientSecret:
+                  next.oktaConfig?.clientSecret ||
+                  (isSameOktaAudience(data.oktaConfig.audience, current?.oktaConfig?.audience)
+                    ? current?.oktaConfig?.clientSecret
+                    : '') ||
+                  '',
               },
             }
           : {}),

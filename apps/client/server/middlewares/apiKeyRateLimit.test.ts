@@ -107,6 +107,17 @@ describe('apiKeyRateLimit counter selection', () => {
     expect(err).toBeInstanceOf(TooManyRequestsError);
   });
 
+  it('charges nothing for a request the route skips, and still charges the next one', async () => {
+    const { req, res } = patchRequest();
+    const middleware = apiKeyRateLimit({ skip: r => (r as { method: string }).method === 'PATCH' });
+
+    expect(await run(middleware, req, res)).toBeUndefined();
+    expect(cacheRepository.tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
+
+    exhaustDailyQuota();
+    expect(await run(apiKeyRateLimit({ skip: () => false }), req, res)).toBeInstanceOf(TooManyRequestsError);
+  });
+
   it('leaves an ordinary route on the key request quota by default', async () => {
     const { req, res } = patchRequest();
 

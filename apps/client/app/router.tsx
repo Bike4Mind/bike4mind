@@ -104,6 +104,8 @@ const VerifyEmailChangePage = lazy(() => import('./routes/verify-change'));
 const SubscribePage = lazy(() => import('./routes/subscribe'));
 const ArtifactsPage = lazy(() => import('./routes/artifacts/index'));
 const ArtifactPage = lazy(() => import('./routes/artifacts/$id'));
+const FunctionsPage = lazy(() => import('./routes/functions/index'));
+const FunctionPage = lazy(() => import('./routes/functions/$id'));
 const ComposerLabPage = lazy(() => import('./routes/composer-lab'));
 const AdminEmergencyPage = lazy(() => import('./routes/admin-emergency'));
 const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callback'));
@@ -1123,6 +1125,27 @@ const artifactRoute = createRoute({
   ),
 });
 
+// The callable functions library: the user's own functions and those shared with them, and one by id.
+const functionsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/functions',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <FunctionsPage />
+    </Suspense>
+  ),
+});
+
+const functionRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/functions/$id',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <FunctionPage />
+    </Suspense>
+  ),
+});
+
 // The old demo gallery's URL, kept so bookmarks land on the library.
 const artifactsDemoRoute = createRoute({
   getParentRoute: () => layoutRoute,
@@ -1582,6 +1605,8 @@ const routeTree = rootRoute.addChildren([
     spaceDetailRoute,
     artifactsRoute,
     artifactRoute,
+    functionsRoute,
+    functionRoute,
     artifactsDemoRoute,
     composerLabRoute,
     dataLakesRoute,

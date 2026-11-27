@@ -117,4 +117,13 @@ describe('/api/admin/identity-providers response schema', () => {
     expect(mockFindAllWithSecretPresence).not.toHaveBeenCalled();
     expect(mockCreateIDP).not.toHaveBeenCalled();
   });
+
+  it('refuses a delegated settings:manage admin on create', async () => {
+    const delegate = { id: 'd1', isAdmin: false, adminPermissions: ['settings:manage'] };
+    await expect(call('POST', { name: 'x', emailDomain: 'acme.test', type: 'saml' }, delegate)).rejects.toThrow(
+      /only full administrators/i
+    );
+    expect(mockFindByEmailDomain).not.toHaveBeenCalled();
+    expect(mockCreateIDP).not.toHaveBeenCalled();
+  });
 });

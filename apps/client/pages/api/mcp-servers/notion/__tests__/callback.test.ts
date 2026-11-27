@@ -63,8 +63,11 @@ vi.mock('@bike4mind/server-utils/security/tokenEncryption', () => ({ encryptToke
 
 import handler from '../callback';
 
-const call = async (query: Record<string, string>) => {
-  const { req, res } = createMocks({ method: 'GET', query });
+const BROWSER_NONCE = 'browser-nonce';
+const BROWSER_COOKIE = `b4m_oauth_nonce_notion-connect=${BROWSER_NONCE}`;
+
+const call = async (query: Record<string, string>, cookie: string = BROWSER_COOKIE) => {
+  const { req, res } = createMocks({ method: 'GET', query, headers: { cookie } });
   await (handler as unknown as (rq: unknown, rs: unknown) => Promise<void>)(req, res);
   return res;
 };
@@ -135,10 +138,14 @@ describe('GET /api/mcp-servers/notion/callback - authorization not completed', (
   });
 });
 
-const signedState = () => {
+const signedState = (nonce = BROWSER_NONCE) => {
   const timestamp = Date.now();
-  const signature = crypto.createHmac('sha256', 'test-secret').update(`user-1:csrf:${timestamp}`).digest('hex');
-  return JSON.stringify({ userId: 'user-1', csrfToken: 'csrf', timestamp, signature });
+  const nonceHash = crypto.createHash('sha256').update(nonce).digest('hex');
+  const signature = crypto
+    .createHmac('sha256', 'test-secret')
+    .update(`user-1:csrf:${timestamp}:${nonceHash}`)
+    .digest('hex');
+  return JSON.stringify({ userId: 'user-1', csrfToken: 'csrf', timestamp, nonceHash, signature });
 };
 
 const AUTH_CODE_SECRETS = ['auth-code', CLIENT_SECRET, 'redirect.example', 'cb-secret'];
@@ -175,5 +182,51 @@ describe('GET /api/mcp-servers/notion/callback - success', () => {
     expect(res._getRedirectUrl()).toContain('notion=connected');
     expect(mockLogger.info).toHaveBeenCalledWith('Notion tokens stored', { userId: 'user-1', status: 'connected' });
     expectNoSecretsLogged([...AUTH_CODE_SECRETS, 'access-token-xyz', 'search-body-secret']);
+  });
+});
+
+describe('GET /api/mcp-servers/notion/callback - browser binding', () => {
+  it.each([
+    ['no nonce cookie', ''],
+    ["another browser's nonce cookie", 'b4m_oauth_nonce_notion-connect=other-browser'],
+  ])(
+    'rejects a valid state completed with %s, before consuming the nonce or exchanging the code',
+    async (_label, cookie) => {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+      const res = await call({ code: 'auth-code', state: signedState() }, cookie);
+      fetchSpy.mockRestore();
+
+      expect(res._getRedirectUrl()).toBe('/profile?tab=integrations&notion=error');
+      expect(mockAuditFailure).toHaveBeenCalledWith('session_mismatch');
+      expect(mockUpdateMany).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalled();
+    }
+  );
+
+  it("rejects a state whose nonce hash was swapped for another browser's", async () => {
+    const state = JSON.parse(signedState());
+    state.nonceHash = crypto.createHash('sha256').update('attacker-nonce').digest('hex');
+
+    const res = await call(
+      { code: 'auth-code', state: JSON.stringify(state) },
+      'b4m_oauth_nonce_notion-connect=attacker-nonce'
+    );
+
+    expect(res._getRedirectUrl()).toBe('/profile?tab=integrations&notion=error');
+    expect(mockAuditFailure).toHaveBeenCalledWith('csrf_signature_invalid');
+    expect(mockUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it('expires the nonce cookie alongside the result cookie', async () => {
+    const res = await call({ code: 'auth-code', state: signedState() }, '');
+
+    const cookies = res.getHeader('Set-Cookie') as string[];
+    expect(cookies).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^b4m_oauth_nonce_notion-connect=; .*Max-Age=0/),
+        expect.stringMatching(/^notion_error=/),
+      ])
+    );
   });
 });

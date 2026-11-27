@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { assignPersonas } from '@shared/agentPersona';
@@ -70,7 +71,7 @@ describe('snapshotView', () => {
 
   it('answers a decision the snapshot lists, and logs a refusal from main', async () => {
     const answerTaskDecision = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('gone'));
-    (window as unknown as { b4m: unknown }).b4m = { chat: { answerTaskDecision } };
+    (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat: { answerTaskDecision } };
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const decision = {
       id: 'd1',
@@ -101,7 +102,6 @@ describe('snapshotView', () => {
 
   it.each([
     ['tile-wall', 'orchestrator-tile-a'],
-    ['aquarium', 'orchestrator-fish-a'],
     ['swimlanes', 'orchestrator-swimlanes-lane-a'],
     ['constellation', 'orchestrator-constellation-node-a'],
     ['transit', 'orchestrator-transit-agent-a'],
@@ -324,10 +324,15 @@ describe('viewSnapshot', () => {
 
   describe('runViewAction', () => {
     const chat = { answerTaskDecision: vi.fn(async () => undefined), respondToApproval: vi.fn(async () => undefined) };
-    const host = { openAgent: vi.fn(), openRoot: vi.fn(), stop: vi.fn() };
+    const host = {
+      openAgent: vi.fn(),
+      openRoot: vi.fn(),
+      stop: vi.fn(),
+      sessionOfApproval: vi.fn((): string | undefined => 'agent-p'),
+    };
 
     beforeEach(() => {
-      (window as unknown as { b4m: unknown }).b4m = { chat };
+      (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat };
     });
 
     afterEach(() => {
@@ -344,6 +349,15 @@ describe('viewSnapshot', () => {
     it('approves through the approval card call, never with more than the decision', async () => {
       await runViewAction({ kind: 'approve', approvalId: 'p1', mode: 'deny' }, host);
       expect(chat.respondToApproval).toHaveBeenCalledWith('p1', { decision: 'deny' });
+      expect(host.sessionOfApproval).toHaveBeenCalledWith('p1');
+    });
+
+    it('rejects an approval whose session the host cannot name', async () => {
+      host.sessionOfApproval.mockReturnValueOnce(undefined);
+      await expect(runViewAction({ kind: 'approve', approvalId: 'p1', mode: 'once' }, host)).rejects.toThrow(
+        'Approvals are not available here'
+      );
+      expect(chat.respondToApproval).not.toHaveBeenCalled();
     });
 
     it('opens and stops through the host', async () => {

@@ -20,7 +20,7 @@ import { isNearLimit } from '@bike4mind/common';
 
 const logger = new Logger({ metadata: { component: 'org-github-rate-limit' } });
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   // rate limited to prevent abuse - this makes a real GitHub API call
   .use(
     rateLimit({

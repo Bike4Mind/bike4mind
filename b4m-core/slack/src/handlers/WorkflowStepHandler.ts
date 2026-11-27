@@ -1,10 +1,19 @@
-import { VERIFIED_SLACK_IDENTITY_FILTER } from '@bike4mind/common';
 import { SQSService } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { SlackClient } from '../SlackClient';
-import { ChatModels, IChatHistoryItem, IUserDocument, stripSearchResultCardFences } from '@bike4mind/common';
+import {
+  ChatModels,
+  IChatHistoryItem,
+  type ISessionDocument,
+  IUserDocument,
+  slackIdentityFilter,
+  stripSearchResultCardFences,
+} from '@bike4mind/common';
+import mongoose, { Types } from 'mongoose';
 import { ChatCompletionInvoke } from '@bike4mind/services-core/llm/ChatCompletionInvoke';
 import { getSlackDeps, getSlackDb } from '../di/registry';
+
+const WORKFLOW_NOTEBOOK_ORIGIN = { channel: 'slack', slackWorkflow: true } as const;
 
 /**
  * Workflow step callback IDs - must match the app manifest
@@ -122,7 +131,12 @@ export class WorkflowStepHandler {
   private logger: Logger;
   private slackClient: SlackClient;
 
-  constructor(slackClient: SlackClient, logger: Logger) {
+  /** `slackTeamId` is the workspace of the verified request; runners are only resolved inside it. */
+  constructor(
+    slackClient: SlackClient,
+    logger: Logger,
+    private readonly slackTeamId: string | undefined
+  ) {
     this.slackClient = slackClient;
     this.logger = logger;
   }
@@ -256,35 +270,40 @@ export class WorkflowStepHandler {
     }
   }
 
-  /**
-   * Find B4M user by Slack user ID
-   */
   private async findB4MUser(slackUserId: string): Promise<IUserDocument | null> {
+    if (!this.slackTeamId) return null;
     const { User } = getSlackDb();
-    return (User as { findOne(filter: Record<string, unknown>): Promise<IUserDocument | null> }).findOne({
-      'slackSettings.slackUserId': slackUserId,
-      ...VERIFIED_SLACK_IDENTITY_FILTER,
-    });
+    return (User as { findOne(filter: Record<string, unknown>): Promise<IUserDocument | null> }).findOne(
+      slackIdentityFilter(slackUserId, this.slackTeamId)
+    );
   }
 
   /**
-   * The notebook a workflow step runs in: the builder-supplied `notebook_id`, else a fresh one.
-   * Never the runner's saved default or last notebook - the builder authors the prompt and reads
-   * the reply, so it must not run against the runner's existing notebook context. An explicit id
-   * is write-checked against the runner by addMessageToSession and again by ChatCompletionInvoke.
+   * The notebook a workflow step runs in: a notebook an earlier workflow step created for this
+   * runner, else a fresh one. Never one of the runner's own notebooks - the builder authors the
+   * prompt and reads the reply, so the step must not run against the runner's notebook context.
    */
   private async resolveWorkflowNotebookId(
     user: IUserDocument,
     notebookId: string | undefined,
     newNotebookName: string
   ): Promise<string> {
-    if (notebookId) return notebookId;
+    if (notebookId && Types.ObjectId.isValid(notebookId)) {
+      const Session = getSlackDb().Session as mongoose.Model<ISessionDocument>;
+      const workflowNotebook = await Session.exists({
+        _id: notebookId,
+        userId: user.id,
+        'origin.slackWorkflow': true,
+      });
+      if (workflowNotebook) return notebookId;
+      this.logger.warn('[WorkflowStep] Ignoring a notebook_id that no workflow step created', { userId: user.id });
+    }
 
     const { defineAbilitiesFor } = getSlackDb();
     const { sessionManager } = getSlackDeps();
     const newSession = await (sessionManager as any).createSession(
       user.id,
-      { name: newNotebookName, origin: { channel: 'slack' } },
+      { name: newNotebookName, origin: WORKFLOW_NOTEBOOK_ORIGIN },
       defineAbilitiesFor(user)
     );
     return newSession.id;
@@ -402,7 +421,7 @@ export class WorkflowStepHandler {
       // to lastNotebookId (see getOrCreateNotebookForSlackUser in notebook-manager.ts).
       const newSession = await (sessionManager as any).createSession(
         user.id,
-        { name: notebookName, origin: { channel: 'slack' } },
+        { name: notebookName, origin: WORKFLOW_NOTEBOOK_ORIGIN },
         ability,
         { setLastNotebook: false }
       );

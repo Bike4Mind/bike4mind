@@ -24,6 +24,7 @@ import {
   modelSupportsTools,
   SESSION_TITLE_MAX_LENGTH,
 } from '@shared/chat';
+import { hostChat } from '../host/hostChat';
 import { composerBlock, isLocalMode, noLocalModels } from './noLocalModels';
 import { closingText, plainText, snippetOf } from '@shared/agentOutcome';
 import { effectiveContextLimit, occupiedTokens } from '@shared/contextLimit';
@@ -162,7 +163,7 @@ import { OrchestrateToggle } from './orchestrator/OrchestrateToggle';
 import { ExampleQuestStrip } from './orchestrator/exampleQuests';
 import { markSessionViewed } from './markSessionViewed';
 import { ambientHeld, isEditable, isPrintableKey, useAmbientSettle } from './orchestrator/ambient';
-import { inTavernDialogue } from './orchestrator/tavern/dialogue';
+import { inSceneDialogue } from './orchestrator/scene/dialogue';
 import type { AgentActions, InnkeeperDesk, StageAmbient } from './orchestrator/OrchestratorStage';
 import { OrchestratorSurface } from './orchestrator/OrchestratorSurface';
 import { agentsSurfaceAvailable as isAgentsSurfaceAvailable } from './orchestrator/agentsSurface';
@@ -176,7 +177,7 @@ import {
 } from './orchestrator/orchestratorPrefs';
 import { singlePaneLayout, type OrchestratorLayout } from './orchestrator/orchestratorLayout';
 import { renderOrchestratorView } from './orchestrator/viewRegistry';
-import { ORCHESTRATOR_VIEW_INFO } from './orchestrator/ViewSwitcher';
+import { ORCHESTRATOR_VIEW_INFO, useSceneStageCopy } from './orchestrator/ViewSwitcher';
 import { latestQuestReport } from './orchestrator/finale';
 import { agentStates, descendantIds } from './orchestrator/roster';
 import { prefersReducedMotion } from './orchestrator/motion';
@@ -946,7 +947,7 @@ export function ChatShell({
     !turnOpen &&
     conversation.messages.length === 0;
 
-  // Derived during render, not in an effect: TavernView only plays its intro if introPlaying is
+  // Derived during render, not in an effect: a scene only plays its intro if introPlaying is
   // already true when it mounts, which is the same commit that enters orchestrate mode.
   const orchestrateEntry = orchestrating ? activeId : null;
   const [introEntry, setIntroEntry] = useState<string | null>(null);
@@ -967,15 +968,16 @@ export function ChatShell({
   }, [introPhase, introEntry]);
   const orchestratorLayout = introPhase === 'off' ? orchestratorPrefs.layout : INTRO_LAYOUT;
   const orchestratorView = orchestratorLayout.panes[0].view;
+  const ambientTalkLabel = useSceneStageCopy(orchestratorView).talk;
   // The ambient settle and the in-scene conversation are a single scene's; a split stage has neither.
   const orchestratorSplit = orchestratorLayout.panes.length > 1;
-  // The Tavern asks its agents' questions in its own dialogue box (OrchestratorStage inSceneDecisions), so
-  // the tray above the composer keeps only this conversation's own decisions while that scene is up.
+  // A scene that answers in place asks its agents' questions in its own dialogue box (OrchestratorStage
+  // inSceneDecisions), so the tray above the composer keeps only this conversation's own decisions while it is up.
   const agentDecisionsInScene =
     orchestrating &&
     !presentingStage &&
     !orchestratorSplit &&
-    orchestratorView === 'tavern' &&
+    ORCHESTRATOR_VIEW_INFO[orchestratorView].scene?.inSceneDecisions === true &&
     !orchestratorPrefs.focus;
   const threadHost = useRef<HTMLDivElement | null>(null);
   const dockToggle = useRef<HTMLButtonElement | null>(null);
@@ -1031,7 +1033,7 @@ export function ChatShell({
     // A reply streaming in is something to watch arrive, not to hide.
     held: () => conversation.streaming || ambientHeld(document),
     onSettledKey: event => {
-      if (!isPrintableKey(event) || isEditable(event.target) || inTavernDialogue(event.target)) return;
+      if (!isPrintableKey(event) || isEditable(event.target) || inSceneDialogue(event.target)) return;
       event.preventDefault();
       focusParentChat();
     },
@@ -1198,7 +1200,7 @@ export function ChatShell({
   const agentActions = useMemo<AgentActions>(
     () => ({
       open: selectSession,
-      stop: sessionId => window.b4m.chat.stopReply(sessionId),
+      stop: sessionId => hostChat.stopReply(sessionId),
       archive: sessionId => {
         const session = sessions.find(candidate => candidate.id === sessionId);
         if (session) void toggleArchived(session);
@@ -1628,8 +1630,7 @@ export function ChatShell({
       markSessionStart('project');
       // Before the screen switches, so the git calls never leave the previous session's
       // composer live under the new one's id.
-      const inWorktree =
-        worktreeByDefault() && canHoldWorktree(await window.b4m.chat.inspectProject(sibling.directory));
+      const inWorktree = worktreeByDefault() && canHoldWorktree(await hostChat.inspectProject(sibling.directory));
       setScreen('conversation');
       setMode('code');
       setActiveId(sessionDraft.start('code', newSessionInProject(sibling, inWorktree)));
@@ -2327,7 +2328,7 @@ export function ChatShell({
                     processes: background.processes,
                     spawned,
                     onStopProcess: background.stop,
-                    onStopSession: sessionId => void window.b4m.chat.stopReply(sessionId),
+                    onStopSession: sessionId => void hostChat.stopReply(sessionId),
                     onOpenSession: selectSession,
                     onShowOutput: () => setTasksPanelOpen(true),
                   }}
@@ -2353,7 +2354,7 @@ export function ChatShell({
                     }}
                     data-testid="orchestrator-ambient-talk-btn"
                   >
-                    {orchestratorView === 'office' ? 'Type to talk to Manager' : 'Type to talk to the Innkeeper'}
+                    {ambientTalkLabel}
                   </Button>
                   {ambientHint && (
                     <Typography level="body-xs" textColor="text.tertiary" data-testid="orchestrator-ambient-hint">

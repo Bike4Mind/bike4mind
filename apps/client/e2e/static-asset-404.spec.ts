@@ -4,7 +4,8 @@
  * URL, so it needs none of the per-spec auth setup. The config's globalSetup still runs: it
  * requires E2E_CLEANUP_SECRET and sweeps stale e2e data on the target.
  */
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
+import { test } from './waf-test';
 
 test.describe('missing static asset', () => {
   test('a nonexistent *.mjs path returns 404, not the SPA shell', async ({ request }) => {

@@ -28,10 +28,9 @@ vi.mock('@bike4mind/database/infra', () => ({
     find: (...args: unknown[]) => mockFind(...args),
   },
 }));
-// Sensitive values are stored encrypted; decryptAtRest passes the plaintext test fixtures
-// through unchanged (they are not in ciphertext format).
+// `enc:` marks ciphertext; any other value passes through, as decryptAtRest does for plaintext.
 vi.mock('@bike4mind/utils/security', () => ({
-  decryptAtRest: (v: unknown) => v,
+  decryptAtRest: (v: unknown) => (typeof v === 'string' && v.startsWith('enc:') ? v.slice(4) : v),
 }));
 
 import handler from '../index';
@@ -39,7 +38,7 @@ import { SENSITIVE_SETTING_MASK } from '@bike4mind/common';
 
 type HandlerFn = (req: unknown, res: unknown) => Promise<unknown>;
 
-function makeReq(user?: { isAdmin?: boolean }) {
+function makeReq(user?: { isAdmin?: boolean; adminPermissions?: string[] }) {
   // node-mocks-http keeps its rich response type here (for statusCode / _getJSONData
   // assertions); the handler's params are `unknown`, so req/res pass through unchanged.
   const { req, res } = createMocks({ method: 'GET' });
@@ -93,5 +92,20 @@ describe('GET /api/settings (admin-only, sensitive values masked)', () => {
 
     const nonSensitive = body.find(s => s.settingName === 'EnableArtifacts');
     expect(nonSensitive?.settingValue).toBe(true);
+  });
+
+  it('decrypts only sensitive values, returning a non-sensitive one exactly as stored', async () => {
+    mockLean.mockResolvedValue([
+      { settingName: 'openaiDemoKey', settingValue: 'enc:sk-live-real' },
+      { settingName: 'enforceMFA', settingValue: 'enc:sk-live-other' },
+    ]);
+    const { req, res } = makeReq({ isAdmin: false, adminPermissions: ['settings:manage'] });
+
+    await (handler as HandlerFn)(req, res);
+
+    const body = res._getJSONData() as Array<{ settingName: string; settingValue: unknown }>;
+    expect(body.find(s => s.settingName === 'openaiDemoKey')?.settingValue).toBe(`${SENSITIVE_SETTING_MASK}real`);
+    expect(body.find(s => s.settingName === 'enforceMFA')?.settingValue).toBe('enc:sk-live-other');
+    expect(JSON.stringify(body)).not.toContain('sk-live-real');
   });
 });

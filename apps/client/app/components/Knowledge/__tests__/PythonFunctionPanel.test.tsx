@@ -42,6 +42,7 @@ vi.mock('../SaveFunctionDialog', () => ({
 }));
 vi.mock('sonner', () => ({ toast: { error: fns.toastError } }));
 vi.mock('../FunctionDataSection', () => ({ default: () => null }));
+vi.mock('../FunctionSourcesSection', () => ({ default: () => null }));
 // Its own behavior is in PromoteFunctionSection.test.tsx; here only where it mounts and why it is blocked.
 vi.mock('../PromoteFunctionSection', () => ({
   default: ({ blocked }: { blocked: string | null }) => (
@@ -129,7 +130,9 @@ describe('PythonFunctionPanel', () => {
     // Each numeric input carries its unit beside it.
     const spanControl = screen.getByTestId('python-function-input-span').parentElement as HTMLElement;
     expect(within(spanControl).getByText('m')).toBeTruthy();
-    expect(screen.getByText('Calls run in your browser. Call results are not saved.')).toBeTruthy();
+    expect(
+      screen.getByText('Calls run in your browser. They are not saved and do not appear in the call log.')
+    ).toBeTruthy();
   });
 
   it('lists contract problems and offers no call button', async () => {
@@ -1054,19 +1057,18 @@ describe('PythonFunctionPanel save controls', () => {
       );
     });
 
-    it('for a promoted tool, names the promotion and updates anyway to a draft only when confirmed', async () => {
+    it('for a promoted tool, names the promotion and offers no way to update to a version promotion refuses', async () => {
       const promotedRefusal = refusal();
       Object.assign(promotedRefusal.response.data, { promotedSeq: 2 });
       await refuseUpdate(promotedRefusal);
 
       const dialog = await screen.findByTestId('breaking-change-dialog');
       expect(within(dialog).getByTestId('breaking-change-dialog-promoted').textContent).toBe(
-        'Version 4 changes the contract of beam_midspan_deflection since promotion 2 in ways that could break its callers. Updating anyway returns the tool to a draft, and promotion will refuse this version.'
+        'Version 4 changes the contract of beam_midspan_deflection since promotion 2 in ways that could break its callers. A promoted tool cannot be moved to a version promotion would refuse, so the tool stays pinned to version 3.'
       );
+      expect(within(dialog).queryByTestId('breaking-change-dialog-accept-btn')).toBeNull();
+      expect(dialog.textContent).not.toContain('Update anyway');
       expect(fns.repin.mutate).toHaveBeenCalledTimes(1);
-      fireEvent.click(within(dialog).getByTestId('breaking-change-dialog-accept-btn'));
-      expect(fns.repin.mutate).toHaveBeenCalledTimes(2);
-      expect(fns.repin.mutate.mock.calls[1]![0]).toMatchObject({ expectedVersion: 4, acceptBreaking: true });
     });
 
     it('any other refusal stays a toast', async () => {

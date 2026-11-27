@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
@@ -37,7 +38,7 @@ const el = (testId: string) => document.querySelector<HTMLElement>(`[data-testid
 
 function mount(result: () => Promise<SendMessageResult>, onClose = vi.fn()) {
   const sendMessage = vi.fn(result);
-  (window as unknown as { b4m: unknown }).b4m = { chat: { sendMessage } };
+  (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat: { sendMessage } };
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);

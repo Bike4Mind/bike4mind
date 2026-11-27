@@ -1472,10 +1472,50 @@ describe('ShadowDetectionsTab explanations', () => {
 
   it('defines the terms on the summary and the Suggested response column', () => {
     renderTab();
-    for (const term of ['policy', 'recorded', 'graded', 'precision', 'falsePositives', 'enforceBar', 'would']) {
+    for (const term of [
+      'policy',
+      'recorded',
+      'graded',
+      'precision',
+      'falsePositives',
+      'enforceBar',
+      'reversibleTierBar',
+      'would',
+    ]) {
       expect(screen.getAllByTestId(`shadow-detection-help-${term}`).length).toBeGreaterThan(0);
     }
   });
+
+  it.each(['completionSequence', 'completionSynchrony'] as const)(
+    'counts verdicts on %s records in Graded and Precision',
+    detector => {
+      m.useShadowDetections.mockReturnValue(
+        queryResult(
+          list({
+            data: [],
+            summary: [
+              summaryRow({
+                detector,
+                recorded: 3,
+                confirmedAbuse: 2,
+                legitimateHuman: 0,
+                legitimateAutomation: 0,
+                insufficientEvidence: 0,
+              }),
+            ],
+          })
+        )
+      );
+      renderTab();
+      const summary = screen.getByTestId(`shadow-detection-summary-${detector}-v1`);
+      expect(within(summary).getByTestId(`shadow-detection-summary-${detector}-v1-graded`)).toHaveTextContent('2');
+      expect(summary).toHaveTextContent('1 unreviewed');
+      expect(summary).not.toHaveTextContent('would not act');
+      expect(within(summary).getByTestId(`shadow-detection-summary-${detector}-v1-precision`)).toHaveTextContent(
+        '100%'
+      );
+    }
+  );
 
   it.each(['completionSequence', 'completionSynchrony'] as const)(
     'shows %s as review only instead of progress toward enforcement',
@@ -1488,10 +1528,10 @@ describe('ShadowDetectionsTab explanations', () => {
               summaryRow({
                 detector,
                 recorded: 2,
-                noAction: 2,
                 confirmedAbuse: 0,
                 legitimateHuman: 0,
                 legitimateAutomation: 0,
+                insufficientEvidence: 0,
               }),
             ],
           })
@@ -1505,6 +1545,7 @@ describe('ShadowDetectionsTab explanations', () => {
       expect(summary).toHaveTextContent('No automatic containment');
       expect(within(summary).queryByRole('progressbar')).toBeNull();
       expect(summary).not.toHaveTextContent('more conclusive to go');
+      expect(within(summary).queryByTestId(`shadow-detection-summary-${detector}-v1-reversible-bar`)).toBeNull();
     }
   );
 
@@ -1525,6 +1566,38 @@ describe('ShadowDetectionsTab explanations', () => {
     const bar = screen.getByTestId('shadow-detection-summary-signupNetworkBurst-v1-enforce-bar');
     expect(bar.textContent).toBe('50 / 50');
     expect(bar.getAttribute('data-status')).toBe('ready');
+  });
+
+  it('shows conclusive verdicts toward the lower reversible-tier bar', () => {
+    renderTab();
+    // The same 12 conclusive verdicts, of the 20 the reversible tiers need.
+    const bar = screen.getByTestId('shadow-detection-summary-signupNetworkBurst-v1-reversible-bar');
+    expect(bar.textContent).toBe('12 / 20');
+    expect(bar.getAttribute('data-status')).toBe('collecting');
+    expect(screen.getByText('8 more conclusive to go')).toBeTruthy();
+  });
+
+  it('marks the reversible tiers ready while Contain is still collecting', () => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(list({ summary: [summaryRow({ confirmedAbuse: 19, legitimateHuman: 1, legitimateAutomation: 0 })] }))
+    );
+    renderTab();
+    const reversible = screen.getByTestId('shadow-detection-summary-signupNetworkBurst-v1-reversible-bar');
+    expect(reversible.textContent).toBe('20 / 20');
+    expect(reversible.getAttribute('data-status')).toBe('ready');
+    expect(screen.getByText('Meets the 90% precision bar')).toBeTruthy();
+    const contain = screen.getByTestId('shadow-detection-summary-signupNetworkBurst-v1-enforce-bar');
+    expect(contain.getAttribute('data-status')).toBe('collecting');
+  });
+
+  it('flags the reversible tiers below their precision floor', () => {
+    m.useShadowDetections.mockReturnValue(
+      queryResult(list({ summary: [summaryRow({ confirmedAbuse: 17, legitimateHuman: 3, legitimateAutomation: 0 })] }))
+    );
+    renderTab();
+    const reversible = screen.getByTestId('shadow-detection-summary-signupNetworkBurst-v1-reversible-bar');
+    expect(reversible.getAttribute('data-status')).toBe('below_bar');
+    expect(screen.getByText('Below the 90% precision bar')).toBeTruthy();
   });
 
   it('guides each verdict and points to the user page for acting on abuse', () => {

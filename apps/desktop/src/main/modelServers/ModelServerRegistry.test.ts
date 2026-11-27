@@ -3720,7 +3720,7 @@ describe('credentials never leak', () => {
       return reply;
     };
 
-    const listModels = async () => out.ipc(`reply ${IPC_CHANNELS.chatListModels}`, await local.models());
+    const listModels = async () => out.ipc('reply chat:list-models', await local.models());
 
     /** A chat turn as ChatService runs it: events go to the renderer, a failure's message to the log, renderer and history. */
     const chat = async (model: string, signal?: AbortSignal) => {

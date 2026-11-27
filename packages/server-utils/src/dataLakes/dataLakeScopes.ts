@@ -12,6 +12,7 @@ import type { ApiKeyInfo } from '../cli/auth';
 import { requestTurnAuth, type TurnAuth } from '../auth/turnAuth';
 import { adminRoleWithheldFor } from '../auth/apiKeyAdminScope';
 import { assertApiKeyScope, holdsApiKeyScope, type ScopedRequest } from '../middlewares/apiKeyScopeGate';
+import { fileToolsDeniedFor } from '../files/fileScopes';
 
 /**
  * The `requiredScopes` lists every `/api/data-lakes` route declares, and the
@@ -72,13 +73,22 @@ export function holdsDataLakeReadScope(req: ScopedRequest): boolean {
   return holdsApiKeyScope(req, DATA_LAKE_READ_SCOPES);
 }
 
+/**
+ * Every tool the request's credential may not be offered: the data-lake and file-reading denials
+ * together. The one producer for the chat doors (`/api/chat`, `/api/ai/llm`) and agent runs
+ * (credentialExecutionFields), so the three cannot drift.
+ */
+export function apiKeyToolsDeniedFor(req: ScopedRequest): string[] {
+  return [...dataLakeToolsDeniedFor(req), ...fileToolsDeniedFor(req)];
+}
+
 /** The slice of `req.apiKeyInfo` the lake-tool gate and run attribution read. */
 export type ApiKeyCredential = Pick<ApiKeyInfo, 'keyId' | 'scopes' | 'oauthExchangeClientId'>;
 
 /**
  * The chat tools a caller may not be offered on this request: the data-lake write tools when an
  * API key lacks datalake:write, and the read tool too when it also lacks datalake:read (JWT/browser
- * callers hold every scope - see holdsApiKeyScope). The chat doors (`/api/chat`, `/api/ai/llm`) pass this
+ * callers hold every scope - see holdsApiKeyScope). The chat doors take it through apiKeyToolsDeniedFor
  * as the turn's `deniedTools`, which is enforced at every denylist site in ChatCompletionProcess,
  * including the pass after the intent gates run.
  */
@@ -89,7 +99,7 @@ export function dataLakeToolsDeniedFor(req: ScopedRequest): string[] {
 
 /**
  * The persisted run fields derived from the request's credential (`req.apiKeyInfo`, undefined for a
- * signed-in session): always the turn auth, plus the scope denials and the withheld admin role when
+ * signed-in session): always the turn auth, plus the data-lake and file tool denials and the withheld admin role when
  * the key calls for them.
  */
 export function credentialExecutionFields(apiKeyInfo: ApiKeyCredential | undefined): TurnAuth & {
@@ -97,7 +107,7 @@ export function credentialExecutionFields(apiKeyInfo: ApiKeyCredential | undefin
   adminRoleWithheld?: boolean;
   oauthClientId?: string;
 } {
-  const scopeDeniedTools = dataLakeToolsDeniedFor({ apiKeyInfo });
+  const scopeDeniedTools = apiKeyToolsDeniedFor({ apiKeyInfo });
   return {
     ...(scopeDeniedTools.length ? { scopeDeniedTools } : {}),
     ...(adminRoleWithheldFor(apiKeyInfo) ? { adminRoleWithheld: true } : {}),

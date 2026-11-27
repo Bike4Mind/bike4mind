@@ -242,6 +242,21 @@ jobs:
           script: |
             await require('./.github/scripts/preview-e2e.cjs').verify({ github, context });
 
+      # Weekend-scaled previews run zero tasks; wake one before the suite instead of letting
+      # every test time out. Its own budget, outside execution_timeout_minutes.
+      - name: Wake a sleeping preview before testing
+        if: inputs.pr_number != '' && inputs.preview_deploy_id != ''
+        timeout-minutes: 10
+        env:
+          API_URL: ${{ steps.config.outputs.api_url }}
+          E2E_PREVIEW_SEED: ${{ secrets.E2E_CLEANUP_SECRET_PREVIEW }}
+          E2E_WAF_BYPASS_TOKEN: ${{ secrets.E2E_WAF_BYPASS_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          SST_STAGE: ${{ steps.config.outputs.stage }}
+        run: |
+          . .github/scripts/derive-preview-e2e-secret.sh "$SST_STAGE"
+          node .github/scripts/preview-e2e.cjs
+
       - name: Resolve E2E test ID
         id: testid
         env:

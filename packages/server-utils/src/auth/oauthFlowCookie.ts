@@ -28,6 +28,8 @@ import { appendSetCookie, readCookie, secureAttribute, type CookieResponse } fro
 // Path=/api so a single cookie covers every callback path (all live under /api).
 export const STATE_NONCE_COOKIE_NAME = 'b4m_oauth_nonce';
 export const OKTA_PKCE_COOKIE_NAME = 'b4m_okta_pkce';
+export const SAML_NONCE_COOKIE_NAME = 'b4m_saml_nonce';
+const SAML_NONCE_COOKIE_PATH = '/api/auth/saml';
 
 // Per-flow nonce slots. A signed-in user can have several *link* flows open at
 // once (Drive connect, Slack user-link, org Slack-connect); giving each its own
@@ -40,6 +42,7 @@ export const NONCE_SLOT = {
   orgSlackConnect: 'org-slack-connect',
   githubLakeConnect: 'github-lake-connect',
   slackAppInstall: 'slack-app-install',
+  notionConnect: 'notion-connect',
 } as const;
 
 // A slot suffixes the base cookie name; no slot keeps the base cookie unchanged.
@@ -105,6 +108,33 @@ export function consumeStateNonce(req: Pick<Request, 'headers'>, res: CookieResp
   const nonceHash = readStateNonceHash(req, slot);
   clearStateNonce(res, slot);
   return nonceHash;
+}
+
+/**
+ * SAML's counterpart to issueStateNonce. The IdP returns the SAMLResponse by a cross-site POST,
+ * which never carries a Lax cookie, so this one is SameSite=None (and therefore always Secure:
+ * browsers treat localhost as a secure origin, so local dev still stores it). Returns the hash the
+ * caller round-trips through RelayState.
+ */
+export function issueSamlStateNonce(res: CookieResponse): string {
+  const nonce = randomBytes(32).toString('hex');
+  appendSetCookie(
+    res,
+    `${SAML_NONCE_COOKIE_NAME}=${nonce}; Path=${SAML_NONCE_COOKIE_PATH}; Max-Age=${FLOW_COOKIE_TTL_SECONDS}; HttpOnly; SameSite=None; Secure`
+  );
+  return sha256(nonce);
+}
+
+/** Single-use read of the SAML nonce cookie: its hash, or null when absent. Expires the cookie either way. */
+export function consumeSamlStateNonce(req: Pick<Request, 'headers'>, res: CookieResponse): string | null {
+  const nonce = readCookie(req, SAML_NONCE_COOKIE_NAME);
+  if (!res.headersSent) {
+    appendSetCookie(
+      res,
+      `${SAML_NONCE_COOKIE_NAME}=; Path=${SAML_NONCE_COOKIE_PATH}; Max-Age=0; HttpOnly; SameSite=None; Secure`
+    );
+  }
+  return nonce ? sha256(nonce) : null;
 }
 
 /** Store the PKCE code_verifier (Okta) in a browser-bound HttpOnly cookie at flow-start. */

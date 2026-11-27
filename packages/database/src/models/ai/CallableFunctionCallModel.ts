@@ -10,6 +10,7 @@ import {
 } from '@bike4mind/common';
 import mongoose, { Schema, Model, model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import { UserApiKey } from '../auth/UserApiKeyModel';
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const CODE = /^[a-z0-9_]{1,40}$/;
@@ -85,45 +86,90 @@ class CallableFunctionCallRepository extends BaseRepository<ICallableFunctionCal
     }
   }
 
-  /** Overwrites a queued call's row with how it went, so an asynchronous call keeps the one row it was queued as. */
+  /**
+   * Overwrites a queued call's row with how it went, so an asynchronous call keeps the one row it was queued as. A
+   * row its caller cancelled stays `cancelled`, and is returned as it is.
+   */
   async rewrite(id: string, row: Partial<ICallableFunctionCall>): Promise<ICallableFunctionCallDocument> {
-    const updated = await this.model.findByIdAndUpdate(id, { $set: row }, { new: true, runValidators: true });
-    if (!updated) throw new Error('Callable function call row not found');
-    return updated;
+    const updated = await this.model.findOneAndUpdate(
+      { _id: id, outcome: { $ne: 'cancelled' } },
+      { $set: row },
+      { new: true, runValidators: true }
+    );
+    if (updated) return updated;
+    const cancelled = await this.model.findOne({ _id: id, outcome: 'cancelled' });
+    if (!cancelled) throw new Error('Callable function call row not found');
+    return cancelled;
   }
 
-  /** One caller's calls of one function since `since`, read through `callablefncall_function_started`. */
-  async summarizeForCaller(
+  /**
+   * The calls of one owner's function since `since`, by the owner and by recipients of a share, read through
+   * `callablefncall_function_started`. A caller the function was never shared with is left out.
+   */
+  async summarizeForOwner(
     functionId: string,
-    callerUserId: string,
+    ownerUserId: string,
     since: Date,
     recentLimit: number
   ): Promise<CallableFunctionCallSummary> {
     // Contract reads are logged too, but they are not calls of the function.
-    const match = { functionId, callerUserId, op: 'call', startedAt: { $gte: since } };
+    const match = {
+      functionId,
+      ownerUserId,
+      op: 'call',
+      reason: { $ne: 'not_caller' },
+      startedAt: { $gte: since },
+    };
     const [counts, recent] = await Promise.all([
       this.model.aggregate<{ _id: CallableFunctionCallRowOutcome; count: number }>([
         { $match: match },
         { $group: { _id: '$outcome', count: { $sum: 1 } } },
       ]),
       this.model
-        .find(match, { startedAt: 1, outcome: 1, surface: 1 })
+        .find(match, {
+          startedAt: 1,
+          outcome: 1,
+          surface: 1,
+          callerUserId: 1,
+          pinSeq: 1,
+          durationMs: 1,
+          apiKeyId: 1,
+        })
         .sort({ startedAt: -1 })
         .limit(recentLimit)
         .lean(),
     ]);
     const outcomes: CallableFunctionCallSummary['outcomes'] = {};
     for (const { _id, count } of counts) outcomes[_id] = count;
+    // Only the owner's own keys are named; a recipient's key is never looked up.
+    const ownKeyIds = [
+      ...new Set(recent.flatMap(row => (row.callerUserId === ownerUserId && row.apiKeyId ? [row.apiKeyId] : []))),
+    ].filter(id => mongoose.isValidObjectId(id));
+    const keyNames = new Map(
+      ownKeyIds.length === 0
+        ? []
+        : (await UserApiKey.find({ _id: { $in: ownKeyIds }, userId: ownerUserId }, { name: 1 }).lean()).map(key => [
+            String(key._id),
+            key.name,
+          ])
+    );
     return {
       since,
       total: counts.reduce((sum, { count }) => sum + count, 0),
       outcomes,
-      recent: recent.map(row => ({
-        id: String(row._id),
-        startedAt: row.startedAt,
-        outcome: row.outcome,
-        surface: row.surface,
-      })),
+      recent: recent.map(row => {
+        const byRecipient = row.callerUserId !== ownerUserId;
+        return {
+          id: String(row._id),
+          startedAt: row.startedAt,
+          outcome: row.outcome,
+          surface: row.surface,
+          byRecipient,
+          ...(row.pinSeq !== undefined ? { pinSeq: row.pinSeq } : {}),
+          durationMs: row.durationMs,
+          ...(!byRecipient && row.apiKeyId ? { apiKey: { name: keyNames.get(row.apiKeyId) ?? null } } : {}),
+        };
+      }),
     };
   }
 }

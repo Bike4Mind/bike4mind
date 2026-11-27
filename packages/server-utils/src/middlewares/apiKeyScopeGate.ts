@@ -69,7 +69,7 @@ function isConfinedKey(heldScopes: readonly ApiKeyScopeValue[] | undefined): boo
 const ALL_SCOPE_VALUES: ReadonlySet<string> = ALL_KNOWN_API_KEY_SCOPE_VALUES;
 
 export type LegacyApiKeyWindow = {
-  /** Keys created before this are legacy. `null` until every route keys use has its scopes. */
+  /** Keys created before this are legacy. `null` makes every key legacy; only tests use it. */
   cutoff: Date | null;
   /** From this instant no key is legacy. `null` until the end date is announced. */
   endsAt: Date | null;
@@ -78,12 +78,15 @@ export type LegacyApiKeyWindow = {
 /**
  * The legacy API key window. A route that opts in with `grandfatherLegacyKeys` keeps
  * admitting legacy keys that lack its scopes, so scopes can land on routes keys already
- * reach without breaking existing keys. Until `cutoff` is set every key counts as legacy;
- * set both dates together once the scope map is final, and announce them to key owners.
- * Removed with the grandfathering code when the default flips to deny. See
- * docs/architecture/api-key-scope-rollout.md.
+ * reach without breaking existing keys. Only keys created before `cutoff` are legacy: a key
+ * minted after it holds exactly the scopes it was minted with. Set `endsAt` once it is
+ * announced to key owners. Removed with the grandfathering code when the default flips to
+ * deny. See docs/architecture/api-key-scope-rollout.md.
  */
-export const LEGACY_API_KEY_WINDOW: Readonly<LegacyApiKeyWindow> = Object.freeze({ cutoff: null, endsAt: null });
+export const LEGACY_API_KEY_WINDOW: Readonly<LegacyApiKeyWindow> = Object.freeze({
+  cutoff: new Date('2026-11-26T00:00:00.000Z'),
+  endsAt: null,
+});
 
 /** Whether any key can still be legacy at `now`: false from `endsAt` on. */
 export function isLegacyWindowOpen(

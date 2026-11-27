@@ -84,7 +84,8 @@ export async function queueFunctionCall(
 
 /**
  * Runs one queued call under the caller's time limit, once. A redelivery skips a claimed call, and settles one
- * whose worker is gone as `worker_lost`. The dispatcher checks everything again before it runs.
+ * whose worker is gone as `worker_lost`. The dispatcher checks everything again before it runs. Null when the call
+ * was not run here, or was cancelled while it ran.
  */
 export async function runQueuedFunctionCall(
   job: CallableFunctionCallJob,
@@ -119,7 +120,7 @@ export async function runQueuedFunctionCall(
         callId: job.callId,
       }
     );
-    await callableFunctionResultRepository.finish(job.callId, {
+    const stored = await callableFunctionResultRepository.finish(job.callId, {
       outcome: call.outcome,
       ...(call.reason ? { reason: call.reason } : {}),
       ...(call.errorClass ? { errorClass: call.errorClass } : {}),
@@ -127,7 +128,7 @@ export async function runQueuedFunctionCall(
       ...(call.outputs ? { outputs: call.outputs } : {}),
       ...(call.stamp ? { stamp: call.stamp } : {}),
     });
-    return call;
+    return stored === 'cancelled' ? null : call;
   } catch (error) {
     // Not retried: a second delivery could run the guest twice.
     await callableFunctionCallRepository.rewrite(job.callId, { outcome: 'error', reason: 'dispatch_failed' });
@@ -153,4 +154,20 @@ export async function readFunctionCall(
     await callableFunctionCallRepository.rewrite(callId, { outcome: 'error', reason: 'worker_lost' });
   }
   return callableFunctionResultRepository.findForCaller(callId, caller.id);
+}
+
+/**
+ * Cancels the caller's own call while it is `queued` or `running`, result and row both; a run still going ends
+ * without storing anything. Returns the call as it stands, unchanged once finished; another person's id reads as a
+ * missing one.
+ */
+export async function cancelFunctionCall(
+  caller: Pick<CallableFunctionCaller, 'id'>,
+  callId: string
+): Promise<ICallableFunctionResultDocument | null> {
+  if (!/^[0-9a-f]{24}$/.test(callId)) return null;
+  const cancelled = await callableFunctionResultRepository.cancel(callId, caller.id);
+  if (!cancelled) return readFunctionCall(caller, callId);
+  await callableFunctionCallRepository.rewrite(callId, { outcome: 'cancelled' });
+  return cancelled;
 }

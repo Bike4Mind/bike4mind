@@ -7,6 +7,7 @@ import { recordAdminActionFromRequest } from '@bike4mind/server-utils/utils/admi
 
 const handler = adminApi({
   adminPermissions: { GET: 'settings:manage', POST: 'settings:manage' },
+  fullAdminMethods: ['POST'],
   requiredScopes: [ApiKeyScope.ADMIN],
 })
   .get(async (req, res) => {

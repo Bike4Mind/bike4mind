@@ -79,7 +79,7 @@ export function questAgents(agents: readonly AgentView[], report: ParentReport |
   return agents.filter(agent => agent.createdAt > since);
 }
 
-/** Whether every agent ended done, which is what earns "Quest complete" over "Quest ended". */
+/** Whether every agent ended done, which earns the scene's complete finale title over its ended one. */
 export function questSucceeded(stats: FinaleStats): boolean {
   return stats.failed === 0 && stats.done === stats.agents;
 }

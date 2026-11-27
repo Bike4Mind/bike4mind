@@ -18,6 +18,15 @@ export interface ICallableFunctionReview {
   /** False when the recipient turned the function off; it is not callable until they turn it on. */
   enabled: boolean;
   reviewedAt: Date;
+  /** The interface `reviewHash` names, so a later change can be listed field by field; absent on older reviews. */
+  reviewed?: CallableFunctionReviewedInterface;
+}
+
+export interface CallableFunctionReviewedInterface {
+  name: string;
+  description: string;
+  inputs: unknown;
+  outputs: unknown;
 }
 
 export interface ICallableFunctionReviewDocument extends ICallableFunctionReview, IMongoDocument {}

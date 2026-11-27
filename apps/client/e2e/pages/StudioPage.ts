@@ -1,6 +1,7 @@
 import { expect, type Locator, type Response } from '@playwright/test';
 import { TIMEOUTS } from '../constants';
 import { BasePage } from './BasePage';
+import { scopeWafBypass } from '../helpers/waf-bypass';
 
 /** Must stay in sync with STUDIO_MODALITIES in app/components/Studio/studioModality.ts (tab order). */
 export const STUDIO_MODALITIES = ['video', 'music', 'speech', 'sound-effects'] as const;
@@ -135,7 +136,7 @@ export class StudioPage extends BasePage {
 
   /** The user's personal balance, from the endpoint the credits chip reads. */
   async creditBalance(accessToken: string): Promise<number> {
-    const response = await this.page.request.get('/api/credits/balance', {
+    const response = await scopeWafBypass(this.page.request).get('/api/credits/balance', {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     expect(response.ok(), `GET /api/credits/balance answered ${response.status()}`).toBe(true);
@@ -145,7 +146,7 @@ export class StudioPage extends BasePage {
 
   /** The user's deductions of `type` from the last day, newest first, as the credits page lists them. */
   async usageTransactions(accessToken: string, type: string): Promise<Record<string, unknown>[]> {
-    const response = await this.page.request.get('/api/credits/transactions?days=1&type=deducted', {
+    const response = await scopeWafBypass(this.page.request).get('/api/credits/transactions?days=1&type=deducted', {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     expect(response.ok(), `GET /api/credits/transactions answered ${response.status()}`).toBe(true);

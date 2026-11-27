@@ -109,7 +109,7 @@ describe('pyodideSandboxWorkerBody serialization', () => {
   it('refuses an oversized result before posting it', () => {
     expect(source).toContain(`_MAX_RESULT_BYTES = ${FUNCTION_CONTRACT_LIMITS.maxResultBytes}`);
     expect(source).toContain('if len(value_text) > _MAX_RESULT_BYTES:');
-    expect(source).toContain("_FunctionCallError('The function returned a result larger than 256 KB.')");
+    expect(source).toContain("_FunctionCallError('The function returned a result larger than 5 MB.')");
   });
 
   it('never contains a closing script tag', () => {
@@ -322,6 +322,35 @@ describe('pyodideSandboxWorkerBody package loading', () => {
         executionTime: expect.any(Number),
       },
     });
+  });
+
+  it('posts a result of exactly the 5 MB cap whole and quickly, with the event loop still turning', async () => {
+    const { posted, pyodide, send } = startWorker();
+    await send({ type: 'initialize' });
+    const head = '{"text": "';
+    const valueJson = `${head}${'x'.repeat(FUNCTION_CONTRACT_LIMITS.maxResultBytes - head.length - 2)}"}`;
+    expect(valueJson).toHaveLength(5 * 1024 * 1024);
+    pyodide.runPythonAsync.mockResolvedValueOnce({
+      toJs: () => ({ contract_json: '{}', value_json: valueJson, stdout: '', stderr: '', error: undefined }),
+    } as never);
+
+    let widestGapMs = 0;
+    let last = performance.now();
+    const ticker = setInterval(() => {
+      const now = performance.now();
+      widestGapMs = Math.max(widestGapMs, now - last);
+      last = now;
+    }, 5);
+    const started = performance.now();
+    await send({ type: 'call', code: 'x = 1', packages: [], paramsJson: '{}', timeoutMs: 1000, nonce: 'n3' });
+    const elapsedMs = performance.now() - started;
+    await new Promise(resolve => setTimeout(resolve, 20));
+    clearInterval(ticker);
+
+    expect(posted.at(-1)).toMatchObject({ type: 'call-result', result: { success: true, valueJson } });
+    // A 5 MiB hand-off takes a few milliseconds here, so only a copy or parse loop can reach 250 ms.
+    expect(elapsedMs).toBeLessThan(250);
+    expect(widestGapMs).toBeLessThan(250);
   });
 
   it('passes params as JSON text and reports an error from the call', async () => {

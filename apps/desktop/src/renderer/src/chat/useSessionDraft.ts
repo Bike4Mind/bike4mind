@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { newSessionDefaultsSchema, type NewSessionDefaults } from '@shared/sessionDefaults';
 import type { ChatAttachment, ChatSession, ChatSessionMode, CreateCodeSessionRequest } from '@shared/chat';
+import { hostChat } from '../host/hostChat';
 import type { ConversationController, SessionPlacement } from './useChat';
 import { canHoldWorktree, worktreeByDefault } from './worktreeDefault';
 
@@ -51,7 +52,7 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
   const loadDefaults = useCallback(async (draftId: string): Promise<{ ok: true } | { ok: false; error: string }> => {
     const version = ++defaultsVersion.current;
     try {
-      const defaults = newSessionDefaultsSchema.parse(await window.b4m.chat.defaultsForNewSession());
+      const defaults = newSessionDefaultsSchema.parse(await hostChat.defaultsForNewSession());
       const before = current.current;
       if (before?.id !== draftId || defaultsVersion.current !== version) return { ok: true };
       const next = { ...before };
@@ -124,7 +125,7 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
   const chooseDirectory = useCallback(
     async (directory: string) => {
       const before = current.current;
-      const inspected = await window.b4m.chat.inspectProject(directory);
+      const inspected = await hostChat.inspectProject(directory);
       if (!before || current.current?.id !== before.id) return;
       if (inspected.refusal) {
         setProjectError(inspected.refusal);
@@ -190,7 +191,7 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
         const section = place ? { sectionId: place.sectionId } : undefined;
         const created =
           draft.mode === 'code'
-            ? await window.b4m.chat.createCodeSession({
+            ? await hostChat.createCodeSession({
                 ...section,
                 ...(draft.project
                   ? {
@@ -233,7 +234,7 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
           id,
           attachments.map(attachment => attachment.id)
         );
-        const result = await window.b4m.chat.sendMessage({ sessionId: id, text, attachments: [...attachments] });
+        const result = await hostChat.sendMessage({ sessionId: id, text, attachments: [...attachments] });
         if (!result.ok) throw new Error(result.error);
         accepted = true;
         if (created.sidebarSections) place?.placed(created.sidebarSections);
@@ -253,7 +254,7 @@ export function useSessionDraft(onCreated: (id: string) => void, onListChanged: 
       } catch (cause) {
         if (id && !accepted) {
           try {
-            await window.b4m.chat.deleteSession(id);
+            await hostChat.deleteSession(id, { allowDiscard: false });
           } catch {
             if (current.current?.id === draftId)
               setError('Could not remove the unsent conversation. Delete it from the sidebar before retrying.');

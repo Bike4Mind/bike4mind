@@ -558,11 +558,6 @@
       "count": 3
     }
   },
-  "apps/client/app/components/Charts/RechartsChart.tsx": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 2
-    }
-  },
   "apps/client/app/components/Charts/RechartsRenderer.tsx": {
     "@typescript-eslint/no-explicit-any": {
       "count": 3
@@ -3011,11 +3006,6 @@
       "count": 5
     }
   },
-  "apps/client/pages/api/users/[id]/email-settings.ts": {
-    "@typescript-eslint/no-explicit-any": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/users/[id]/organizations/__tests__/index.test.ts": {
     "@typescript-eslint/no-explicit-any": {
       "count": 7
@@ -4505,7 +4495,7 @@
   },
   "b4m-core/slack/src/handlers/__tests__/WorkflowStepHandler.test.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 31
+      "count": 30
     }
   },
   "b4m-core/slack/src/handlers/channel-manager.ts": {
@@ -4546,7 +4536,7 @@
   },
   "b4m-core/slack/src/resources/GitHubResource.ts": {
     "@typescript-eslint/no-explicit-any": {
-      "count": 4
+      "count": 3
     }
   },
   "b4m-core/slack/src/resources/InternalResource.ts": {

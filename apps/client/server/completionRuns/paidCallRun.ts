@@ -25,7 +25,7 @@ export type PaidCallRun = {
 
 type PaidCallRequest = {
   user?: ApiKeyHolder;
-  apiKeyInfo?: Pick<Express.ApiKeyInfo, 'billingOwnerType' | 'organizationId'>;
+  apiKeyInfo?: Pick<Express.ApiKeyInfo, 'billingOwnerType' | 'organizationId' | 'scopes'>;
 };
 
 /**

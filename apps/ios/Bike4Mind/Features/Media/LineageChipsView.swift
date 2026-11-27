@@ -33,7 +33,7 @@ struct LineageChipsView: View {
 
   private func row(title: String, links: [LineageLink], identifier: String) -> some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text(title).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+      Text(title).font(Tokens.Typography.meta.weight(.semibold)).foregroundStyle(.secondary)
       ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 8) {
           ForEach(links) { link in chip(link) }
@@ -51,7 +51,7 @@ struct LineageChipsView: View {
         Image(systemName: symbol(for: link.node))
         Text(label(for: link)).lineLimit(1)
       }
-      .font(.footnote)
+      .font(Tokens.Typography.caption)
       .padding(.horizontal, 10)
       .padding(.vertical, 6)
       .background(.white.opacity(0.14), in: Capsule())

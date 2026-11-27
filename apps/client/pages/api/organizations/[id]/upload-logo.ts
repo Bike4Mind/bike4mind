@@ -1,5 +1,5 @@
 import { AppFileReservedTags, FileGeneratePresignedUrlRequestInput, isAllowedImageMimeType } from '@bike4mind/common';
-import { withTransaction } from '@bike4mind/database';
+import { runAfterCommit, withTransaction } from '@bike4mind/database';
 import { AppFile } from '@bike4mind/database/content';
 import { Organization } from '@bike4mind/database/infra';
 import { S3Storage } from '@bike4mind/fab-pipeline';
@@ -36,11 +36,27 @@ const handler = baseApi().post(
 
     const storage = new S3Storage(Resource.appFilesBucket.name);
 
-    let retiredLogoDeleted = false;
     const result = await withTransaction(async session => {
-      if (organization.logo) {
-        await storage.delete(organization.logo.path);
-        retiredLogoDeleted = true;
+      const retired = organization.logo?.path;
+      if (organization.logo && retired) {
+        // After commit, so a rolled-back or retried transaction keeps the logo's bytes.
+        const deleteRetired = async () => {
+          try {
+            await storage.delete(retired);
+            const cdnPath = appFileCdnPath(retired);
+            if (cdnPath) await invalidateRouterPaths([cdnPath], { label: 'org-logo', logger: req.logger });
+          } catch (error) {
+            req.logger.error('[org-logo] post-commit delete failed; object left orphaned', {
+              orgId,
+              key: retired,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        };
+        if (!runAfterCommit(session, 'orgLogo|retired', deleteRetired)) {
+          req.logger.warn('[org-logo] delete could not be queued after commit; running it inline', { orgId });
+          void deleteRetired();
+        }
         await AppFile.findByIdAndDelete(organization.logo.id).session(session);
         await Organization.updateOne({ _id: orgId }, { $unset: { logoFileId: 1 } }).session(session);
       }
@@ -73,11 +89,6 @@ const handler = baseApi().post(
 
       // Self-host swaps the (browser-unreachable) MinIO presign for the same-origin upload proxy.
       return { url: resolveBrowserAppFileUploadUrl(file.id, presignedUrl), fileId: file.id, fileKey };
-    }).finally(async () => {
-      // The old bytes are deleted inside the transaction and a rollback does not restore them, so
-      // invalidate whenever the delete ran, committed or not.
-      const retiredCdnPath = retiredLogoDeleted && organization.logo ? appFileCdnPath(organization.logo.path) : null;
-      if (retiredCdnPath) await invalidateRouterPaths([retiredCdnPath], { label: 'org-logo', logger: req.logger });
     });
 
     await recordAdminActionFromRequest(req, {

@@ -1,9 +1,15 @@
-import { assertCanActOnAdminTarget, ForbiddenError, isFullAdmin, NotFoundError } from '@bike4mind/common';
+import {
+  assertCanActOnAdminTarget,
+  ForbiddenError,
+  isFullAdmin,
+  NotFoundError,
+  type AdminApproval,
+} from '@bike4mind/common';
 import { organizationRepository, userRepository } from '@bike4mind/database';
 import { SubscriptionOwnerType, type ISubscription } from '@bike4mind/server-utils/lib/subscriptions/types';
 import { isSelfOrImpersonator } from '@bike4mind/server-utils/utils/adminAudit';
 
-type Actor = Parameters<typeof isFullAdmin>[0] & { id: string; impersonatedBy?: string };
+export type CreditActor = Parameters<typeof isFullAdmin>[0] & { id: string; impersonatedBy?: string };
 type CreditedOrganization = {
   userId?: string | null;
   adminUserIds?: readonly string[] | null;
@@ -16,14 +22,14 @@ type CreditedOrganization = {
  * an account with admin access (its own included, since a delegate has admin access), and never an organization the
  * delegate belongs to. Full admins skip them; their self-actions are still audited by each route as before.
  */
-export async function assertDelegateCanCreditUser(actor: Actor, userId: string, verb: string): Promise<void> {
+export async function assertDelegateCanCreditUser(actor: CreditActor, userId: string, verb: string): Promise<void> {
   if (isFullAdmin(actor)) return;
   if (isSelfOrImpersonator(actor, userId)) throw new ForbiddenError(`You cannot ${verb} your own account`);
   assertCanActOnAdminTarget(actor, await userRepository.findById(userId), verb);
 }
 
 /** Check a bulk request before any account in it is changed. */
-export async function assertDelegateCanCreditUsers(actor: Actor, userIds: string[], verb: string): Promise<void> {
+export async function assertDelegateCanCreditUsers(actor: CreditActor, userIds: string[], verb: string): Promise<void> {
   if (isFullAdmin(actor) || userIds.length === 0) return;
   if (userIds.some(userId => isSelfOrImpersonator(actor, userId))) {
     throw new ForbiddenError(`You cannot ${verb} your own account`);
@@ -35,26 +41,47 @@ export async function assertDelegateCanCreditUsers(actor: Actor, userIds: string
   for (const user of users) assertCanActOnAdminTarget(actor, user, verb);
 }
 
-export async function assertDelegateCanCreditOrganization(
-  actor: Actor,
-  organization: CreditedOrganization,
-  verb: string
-): Promise<void> {
-  if (isFullAdmin(actor)) return;
-  const memberIds = [
+export const organizationMemberIds = (organization: CreditedOrganization): string[] =>
+  [
     organization.userId,
     ...(organization.adminUserIds ?? []),
     ...(organization.billingManagerUserIds ?? []),
     ...(organization.users ?? []).map(member => member.userId),
   ].filter((id): id is string => typeof id === 'string' && id.length > 0);
-  if (memberIds.some(id => isSelfOrImpersonator(actor, id))) {
+
+/** Whether the actor (or the admin impersonating them) owns, administers, bills for or is a member of the organization. */
+export function belongsToOrganization(actor: CreditActor, organization: CreditedOrganization): boolean {
+  return organizationMemberIds(organization).some(id => isSelfOrImpersonator(actor, id));
+}
+
+/**
+ * Whether a credit change to the organization is a self-grant: the acting admin belongs to it, or, when an
+ * approver runs it, the admin who requested it does. Approval executors run as the approver.
+ */
+export function isOrganizationSelfGrant(
+  actor: CreditActor,
+  organization: CreditedOrganization,
+  approval?: Pick<AdminApproval, 'requestedBy'>
+): boolean {
+  if (belongsToOrganization(actor, organization)) return true;
+  const requesterIds = approval?.requestedBy.selfIds ?? [];
+  return organizationMemberIds(organization).some(id => requesterIds.includes(id));
+}
+
+export async function assertDelegateCanCreditOrganization(
+  actor: CreditActor,
+  organization: CreditedOrganization,
+  verb: string
+): Promise<void> {
+  if (isFullAdmin(actor)) return;
+  if (belongsToOrganization(actor, organization)) {
     throw new ForbiddenError(`You cannot ${verb} an organization you belong to`);
   }
   if (organization.userId) await assertDelegateCanCreditUser(actor, organization.userId, verb);
 }
 
 export async function assertDelegateCanChangeSubscription(
-  actor: Actor,
+  actor: CreditActor,
   subscription: Pick<ISubscription, 'ownerType' | 'ownerId'>,
   verb: string
 ): Promise<void> {

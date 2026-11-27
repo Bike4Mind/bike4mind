@@ -34,6 +34,7 @@ const SAMPLE_LIMIT = 25;
 
 const handler = adminApi({
   adminPermissions: { POST: 'settings:manage' },
+  fullAdminMethods: ['POST'],
   requiredScopes: [ApiKeyScope.ADMIN],
 }).post(
   asyncHandler(async (req, res) => {
