@@ -114,6 +114,8 @@ export function publicFunctionGroup(access: CallableFunctionAccess): PublicFunct
     case 'person':
     case 'project':
     case 'organization':
+    // The app lists the signed-in audience under Shared with me, so it lists as shared here too.
+    case 'signed_in':
       return 'shared';
     default: {
       const unmapped: never = access;

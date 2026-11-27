@@ -146,7 +146,8 @@ vi.mock('@bike4mind/database', async () => ({
           fn.ownerKey !== userId &&
           fn.enabled &&
           fn.state === 'live' &&
-          (fn.grants as { userIds: string[] } | undefined)?.userIds.includes(userId)
+          ((fn.grants as { userIds: string[] } | undefined)?.userIds.includes(userId) ||
+            (fn.platform as { audience?: string } | undefined)?.audience === 'signed_in')
       ),
   },
   callableFunctionReviewRepository: {
@@ -657,6 +658,47 @@ describe('a function shared with the caller', () => {
       body: { error: 'Function not found' },
     });
     expect(h.runner).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists, reads, and reviews one the signed-in audience alone reaches as a shared entry', async () => {
+    const offer = { setBy: 'admin1', setAt: T0, audience: 'signed_in' };
+    h.functions[2] = fnDoc(OTHERS_ID, { slug: 'beam_other', ownerKey: 'u2', userId: 'u2', platform: offer });
+    const listed = async () => (await call(listRoute, { user: RECIPIENT })).body.data;
+    const read = async () => (await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT })).body.data;
+    const entry = { id: OTHERS_ID, group: 'shared', trust_label: 'platform' };
+    const detail = {
+      shared_by: { name: 'Owner Two' },
+      shared_via: 'signed_in',
+      review_hash: await reviewHash(CONTRACT),
+    };
+
+    expect(await listed()).toEqual([expect.objectContaining({ ...entry, review_status: 'needs_review' })]);
+    const unread = await read();
+    expect(unread).toMatchObject({ ...entry, ...detail, review_status: 'needs_review' });
+    expect(getFunctionContract.responses[200].schema.safeParse({ data: unread }).success).toBe(true);
+    expect(await invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as)).toEqual(REVIEW_REQUIRED);
+
+    const allowed = await call(reviewRoute, {
+      method: 'POST',
+      query: { id: OTHERS_ID },
+      body: { action: 'allow', review_hash: await reviewHash(CONTRACT) },
+      user: RECIPIENT,
+    });
+    expect(allowed.body.data).toMatchObject({ ...entry, ...detail, review_status: 'allowed' });
+    expect(await listed()).toEqual([expect.objectContaining({ ...entry, review_status: 'allowed' })]);
+    expect(await invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as)).toMatchObject({ status: 200 });
+
+    h.functions[2] = fnDoc(OTHERS_ID, {
+      slug: 'beam_other',
+      ownerKey: 'u2',
+      userId: 'u2',
+      platform: { setBy: 'admin1', setAt: T0 },
+    });
+    expect(await listed()).toEqual([]);
+    expect(await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT })).toEqual({
+      status: 404,
+      body: { error: 'Function not found' },
+    });
   });
 
   it('neither lists nor reads a function shared with someone else, or one shared with no one', async () => {

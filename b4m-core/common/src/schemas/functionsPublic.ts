@@ -53,8 +53,8 @@ export const PublicFunctionSchema = z.object({
     .enum(PUBLIC_FUNCTION_GROUPS)
     .describe(
       '`own` is a function of the key owner; `shared` is one another person shared with them, by name, project, ' +
-        'or organization; `platform` is reserved for one the platform publishes to everyone, and no entry carries ' +
-        'it now.'
+        'or organization, or one an admin offered to everyone signed in; `platform` is reserved for one the ' +
+        'platform publishes to everyone, and no entry carries it now.'
     ),
   review_status: z
     .enum(PUBLIC_FUNCTION_REVIEW_STATUSES)
@@ -84,9 +84,12 @@ export const PublicFunctionDetailSchema = PublicFunctionSchema.extend({
     .nullable()
     .describe("Who shared the function, by display name. Null on the key owner's own."),
   shared_via: z
-    .enum(['person', 'project', 'organization'])
+    .enum(['person', 'project', 'organization', 'signed_in'])
     .nullable()
-    .describe('How the share reaches the key owner: named, or through a project or organization they belong to.'),
+    .describe(
+      'How the function reaches the key owner: named, through a project or organization they belong to, or ' +
+        "`signed_in` when an admin offered it to everyone signed in. Null on the key owner's own."
+    ),
   review_hash: z
     .string()
     .nullable()
