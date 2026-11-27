@@ -1,4 +1,4 @@
-import { Button, Chip, Stack } from '@mui/joy';
+import { Button, Chip, Stack, Typography } from '@mui/joy';
 import type { CostByModelRow, SpendByAccountRow, SpendData, SpendFeatureRow } from '@bike4mind/common';
 import { DataTable, InlineBar, SectionCard, type DataColumn } from '../shared';
 import { formatCount } from '../Analytics/analyticsFormat';
@@ -6,6 +6,8 @@ import { formatShare, formatUsd } from '../SpendExplorer/spendExplorerModel';
 import { seriesLabel } from '../SpendExplorer/seriesLabels';
 import { AdminTab } from '../adminSidebarConfig';
 
+/** The cards sit three across; their tables squeeze to this before scrolling sideways. */
+const CARD_TABLE_MIN_WIDTH = '16rem';
 const TOP_ROWS = 6;
 
 type QueryState<T> = { data: T | undefined; isLoading: boolean; isError: boolean; refetch: () => unknown };
@@ -41,6 +43,7 @@ export function TopFeaturesCard({
       id: 'users',
       label: 'Users',
       numeric: true,
+      width: '7rem',
       render: row => (
         <Stack direction="row" gap={1} alignItems="center" justifyContent="flex-end">
           {formatCount(row.distinctUsers)}
@@ -48,8 +51,7 @@ export function TopFeaturesCard({
         </Stack>
       ),
     },
-    { id: 'requests', label: 'Requests', numeric: true, render: row => formatCount(row.requests) },
-    { id: 'cost', label: 'Cost', numeric: true, render: row => formatUsd(row.costUsd) },
+    { id: 'cost', label: 'Cost', numeric: true, width: '5rem', render: row => formatUsd(row.costUsd) },
   ];
   return (
     <SectionCard
@@ -64,6 +66,7 @@ export function TopFeaturesCard({
         getRowId={row => row.feature}
         label="Most used features"
         pagination={false}
+        minWidth={CARD_TABLE_MIN_WIDTH}
         loading={features.isLoading}
         error={features.isError ? 'Feature usage could not be loaded.' : undefined}
         onRetry={() => void features.refetch()}
@@ -83,9 +86,8 @@ export function ModelsByCostCard({
   const rows = [...(spend.data?.byModel ?? [])].sort((a, b) => b.estCost - a.estCost).slice(0, TOP_ROWS);
   const columns: DataColumn<CostByModelRow>[] = [
     { id: 'model', label: 'Model', render: row => row.modelName },
-    { id: 'share', label: 'Share', numeric: true, render: row => formatShare(row.share) },
-    { id: 'requests', label: 'Requests', numeric: true, render: row => formatCount(row.requests) },
-    { id: 'cost', label: 'Cost', numeric: true, render: row => formatUsd(row.estCost) },
+    { id: 'cost', label: 'Cost', numeric: true, width: '5rem', render: row => formatUsd(row.estCost) },
+    { id: 'share', label: 'Share', numeric: true, width: '4rem', render: row => formatShare(row.share) },
   ];
   return (
     <SectionCard
@@ -100,6 +102,7 @@ export function ModelsByCostCard({
         getRowId={row => row.modelId}
         label="Models by cost"
         pagination={false}
+        minWidth={CARD_TABLE_MIN_WIDTH}
         loading={spend.isLoading}
         error={spend.isError ? 'Model costs could not be loaded.' : undefined}
         onRetry={() => void spend.refetch()}
@@ -118,22 +121,23 @@ export function TopAccountsCard({
 }) {
   const rows = [...(spend.data?.byAccount ?? [])].sort((a, b) => b.estCost - a.estCost).slice(0, TOP_ROWS);
   const columns: DataColumn<SpendByAccountRow>[] = [
-    { id: 'account', label: 'Account', render: row => row.accountName },
-    { id: 'cost', label: 'Cost', numeric: true, render: row => formatUsd(row.estCost) },
     {
-      id: 'flags',
-      label: 'Flags',
-      render: row =>
-        row.flags.length === 0 ? null : (
-          <Stack direction="row" gap={0.5}>
-            {row.flags.map(flag => (
-              <Chip key={flag} size="sm" variant="soft" color="warning">
-                {FLAG_LABELS[flag]}
-              </Chip>
-            ))}
-          </Stack>
-        ),
+      id: 'account',
+      label: 'Account',
+      render: row => (
+        <Stack direction="row" gap={0.5} alignItems="center" sx={{ minWidth: 0 }}>
+          <Typography noWrap sx={{ minWidth: 0 }}>
+            {row.accountName}
+          </Typography>
+          {row.flags.map(flag => (
+            <Chip key={flag} size="sm" variant="soft" color="warning">
+              {FLAG_LABELS[flag]}
+            </Chip>
+          ))}
+        </Stack>
+      ),
     },
+    { id: 'cost', label: 'Cost', numeric: true, width: '5rem', render: row => formatUsd(row.estCost) },
   ];
   return (
     <SectionCard
@@ -148,6 +152,7 @@ export function TopAccountsCard({
         getRowId={row => row.accountId}
         label="Top accounts by cost"
         pagination={false}
+        minWidth={CARD_TABLE_MIN_WIDTH}
         loading={spend.isLoading}
         error={spend.isError ? 'Account costs could not be loaded.' : undefined}
         onRetry={() => void spend.refetch()}
