@@ -984,8 +984,10 @@ class ShadowDetectionRepository {
   /**
    * Counts per detector and policy version; verdict counts are on each record's latest verdict and
    * only for records that would have acted. A `wouldAction: 'none'` record counts in `recorded` and
-   * `noAction` only, so agreeing with it never moves precision. A record whose latest verdict is the
-   * automation grader's counts in `automated` only, so the verdict counts stay human.
+   * `noAction` only, so agreeing with it never moves precision. Review-only detectors are the
+   * exception: every record they write is `wouldAction: 'none'`, so their verdicts count as graded and
+   * measure review yield. A record whose latest verdict is the automation grader's counts in
+   * `automated` only, so the verdict counts stay human.
    */
   async summarize(): Promise<ShadowDetectionSummaryRow[]> {
     const rows = await ShadowDetectionModel.aggregate<{
@@ -1004,7 +1006,12 @@ class ShadowDetectionRepository {
             detector: '$detector',
             policyVersion: '$policyVersion',
             verdict: { $ifNull: ['$verdict', null] },
-            noAction: { $eq: ['$wouldAction', 'none'] },
+            noAction: {
+              $and: [
+                { $eq: ['$wouldAction', 'none'] },
+                { $not: [{ $in: ['$detector', [...REVIEW_ONLY_COMPLETION_DETECTORS]] }] },
+              ],
+            },
             automated: { $and: [{ $ne: [{ $ifNull: ['$verdict', null] }, null] }, LATEST_VERDICT_IS_AUTOMATION] },
           },
           count: { $sum: 1 },

@@ -10,6 +10,7 @@ import {
   type TokenStore,
 } from '@bike4mind/client-auth';
 import type { OAuthDeviceClientId } from '@bike4mind/common';
+import { isExternallyOpenable } from '@shared/externalLinks';
 import { z } from 'zod';
 import type {
   AccountPage,
@@ -66,6 +67,8 @@ export interface AuthServiceDeps {
   devFallback: boolean;
   userAgent: string;
   onStateChanged(state: AuthState): void;
+  /** The RFC 8628 client id to sign in with; defaults to {@link DESKTOP_OAUTH_CLIENT_ID}. */
+  clientId?: OAuthDeviceClientId;
   /**
    * Where the signed-in user's picture is kept. Optional: without it the panel draws initials,
    * which is also what every failure along the way falls back to.
@@ -704,6 +707,10 @@ export class AuthService {
   }
 
   private async tryOpenExternal(url: string): Promise<boolean> {
+    if (!isExternallyOpenable(url)) {
+      this.deps.logger.warn('AUTH: not opening a link that is not a web or mail address');
+      return false;
+    }
     try {
       await this.deps.openExternal(url);
       return true;
@@ -716,7 +723,7 @@ export class AuthService {
   private buildDeviceFlowClient(baseUrl: string): DeviceFlowClient {
     return (
       this.deps.createDeviceFlowClient?.(baseUrl) ??
-      new DeviceFlowClient({ baseUrl, clientId: DESKTOP_OAUTH_CLIENT_ID })
+      new DeviceFlowClient({ baseUrl, clientId: this.deps.clientId ?? DESKTOP_OAUTH_CLIENT_ID })
     );
   }
 
@@ -839,10 +846,11 @@ function signInErrorMessage(err: unknown): string {
   const status = httpStatus(err);
 
   // `client_id` is validated against a server-side allowlist, so a schema rejection at initiate
-  // means that backend does not know this client - in practice one older than desktop support,
-  // not anything the user did. The raw axios "status code 422" gives them nothing to act on.
+  // means that backend does not know this client - in practice one older than this client id
+  // (Desktop or the headless host), not anything the user did. The raw axios "status code 422"
+  // gives them nothing to act on.
   if (status === 400 || status === 422) {
-    return 'This server did not accept the desktop client. It may be running a version that predates desktop support.';
+    return 'This server did not accept this client. It may be running a version that predates it.';
   }
 
   if (status === 429) return 'Too many sign-in attempts. Wait a few minutes and try again.';

@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type {
   ChatSession,
   ChatSpawnSuggestion,
   SpawnSuggestionResult,
   StartSpawnSuggestionRequest,
 } from '@shared/chat';
+import { useSessionEvents } from '../host/useSessionEvents';
 
 export interface SpawnSuggestionsController {
   /** Oldest first; the tray draws only the pending ones. */
@@ -24,22 +25,15 @@ export function useSpawnSuggestions(session: ChatSession | null): SpawnSuggestio
   const loaded = session?.spawnSuggestions;
   const [suggestions, setSuggestions] = useState<ChatSpawnSuggestion[]>(loaded ?? []);
 
-  const activeSessionId = useRef(sessionId);
-  activeSessionId.current = sessionId;
-
   useEffect(() => {
     setSuggestions(loaded ?? []);
   }, [sessionId, loaded]);
 
-  useEffect(
-    () =>
-      window.b4m.chat.onStreamEvent(event => {
-        if (event.type === 'spawn-suggestions' && event.sessionId === activeSessionId.current) {
-          setSuggestions(event.suggestions);
-        }
-      }),
-    []
-  );
+  useSessionEvents(sessionId, {
+    event: event => {
+      if (event.type === 'spawn-suggestions') setSuggestions(event.suggestions);
+    },
+  });
 
   const start = useCallback(
     (request: Omit<StartSpawnSuggestionRequest, 'sessionId'>) =>

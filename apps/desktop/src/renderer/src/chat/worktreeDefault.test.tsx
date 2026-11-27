@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -189,6 +190,7 @@ describe('useWorktrees', () => {
     removeWorktrees.mockResolvedValue(removed);
     revealWorktree.mockResolvedValue(true);
     vi.stubGlobal('b4m', {
+      host: chatBackedHostBridge(),
       chat: {
         listRecentFolders: async () => [{ path: directory, name: 'repo' }],
         listWorktrees,

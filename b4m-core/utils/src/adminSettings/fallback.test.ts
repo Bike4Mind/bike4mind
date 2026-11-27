@@ -23,6 +23,8 @@ import {
   bedrockEmptyResponseMessage,
   OutputBudgetExhaustedError,
   StreamEndedWithoutFinishError,
+  HiddenReasoningOnlyEmptyError,
+  isHiddenReasoningOnlyEmptyError,
 } from '@bike4mind/llm-adapters';
 
 // Helper to create mock Axios errors
@@ -58,6 +60,21 @@ describe('shouldTriggerFallback', () => {
   describe('empty reasoning turns', () => {
     it('falls back on a stream that ended without a finish reason', () => {
       expect(shouldTriggerFallback(new StreamEndedWithoutFinishError('DeepSeek', 'deepseek-flash'))).toBe(true);
+    });
+
+    it('falls back on a finished turn that streamed only hidden reasoning', () => {
+      const error = new HiddenReasoningOnlyEmptyError(
+        'Bedrock',
+        'm',
+        bedrockEmptyResponseMessage('m', 'r', false, true)
+      );
+      expect(shouldTriggerFallback(error)).toBe(true);
+    });
+
+    it('does not type the plain empty-response error of the capped or non-reasoning turn', () => {
+      const error = new Error(bedrockEmptyResponseMessage('m', 'r', false, false));
+      expect(isHiddenReasoningOnlyEmptyError(error)).toBe(false);
+      expect(shouldTriggerFallback(error)).toBe(false);
     });
 
     it('does not fall back on an exhausted output budget, which fails the same way again', () => {

@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/llm-adapters",
-  "version": "2.8.1",
+  "version": "2.10.3",
   "publishConfig": {
     "access": "restricted"
   },
@@ -53,9 +53,8 @@
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
     "dev": "tsdown --watch",
-    "typecheck": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit --types node",
-    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "typecheck:tsc": "tsc --noEmit",
+    "typecheck":"tsgo --noEmit --types node",
     "test": "vitest run",
     "test:watch": "vitest"
   },

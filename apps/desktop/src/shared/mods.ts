@@ -83,8 +83,12 @@ export type SoundPackManifest = Extract<ModManifest, { kind: 'sounds' }>;
 /** The sound pack data format this app reads. */
 export const SOUND_PACK_CONTRACT = 1;
 
-/** The skin data format this app reads. A skin written for another one is listed as broken. */
-export const SKIN_CONTRACT = 1;
+/**
+ * The skin data format this app writes. Contract 1 skins still load: their backdrops are moved into the
+ * per-scene block (upgradeSkinTokens). A skin written for any other contract is listed as broken.
+ */
+export const SKIN_CONTRACT = 2;
+export const SKIN_CONTRACTS_READ: readonly number[] = [1, SKIN_CONTRACT];
 
 /** Asset URLs for a validated skin: b4m-skin://<id>/<path>, served by main/mods/skinProtocol.ts only. */
 export const SKIN_SCHEME = 'b4m-skin';
@@ -119,12 +123,117 @@ const imagePath = z
   .max(120)
   .regex(/^sprites\/[A-Za-z0-9_-][A-Za-z0-9._-]*\.(png|webp|jpg|jpeg)$/, 'must be sprites/<name>.png, .webp or .jpg');
 
+const percent = z.number().min(0).max(100);
+const point = z.strictObject({ x: percent, y: percent });
+const sceneName = z
+  .string()
+  .max(40)
+  .regex(/^[a-z][a-z0-9-]*$/, 'must be a lower-case kebab name');
+const copyText = z.string().min(1).max(120);
+
 /**
- * tokens.json. Every key is optional and unknown keys reject the skin. `needs-you` is accepted under
- * states and sounds so a skin that sets it still loads, but the palette merge (statePalette.ts) drops
- * it: the "needs you" colour, its pulse and its sound are never skinnable.
+ * What a skin may change in one scene, merged over that scene's definition by the renderer
+ * (scene/sceneSkin.ts), which validates the result against the scene's own schema. This schema only
+ * bounds the shape and the asset paths; whether a zone or pose exists is the scene's to judge. Arrays
+ * (slots, sheets, lights) replace the definition's; objects merge key by key.
  */
-export const skinTokensSchema = z.strictObject({
+export const sceneSkinSchema = z
+  .strictObject({
+    backdrop: imagePath,
+    cast: z
+      .strictObject({
+        // Bounded so a skin cannot shrink agents, needs-you ones included, to nothing.
+        spriteHeight: z.number().min(4).max(40),
+        faceY: percent,
+        sheets: z
+          .array(
+            z.strictObject({
+              look: z.string().min(1).max(40),
+              hue: z.number().min(0).max(360).optional(),
+              sprites: z.record(sceneName, imagePath),
+            })
+          )
+          .min(1)
+          .max(16),
+        host: z.strictObject({
+          sprites: z
+            .strictObject({
+              idle: imagePath,
+              writing: imagePath,
+              reading: imagePath,
+              walking: imagePath,
+              cheering: imagePath,
+            })
+            .partial(),
+        }),
+      })
+      .partial(),
+    map: z
+      .strictObject({
+        zones: z.record(
+          sceneName,
+          z.strictObject({ slots: z.array(point).min(1).max(64), overflow: point, place: copyText }).partial()
+        ),
+        door: point,
+        host: point,
+        board: z
+          .strictObject({
+            left: percent,
+            top: percent,
+            width: percent,
+            height: percent,
+            notes: z.number().int().min(2).max(12),
+          })
+          .partial(),
+        reply: z.union([
+          z.strictObject({ top: percent, right: percent }),
+          z.strictObject({ top: percent, left: percent }),
+        ]),
+        lights: z
+          .array(
+            z.strictObject({
+              x: percent,
+              y: percent,
+              size: z.number().positive().max(100),
+              kind: sceneName,
+              tone: sceneName.optional(),
+            })
+          )
+          .max(24),
+        moon: point,
+        embers: point,
+      })
+      .partial(),
+    copy: z
+      .strictObject({
+        name: copyText,
+        hostName: copyText,
+        hostTitle: copyText,
+        hostGreeting: copyText,
+        hostPoses: z
+          .strictObject({ idle: copyText, writing: copyText, reading: copyText, walking: copyText, cheering: copyText })
+          .partial(),
+        board: z
+          .strictObject({ title: copyText, name: copyText, item: copyText, items: copyText, empty: copyText })
+          .partial(),
+        stage: z
+          .strictObject({
+            host: copyText,
+            quiet: copyText,
+            talk: copyText,
+            empty: copyText,
+            emptyArchived: copyText,
+            finale: z.strictObject({ complete: copyText, ended: copyText }).partial(),
+          })
+          .partial(),
+      })
+      .partial(),
+  })
+  .partial();
+
+export type SceneSkin = z.infer<typeof sceneSkinSchema>;
+
+const skinTokensBase = {
   states: z
     .strictObject({
       'needs-you': hexColor,
@@ -141,9 +250,80 @@ export const skinTokensSchema = z.strictObject({
     .strictObject({ family: z.enum(['system', 'serif', 'mono', 'rounded']) })
     .partial()
     .optional(),
-  sprites: z.strictObject({ tavernBackdrop: imagePath, aquariumBackdrop: imagePath }).partial().optional(),
   sounds: z.strictObject({ 'needs-you': soundPath, finale: soundPath }).partial().optional(),
+};
+
+/**
+ * tokens.json. Every key is optional and unknown keys reject the skin. `needs-you` is accepted under
+ * states and sounds so a skin that sets it still loads, but the palette merge (statePalette.ts) drops
+ * it: the "needs you" colour, its pulse and its sound are never skinnable. `scenes` is keyed by scene
+ * id, so a new scene needs no change here; a block for a scene this app does not have is ignored.
+ */
+export const skinTokensSchema = z.strictObject({
+  ...skinTokensBase,
+  scenes: z
+    .record(sceneName, sceneSkinSchema)
+    .refine(scenes => Object.keys(scenes).length <= 16, 'at most 16 scenes')
+    .optional(),
 });
+
+/** Contract 1's tokens.json: one backdrop image per scene, and no other scene data. */
+export const skinTokensV1Schema = z.strictObject({
+  ...skinTokensBase,
+  sprites: z.strictObject({ tavernBackdrop: imagePath, aquariumBackdrop: imagePath }).partial().optional(),
+});
+
+export type SkinTokensV1 = z.infer<typeof skinTokensV1Schema>;
+
+const V1_BACKDROP_SCENES = { tavernBackdrop: 'tavern', aquariumBackdrop: 'aquarium' } as const;
+
+/** A contract 1 skin in the current shape: each backdrop becomes its scene's `backdrop`. */
+export function upgradeSkinTokens(tokens: SkinTokensV1): SkinTokens {
+  const { sprites, ...rest } = tokens;
+  const scenes: Record<string, SceneSkin> = {};
+  for (const [key, scene] of Object.entries(V1_BACKDROP_SCENES) as [keyof typeof V1_BACKDROP_SCENES, string][]) {
+    const backdrop = sprites?.[key];
+    if (backdrop !== undefined) scenes[scene] = { backdrop };
+  }
+  return Object.keys(scenes).length > 0 ? { ...rest, scenes } : rest;
+}
+
+/** Parses tokens.json for the contract its manifest names; the result is always the current shape. */
+export function skinTokensSchemaFor(contract: number): z.ZodType<SkinTokens> {
+  return contract === 1 ? skinTokensV1Schema.transform(upgradeSkinTokens) : skinTokensSchema;
+}
+
+/** Every image path in a scene block, in a stable order, so main can check and serve exactly these. */
+export function sceneSkinAssetPaths(scene: SceneSkin): string[] {
+  const paths: (string | undefined)[] = [scene.backdrop];
+  for (const sheet of scene.cast?.sheets ?? []) paths.push(...Object.values(sheet.sprites));
+  paths.push(...Object.values(scene.cast?.host?.sprites ?? {}));
+  return paths.filter((path): path is string => path !== undefined);
+}
+
+/** The same block with every image path passed through `toUrl` (main turns them into b4m-skin:// URLs). */
+export function mapSceneSkinAssets(scene: SceneSkin, toUrl: (path: string) => string): SceneSkin {
+  const { backdrop, cast } = scene;
+  const mapValues = <T extends Record<string, string | undefined>>(record: T): T =>
+    Object.fromEntries(
+      Object.entries(record).map(([key, path]) => [key, path === undefined ? undefined : toUrl(path)])
+    ) as T;
+  return {
+    ...scene,
+    ...(backdrop !== undefined ? { backdrop: toUrl(backdrop) } : {}),
+    ...(cast
+      ? {
+          cast: {
+            ...cast,
+            ...(cast.sheets
+              ? { sheets: cast.sheets.map(sheet => ({ ...sheet, sprites: mapValues(sheet.sprites) })) }
+              : {}),
+            ...(cast.host ? { host: { sprites: mapValues(cast.host.sprites) } } : {}),
+          },
+        }
+      : {}),
+  };
+}
 
 export type SkinTokens = z.infer<typeof skinTokensSchema>;
 

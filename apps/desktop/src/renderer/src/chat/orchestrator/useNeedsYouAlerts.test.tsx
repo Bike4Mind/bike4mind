@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
 import { StrictMode, act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { AttentionNotice, AttentionOpenEvent, NotifyScope } from '@shared/attention';
@@ -55,6 +56,7 @@ beforeEach(() => {
   openListener = null;
   vi.spyOn(document, 'hasFocus').mockImplementation(() => focused);
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: {
       getSession: vi.fn(async () => ({
         messages: [

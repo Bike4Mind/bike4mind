@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import type { ChatModelOption, ChatMessage, ChatQueueEvent, ChatQueuedMessage, ChatToolCall } from '@shared/chat';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -133,7 +134,7 @@ beforeEach(() => {
   chat.listModels.mockResolvedValue({ models: [] });
   chat.getHeldRelays.mockResolvedValue([]);
   chat.resolveHeldRelay.mockResolvedValue(undefined);
-  (window as unknown as { b4m: unknown }).b4m = { chat };
+  (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat };
 });
 
 afterEach(() => {
@@ -320,7 +321,7 @@ describe('AgentPeekDrawer', () => {
     chat.sendMessage.mockResolvedValue({ ok: true, queued: true, message });
     await renderDrawer(agentFixture('a1'));
     await typeAndSend('hello');
-    expect(chat.onQueueChanged.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(chat.onQueueChanged).toHaveBeenCalled();
 
     const emit = (event: ChatQueueEvent) => act(async () => queueListener?.(event));
     await emit({ sessionId: 'other', queued: [] });
@@ -395,7 +396,7 @@ describe('AgentPeekDrawer', () => {
     it('shows the pending approval of a non-active session and answers it through the thread IPC', async () => {
       chat.getSession.mockResolvedValue(pendingSession());
       await renderDrawer(agentFixture('child-1', 'needs-you', { workerTask: longTask() }));
-      expect(chat.getSession).toHaveBeenCalledWith('child-1', false);
+      expect(chat.getSession).toHaveBeenCalledWith('child-1');
       expect(query('agent-task-details'), 'no task-management sections around the approval').toBeNull();
       expect(query('agent-task-state')).toBeNull();
       const pending = el('orchestrator-peek-conversation');

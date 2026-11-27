@@ -10,17 +10,21 @@ export type StudioCompositionIssue = Omit<StudioTimelineIssue, 'code'> & {
   code: StudioTimelineIssue['code'] | 'unknown_take';
 };
 
-const validateShotIds = (content: Pick<StudioCompositionContent, 'shots'>): StudioCompositionIssue[] => {
+const duplicateIds = (
+  items: readonly { id: string }[],
+  path: (string | number)[],
+  noun: string
+): StudioCompositionIssue[] => {
   const seen = new Set<string>();
-  return content.shots.flatMap((shot, index) => {
-    const duplicate = seen.has(shot.id);
-    seen.add(shot.id);
+  return items.flatMap((item, index) => {
+    const duplicate = seen.has(item.id);
+    seen.add(item.id);
     return duplicate
       ? [
           {
             code: 'duplicate_id' as const,
-            path: ['shots', index, 'id'],
-            message: `Shot id "${shot.id}" is used more than once`,
+            path: [...path, index, 'id'],
+            message: `${noun} id "${item.id}" is used more than once`,
           },
         ]
       : [];
@@ -34,6 +38,7 @@ const PRODUCT_PHOTO_KINDS: readonly StudioFileMediaKind[] = ['image'];
 const CLIP_KINDS: readonly StudioFileMediaKind[] = ['video'];
 const LOGO_KINDS: readonly StudioFileMediaKind[] = ['image'];
 const PRODUCT_KINDS: readonly StudioFileMediaKind[] = ['image', 'video'];
+const CHARACTER_KINDS: readonly StudioFileMediaKind[] = ['image'];
 
 const validateChosenTakes = (content: Pick<StudioCompositionContent, 'shots'>): StudioCompositionIssue[] =>
   content.shots.flatMap((shot, index): StudioCompositionIssue[] =>
@@ -64,6 +69,11 @@ const validateFileReferences = (
       path: ['brandKit', 'productFileIds', index],
       kinds: PRODUCT_KINDS,
     })),
+    ...content.brandKit.characters.map(({ fileId }, index) => ({
+      fileId,
+      path: ['brandKit', 'characters', index, 'fileId'],
+      kinds: CHARACTER_KINDS,
+    })),
     ...content.shots.flatMap((shot, shotIndex) => [
       ...shot.fileIds.map((fileId, index) => ({ fileId, path: ['shots', shotIndex, 'fileIds', index] })),
       ...(shot.clipFileId
@@ -85,7 +95,7 @@ const validateFileReferences = (
 
 /**
  * Every rule a parsed composition must meet beyond its schema: the timeline rules (paths prefixed with
- * `timeline`), unique shot ids, chosen takes that are among the shot's takes, and, given the context, that the brief,
+ * `timeline`), unique shot and character ids, chosen takes that are among the shot's takes, and, given the context, that the brief,
  * brand kit and shots reference only known files of a kind their slot accepts.
  */
 export const validateStudioComposition = (
@@ -93,7 +103,8 @@ export const validateStudioComposition = (
   context: StudioTimelineReferenceContext = {}
 ): StudioCompositionIssue[] => [
   ...validateStudioTimeline(content.timeline, context).map(issue => ({ ...issue, path: ['timeline', ...issue.path] })),
-  ...validateShotIds(content),
+  ...duplicateIds(content.shots, ['shots'], 'Shot'),
+  ...duplicateIds(content.brandKit.characters, ['brandKit', 'characters'], 'Character'),
   ...validateChosenTakes(content),
   ...validateFileReferences(content, context),
 ];

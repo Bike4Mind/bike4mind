@@ -82,12 +82,23 @@ const BriefSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// id: false, because `id` is a stored field here and Mongoose would otherwise shadow it with its virtual.
+const CharacterSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    name: { type: String, required: true, maxlength: limits.characterNameMaxLength },
+    fileId: { type: String, required: true },
+  },
+  { _id: false, id: false }
+);
+
 const BrandKitSchema = new mongoose.Schema(
   {
     logoFileId: { type: String },
     colors: { type: [String], default: [] },
     fontFamily: { type: String },
     productFileIds: { type: [String], default: [] },
+    characters: { type: [CharacterSchema], default: [] },
   },
   { _id: false }
 );

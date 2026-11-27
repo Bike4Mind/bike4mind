@@ -2,14 +2,7 @@ import { SESSION_SETUP_LABEL } from '@shared/chat';
 import { activityLabel } from '@shared/agentActivity';
 import type { AgentView } from './roster';
 
-export {
-  activityLabel,
-  bufferUntrackedActivity,
-  foldActivity,
-  toolKind,
-  type AgentActivity,
-  type ToolKind,
-} from '@shared/agentActivity';
+export { activityLabel, foldActivity, toolKind, type AgentActivity, type ToolKind } from '@shared/agentActivity';
 
 /** The "Now" text shared by the table and board: live activity while working, the gated call while it
  * waits on approval, else how its last reply ended. */

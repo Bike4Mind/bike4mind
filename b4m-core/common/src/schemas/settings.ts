@@ -137,7 +137,7 @@ Types: text/html, application/vnd.ant.react, image/svg+xml, application/vnd.ant.
 
 TWO SURFACES - CHOOSE THE RIGHT ONE FIRST:
 Artifacts live on two surfaces with different rules. Decide which the user wants BEFORE you pick a type.
-- IN-APP preview (renders in chat/notebook): permissive. React/JSX, Tailwind classes, and the supported npm set work here.
+- IN-APP preview (renders in chat/notebook): permissive. React/JSX, Tailwind classes, and the supported npm set work here. In-app React previews cannot hot-link third-party images or stylesheets (images: inline SVG, data: URIs or the B4M host only).
 - PUBLISH / SHARE (a /p/ link teammates open): strict + validated. TWO shapes publish: (1) a self-contained text/html file (inline CSS + inline VANILLA JS), and (2) a React artifact, which is transpiled server-side at publish into a self-contained inert bundle (no CDN React, no Babel, no eval on the live page). Either shape must be self-contained and eval-free; the wrong shape is rejected.
 Both text/html and React artifacts are shareable. Pick the type by the deliverable, then follow that type's publish rules:
 - If the user signals SHARE/PUBLISH/SEND/LINK/EMBED/CLIENT/TEAM/PUBLIC, OR the deliverable is clearly external-facing (landing page, report, dashboard, calculator, portfolio, game, toy), OR intent is ambiguous -> prefer type="text/html" (simplest publishable shape) unless it is genuinely a React component. When truly unsure, ask once: "Do you want a shareable link?"
@@ -595,6 +595,8 @@ export const SettingKeySchema = z.enum([
   'spendMonitorAutoPauseTrustedMinCredits',
   'youngAccountSpendPageUsdPerHour',
   'youngAccountSpendWarnUsdPerHour',
+  'providerSpendOpenaiUsdPerHour',
+  'providerSpendAnthropicUsdPerHour',
   'freeTierDailySystemCostCapUsd',
   'signupGrantSignupPoolDaily',
   'signupGrantTricklePoolDaily',
@@ -2050,6 +2052,9 @@ export const SIGNUP_RISK_SIGNALS = [
   'generatedLocalPart',
   'wafAnonIp',
   'wafBotSignal',
+  'emailSubdomainBurst',
+  'bannedEmailSubdomainSibling',
+  'instantApiKey',
 ] as const;
 export type SignupRiskSignal = (typeof SIGNUP_RISK_SIGNALS)[number];
 
@@ -2073,11 +2078,23 @@ export const SignupRiskScoringSchema = z
         // Edge labels on signupMeta, recorded only where label forwarding is on. Off until a weight is set.
         wafAnonIp: signupRiskWeight(0),
         wafBotSignal: signupRiskWeight(0),
+        emailSubdomainBurst: signupRiskWeight(30),
+        bannedEmailSubdomainSibling: signupRiskWeight(30),
+        instantApiKey: signupRiskWeight(20),
       })
       .strict()
       .prefault({}),
     /** A first API key minted within this many minutes of signup counts as quick. */
     quickApiKeyMinutes: z.number().int().min(1).max(10_080).prefault(60),
+    /** A first API key minted within this many seconds of signup counts as instant; it also counts as quick. */
+    instantApiKeySeconds: z.number().int().min(1).max(3600).prefault(120),
+    /**
+     * Accounts (this one included) on the same email subdomain within `emailSubdomainWindowHours` either
+     * side of signup at which emailSubdomainBurst applies. Only a subdomain host counts, never a bare
+     * registrable domain, so a shared mail provider cannot trip it.
+     */
+    emailSubdomainBurstAccounts: z.number().int().min(2).max(1000).prefault(3),
+    emailSubdomainWindowHours: z.number().int().min(1).max(720).prefault(24),
     /** Credits spent in the first 24h at which fastSpend reaches its full weight; less scales linearly. */
     fastSpendCredits: z.number().positive().prefault(1000),
     /** A score at or above this needs review. */
@@ -2828,6 +2845,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'spendMonitorAutoPauseTrustedMinCredits', order: 19.4948 },
       { key: 'youngAccountSpendPageUsdPerHour', order: 19.495 },
       { key: 'youngAccountSpendWarnUsdPerHour', order: 19.496 },
+      { key: 'providerSpendOpenaiUsdPerHour', order: 19.497 },
+      { key: 'providerSpendAnthropicUsdPerHour', order: 19.498 },
       { key: 'freeTierDailySystemCostCapUsd', order: 19.5 },
       { key: 'syntheticUserEmailDomains', order: 20 },
       { key: 'turnstileEnabled', order: 21 },
@@ -3768,7 +3787,7 @@ export const settingsMap = {
     min: 1,
     max: CALLABLE_FUNCTION_DATA_LIMITS.cacheMb,
     int: true,
-    description: `The most data, in MB, all the files pinned to one saved function can add up to (at most ${CALLABLE_FUNCTION_DATA_LIMITS.cacheMb}, the runtime's data cache). Checked when a file is pinned. Can be overridden per organization; a member of several organizations gets the lowest.`,
+    description: `The most data, in MB, all the files pinned to one saved function and the most its sources can fetch add up to (at most ${CALLABLE_FUNCTION_DATA_LIMITS.cacheMb}, the runtime's data cache). Checked when a file is pinned or the sources are saved. Can be overridden per organization; a member of several organizations gets the lowest.`,
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 24.8,
@@ -6338,6 +6357,26 @@ export const settingsMap = {
     min: 0,
     description:
       'Estimated provider USD per rolling hour spent by accounts under 7 days old at which the young-account spend warning posts. 0 (default) stops managing the threshold and leaves its current value unchanged, including any previous override, until a deploy restores the deployed default. A positive change is applied to the CloudWatch alarm by the hourly young-account spend job, so it takes up to an hour.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  providerSpendOpenaiUsdPerHour: makeNumberSetting({
+    key: 'providerSpendOpenaiUsdPerHour',
+    name: 'Provider Spend Alarm: OpenAI Hourly Ceiling (USD)',
+    defaultValue: 0,
+    min: 0,
+    description:
+      'OpenAI organization-wide spend per hour, from its own usage report priced with our model rates, at which the provider spend alarm pages. 0 or empty (default) keeps the deployed default and leaves the current threshold unchanged, including any previous override, until a deploy restores the default. A positive change is applied to the CloudWatch alarm by the hourly young-account spend job, so it takes up to an hour.',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'SecOps',
+  }),
+  providerSpendAnthropicUsdPerHour: makeNumberSetting({
+    key: 'providerSpendAnthropicUsdPerHour',
+    name: 'Provider Spend Alarm: Anthropic Hourly Ceiling (USD)',
+    defaultValue: 0,
+    min: 0,
+    description:
+      'Anthropic organization-wide spend per hour, from its own usage report priced with our model rates, at which the provider spend alarm pages. 0 or empty (default) keeps the deployed default and leaves the current threshold unchanged, including any previous override, until a deploy restores the default. A positive change is applied to the CloudWatch alarm by the hourly young-account spend job, so it takes up to an hour.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'SecOps',
   }),
@@ -9155,6 +9194,12 @@ const MASK_WRITE_BACK_PATTERN = /^\*{4,}/;
  */
 export function isMaskedSensitiveSettingValue(value: unknown): boolean {
   return typeof value === 'string' && MASK_WRITE_BACK_PATTERN.test(value);
+}
+
+/** Whether the setting's whole value is masked on read: tagged `isSensitive`, or with no definition at all. */
+export function isMaskedSetting(settingName: string): boolean {
+  const definition = resolveSettingDefinition(settingName);
+  return !definition || definition.isSensitive === true;
 }
 
 /**

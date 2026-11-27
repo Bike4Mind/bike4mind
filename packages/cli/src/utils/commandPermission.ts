@@ -43,10 +43,11 @@ export async function requestShellCommandPermission(
   const { permissionManager, promptFn } = deps;
   if (deps.isCancelled?.()) return { allowed: false, reason: 'Parent session ended' };
 
-  // Session-trusted (an earlier allow-session this run) skips the prompt. The
-  // hook toolName is namespaced and never permanently trusted, so this only ever
-  // returns false-to-prompt or true-because-session-trusted.
-  if (!permissionManager.needsPermission(toolName)) {
+  // A session approval covers one hook command text run in one directory.
+  if (
+    permissionManager.isExactCommandSessionTrusted(toolName, command, cwd) ||
+    !permissionManager.needsPermission(toolName)
+  ) {
     return { allowed: true };
   }
 
@@ -60,7 +61,7 @@ export async function requestShellCommandPermission(
 
   switch (action) {
     case 'allow-session':
-      permissionManager.trustToolForSession(toolName);
+      permissionManager.trustExactCommandForSession(toolName, command, cwd);
       return { allowed: true };
     case 'allow-once':
     // A hook can't be permanently trusted; 'allow-always' behaves as 'allow-once'.

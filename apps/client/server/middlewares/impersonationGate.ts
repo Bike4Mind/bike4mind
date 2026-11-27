@@ -57,6 +57,8 @@ export function impersonationDecision(
   )
     return 'sensitive';
   if (/^\/api\/agents(?:\/|$)/.test(path) && !['GET', 'HEAD'].includes(method)) return 'sensitive';
+  // DELETE on a collection root empties every notebook or file the account owns.
+  if (method === 'DELETE' && /^\/api\/(files|sessions)$/.test(path)) return 'sensitive';
   if (method === 'POST' && path === '/api/briefcase/catalog') return 'allow';
   // POST only: bulk DELETE stays readonly, and the route itself refuses its AI generateTags action.
   if (writeEnabled && method === 'POST' && path === '/api/sessions/bulk') return 'allow';

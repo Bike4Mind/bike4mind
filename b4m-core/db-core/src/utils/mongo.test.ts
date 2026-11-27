@@ -333,6 +333,41 @@ describe('MongoDB Utility Functions', () => {
       expect(passedFilter.$or[0]._id).toEqual(id);
       expect(passedFilter.$or[1].userId).toBe('some-user');
     });
+
+    describe('updatedAt on a timestamped schema', () => {
+      // Calls the static as a plain function to inject a fake `this`.
+      const callStatic = (target: mongoose.Schema, name: 'deleteOne' | 'deleteMany') =>
+        (target.statics[name] as (this: unknown, filter: object) => Promise<unknown>).call(fakeThis, { userId: 'u' });
+
+      it('deleteOne and deleteMany set updatedAt alongside deletedAt', async () => {
+        const timestamped = new mongoose.Schema({}, { timestamps: true });
+        softDeletePlugin(timestamped);
+        await callStatic(timestamped, 'deleteOne');
+        await callStatic(timestamped, 'deleteMany');
+        for (const [, update] of [mockUpdateOne.mock.calls[0], mockUpdateMany.mock.calls[0]]) {
+          expect(update.$set.deletedAt).toBeInstanceOf(Date);
+          expect(update.$set.updatedAt).toEqual(update.$set.deletedAt);
+        }
+      });
+
+      it('uses a renamed updatedAt path', async () => {
+        const renamed = new mongoose.Schema({}, { timestamps: { updatedAt: 'modifiedAt' } });
+        softDeletePlugin(renamed);
+        await callStatic(renamed, 'deleteOne');
+        const [, update] = mockUpdateOne.mock.calls[0];
+        expect(update.$set.modifiedAt).toBeInstanceOf(Date);
+        expect(update.$set.updatedAt).toBeUndefined();
+      });
+
+      it('leaves updatedAt alone without timestamps or with updatedAt disabled', async () => {
+        const createdOnly = new mongoose.Schema({}, { timestamps: { updatedAt: false } });
+        softDeletePlugin(createdOnly);
+        await callStatic(schema, 'deleteOne');
+        await callStatic(createdOnly, 'deleteMany');
+        expect(Object.keys(mockUpdateOne.mock.calls[0][1].$set)).toEqual(['deletedAt']);
+        expect(Object.keys(mockUpdateMany.mock.calls[0][1].$set)).toEqual(['deletedAt']);
+      });
+    });
   });
 
   describe('withTransaction retry behavior', () => {

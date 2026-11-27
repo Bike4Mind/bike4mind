@@ -1,7 +1,7 @@
 import {
   ADMIN_PERMISSIONS,
   hasAdminPermission,
-  isFullAdmin,
+  isExplicitOnlyAdminPermission,
   sortAdminRoleIds,
   type AdminPermissionId,
 } from '@bike4mind/common';
@@ -41,9 +41,29 @@ export const describeProvenance = ({ direct, roleNames }: Pick<PermissionProvena
  * grants its permissions, so a delegate may only assign roles whose permissions they hold.
  */
 export const roleGrantBlockedReason = (actor: AdminIdentity, role: Pick<RoleRef, 'permissions'>): string | null => {
-  if (isFullAdmin(actor)) return null;
+  // A full admin holds every permission but the explicit-only ones, which only their holders can hand out.
   const unheld = role.permissions.filter(permission => !hasAdminPermission(actor, permission));
   return unheld.length > 0
     ? `You do not hold ${unheld.map(permission => ADMIN_PERMISSION_LABELS[permission].label).join(', ')}`
     : null;
 };
+
+export const UNHELD_EXPLICIT_ONLY_HINT = 'Only an admin who holds this permission can grant or revoke it.';
+
+/**
+ * Why the actor cannot remove this held role, or null; mirrors assertCanChangeExplicitOnlyPermissions: only a
+ * holder can revoke an explicit-only permission that no `remaining` source keeps.
+ */
+export const roleRemovalBlockedReason = (
+  actor: AdminIdentity,
+  role: Pick<RoleRef, 'permissions'>,
+  remaining: readonly string[]
+): string | null =>
+  role.permissions.some(
+    permission =>
+      isExplicitOnlyAdminPermission(permission) &&
+      !hasAdminPermission(actor, permission) &&
+      !remaining.includes(permission)
+  )
+    ? UNHELD_EXPLICIT_ONLY_HINT
+    : null;

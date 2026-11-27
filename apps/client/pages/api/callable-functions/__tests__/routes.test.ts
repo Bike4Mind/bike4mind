@@ -33,7 +33,17 @@ const h = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@bike4mind/server-utils/callableFunctions/registry', () => h.registry);
+vi.mock('@bike4mind/server-utils/callableFunctions/registry', () => ({
+  ...h.registry,
+  updateCallableFunctionSettings: (
+    actor: { id: string },
+    id: string,
+    settings: { enabled: boolean } | { approval: string }
+  ) =>
+    'approval' in settings
+      ? h.registry.setCallableFunctionApproval(actor, id, settings.approval)
+      : h.registry.setCallableFunctionEnabled(actor, id, settings.enabled),
+}));
 vi.mock('@bike4mind/server-utils/callableFunctions/access', async () => {
   const { ForbiddenError } = await import('@bike4mind/common');
   return {
@@ -420,9 +430,18 @@ describe('forwarding to the registry', () => {
     const refused = await fire(PIN);
     expect(refused._getStatusCode()).toBe(409);
     expect(refused._getJSONData()).toMatchObject({
-      error: 'This version changes the contract in a way that could break callers of the tool.',
+      error:
+        'Input load changed unit from N to kN; output deflection was removed, which could break callers of the tool, ' +
+        'so it stays on its current version. To keep it as it is and save this version as a new tool, give the ' +
+        'function a new name in FUNCTION, save the artifact, and select Make this a tool.',
       code: 'breaking_change',
       changes,
     });
+  });
+
+  it('refuses a repin body that asks to accept a breaking change', async () => {
+    const res = await fire({ ...PIN, body: { ...PIN_BODY, acceptBreaking: true } });
+    expect(res._getStatusCode()).toBe(400);
+    expect(h.registry.repinCallableFunction).not.toHaveBeenCalled();
   });
 });

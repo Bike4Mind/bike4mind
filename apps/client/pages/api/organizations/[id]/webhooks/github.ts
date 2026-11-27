@@ -48,7 +48,7 @@ function getWebhookUrl(routingToken: string): string {
   return `${baseUrl}/api/webhooks/github/${routingToken}`;
 }
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   // POST - Create organization webhook config
   .post(
     asyncHandler<{}, unknown, IOrgWebhookConfigRequest, { id?: string }>(async (req, res) => {

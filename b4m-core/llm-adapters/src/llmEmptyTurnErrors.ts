@@ -29,6 +29,24 @@ export class StreamEndedWithoutFinishError extends Error {
   }
 }
 
+/**
+ * The turn ended normally (terminal event received) after streaming only a reasoning block: no
+ * displayed text and no tool call. Usually a one-off sampling outcome, so worth one same-model retry
+ * and then the fallback chain. Distinct from a stall (an LlmTimeoutError or "stream timeout" message)
+ * and from the deterministic empty turn left by the max-tool-calls cap, which must not be retried.
+ * The message must not say "aborted", "overloaded" or "timeout": the fallback predicates match those.
+ */
+export class HiddenReasoningOnlyEmptyError extends Error {
+  constructor(
+    readonly provider: string,
+    readonly model: string,
+    message: string
+  ) {
+    super(message);
+    this.name = 'HiddenReasoningOnlyEmptyError';
+  }
+}
+
 /** Match by name as well, so a second bundled copy of the class still counts. */
 export function isOutputBudgetExhaustedError(error: unknown): error is OutputBudgetExhaustedError {
   return (
@@ -41,5 +59,12 @@ export function isStreamEndedWithoutFinishError(error: unknown): error is Stream
   return (
     error instanceof StreamEndedWithoutFinishError ||
     (error instanceof Error && error.name === 'StreamEndedWithoutFinishError')
+  );
+}
+
+export function isHiddenReasoningOnlyEmptyError(error: unknown): error is HiddenReasoningOnlyEmptyError {
+  return (
+    error instanceof HiddenReasoningOnlyEmptyError ||
+    (error instanceof Error && error.name === 'HiddenReasoningOnlyEmptyError')
   );
 }

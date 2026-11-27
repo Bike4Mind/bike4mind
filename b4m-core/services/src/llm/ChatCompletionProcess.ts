@@ -168,6 +168,7 @@ import {
   isLlmTimeoutError,
   isKeepaliveStreamTimeout,
   isOutputBudgetExhaustedError,
+  isHiddenReasoningOnlyEmptyError,
   isStreamEndedWithoutFinishError,
   type OutputBudgetExhaustedError,
   type ICompletionOptionTools,
@@ -249,6 +250,7 @@ import type { SubagentTelemetryData } from './tools/implementation/delegateToAge
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
 import { z } from 'zod';
+import { admitsPrivateFileInputs } from './questStartBody';
 import { getEffectiveLLMApiKeys, sharedAdminKeyProviders } from '../apiKeyService';
 import { findKeyModerationExceptionCategories, moderationExceptionCovers } from './moderationException';
 import { resolveModerationOpenaiKey } from './moderationOpenaiKey';
@@ -423,6 +425,10 @@ export const MODEL_UNAVAILABLE_ERROR_REPLY =
  */
 export const OUTPUT_BUDGET_EXHAUSTED_REPLY =
   'The model used its whole output budget reasoning before it could answer. Raise the max tokens setting (max_tokens in the API), or use the model default.';
+
+/** Final reply when the model ended its turn after hidden reasoning only, through its retry and any fallback. */
+export const HIDDEN_REASONING_ONLY_EMPTY_REPLY =
+  'The model finished thinking but returned no answer. Please try sending your message again.';
 
 /** Same failure when the server chose the budget (voice, or an API call that sent no `max_tokens`): nothing for the user to raise. */
 export const OUTPUT_BUDGET_EXHAUSTED_SERVER_REPLY =
@@ -2284,8 +2290,8 @@ export class ChatCompletionProcess {
       enableMementos: initialEnableMementos,
       enableAgents: initialEnableAgents,
       message,
-      messageFileIds,
-      sessionFabFileIds,
+      messageFileIds: requestedMessageFileIds,
+      sessionFabFileIds: requestedSessionFabFileIds,
       params,
       enabledTools,
       projectId,
@@ -2299,6 +2305,9 @@ export class ChatCompletionProcess {
       deepResearchConfig,
       userTimezone,
     } = initContext;
+    const fileInputsAllowed = admitsPrivateFileInputs(parsedBody);
+    const messageFileIds = fileInputsAllowed ? requestedMessageFileIds : [];
+    const sessionFabFileIds = fileInputsAllowed ? requestedSessionFabFileIds : [];
     let historyCount = initialHistoryCount;
     const enableMementos = initialEnableMementos;
     let enableAgents = initialEnableAgents;
@@ -2537,11 +2546,13 @@ export class ChatCompletionProcess {
         await saveQuest(quest);
         return;
       }
-      const session = await applyWorkspaceSessionSettings(
+      const workspaceSession = await applyWorkspaceSessionSettings(
         loadedSession,
         { user: this.user, logger },
         this.workspaceSessionSettings
       );
+      // Turn-local view: withholding input must never detach a notebook's stored files.
+      const session = fileInputsAllowed ? workspaceSession : { ...workspaceSession, knowledgeIds: [] };
       // The TTL this session's requests carry on a model; the reservation and every round resolve it here.
       const sessionCacheTtlFor = (model: ModelInfo): PromptCacheTtl =>
         resolvePromptCacheTtl({
@@ -2617,6 +2628,8 @@ export class ChatCompletionProcess {
       // same denylist the post-buildTools pass enforces; see adminAssistantGate.ts.
       const adminAssistantPlan = resolveAdminAssistantTools({
         surface: session.surface,
+        sessionOwnerId: session.userId,
+        userId: this.user.id,
         isAdmin: this.user.isAdmin,
         availableToolNames: new Set(Object.keys(externalTools ?? {})),
       });
@@ -2653,7 +2666,11 @@ export class ChatCompletionProcess {
       // toolset - no user MCP servers, no agent delegation. No product-specific branch in
       // core; mirrors the generic `enabledTools`/`disabledTools` capability above. The request
       // field is the per-turn twin for callers running a prompt the user did not author.
-      const userIntegrationsDisabled = Boolean(session.disableUserIntegrations || parsedBody.disableUserIntegrations);
+      const userIntegrationsDisabled = Boolean(
+        session.disableUserIntegrations ||
+        parsedBody.disableUserIntegrations ||
+        adminAssistantPlan.disableUserIntegrations
+      );
       if (userIntegrationsDisabled) {
         enableAgents = false;
         parsedBody.mcpServers = [];
@@ -2831,7 +2848,8 @@ export class ChatCompletionProcess {
       // offeredTools site further down stamps this onto promptMeta.retrieval.mode, and the two
       // must be the same value - a telemetry field that recomputes its own answer is a field that
       // can disagree with the behaviour it claims to describe.
-      const forcedRetrievalEnabled = resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval);
+      const forcedRetrievalEnabled =
+        fileInputsAllowed && resolveForcedRetrieval(promptMode, session.forceKnowledgeRetrieval);
       // The field, not a second vetPreauthorizedLakeIds call: the offer/classification path above
       // and the retrieval feature below must be admitted for the same lakes or they disagree.
       const vettedPreauthorizedLakeIds = this.turnPreauthorizedLakeIds;
@@ -2841,7 +2859,7 @@ export class ChatCompletionProcess {
         // opt-out and must stay distinguishable from absence (#1319, resolveMementoGates).
         enableMementos,
         enableAgents || false,
-        projectId,
+        fileInputsAllowed ? projectId : undefined,
         // Not built at all under a prompt mode, rather than built and filtered later: these
         // features have side effects (memory writes, reply replacement) that outlive the prompt.
         // Skills are the user's own authored instructions, so they go with their integrations.
@@ -2871,7 +2889,7 @@ export class ChatCompletionProcess {
         {
           userId: this.user.id,
           type: LLMEvents.QUEUE_HANDLER_START_HEARD_PROMPT,
-          metadata: { sessionId, questId, promptMessage: message },
+          metadata: { sessionId, questId, promptLength: message.length },
         },
         { ability: this.userAbility }
       );
@@ -3634,6 +3652,7 @@ export class ChatCompletionProcess {
       });
 
       const dataSources = await this.buildDataSources({
+        fileInputsAllowed,
         defaultAdminSettings,
         sessionFabFileIds,
         messageFileIds,
@@ -3647,6 +3666,7 @@ export class ChatCompletionProcess {
         modelInfo,
         logger,
         processStartTime,
+        excludeUserSystemFiles: Boolean(parsedBody.disableUserIntegrations),
       });
       const {
         urlMessages,
@@ -5721,6 +5741,7 @@ export class ChatCompletionProcess {
       let requestTimeoutRetried = false;
       let streamIdleTimeoutRetried = false;
       let streamEndedWithoutFinishRetried = false;
+      let hiddenReasoningOnlyRetried = false;
       // A timed-out stream rejects before reporting usage and the next attempt resets
       // actualTokenUsage, so the usage the provider billed for it is recorded here as COGS only:
       // when the loop moves on, and when the timeout ends the turn (nothing else settles it then).
@@ -6243,7 +6264,8 @@ export class ChatCompletionProcess {
               isAbortError(lastError) ||
               isStreamIdleTimeoutError(lastError) ||
               lastError instanceof ResponsesStreamTruncatedError ||
-              isOutputBudgetExhaustedError(lastError)
+              isOutputBudgetExhaustedError(lastError) ||
+              isHiddenReasoningOnlyEmptyError(lastError)
             ) {
               logger.warn(lastError);
             } else if (isProviderSpendLimitError(lastError)) {
@@ -6442,6 +6464,32 @@ export class ChatCompletionProcess {
 
               turnTiming.recordRetry(lastError, EMPTY_STREAM_RETRY_DELAY_MS + jitter, currentModel.id);
               await new Promise(resolve => setTimeout(resolve, EMPTY_STREAM_RETRY_DELAY_MS + jitter));
+
+              resetStreamStateForRetry();
+
+              continue;
+            }
+
+            // A turn that ended normally after hidden reasoning only: usually a one-off sampling
+            // outcome, so one same-model retry, then the fallback chain. The discarded attempt is not
+            // settled, so the retry is not billed twice.
+            if (isHiddenReasoningOnlyEmptyError(lastError) && !hiddenReasoningOnlyRetried) {
+              hiddenReasoningOnlyRetried = true;
+              const HIDDEN_REASONING_RETRY_DELAY_MS = 1000;
+              const jitter = Math.floor(Math.random() * 500);
+
+              logger.info(
+                `[Hidden Reasoning Retry] ${currentModel.id} returned only hidden reasoning, retrying once in ${HIDDEN_REASONING_RETRY_DELAY_MS + jitter}ms`
+              );
+
+              this.sendStatusUpdate(quest, 'The model returned no answer, retrying...', { statusAt: new Date() });
+
+              turnTiming.recordRetry(
+                lastError,
+                HIDDEN_REASONING_RETRY_DELAY_MS + jitter,
+                this.ledgerModel(currentModel).id
+              );
+              await new Promise(resolve => setTimeout(resolve, HIDDEN_REASONING_RETRY_DELAY_MS + jitter));
 
               resetStreamStateForRetry();
 
@@ -8088,6 +8136,15 @@ export class ChatCompletionProcess {
         setTerminalQuestStatus(quest, 'done');
         finalQuest = await saveQuest(quest);
         return;
+      } else if (isHiddenReasoningOnlyEmptyError(err)) {
+        // Error, not warn: this survived a same-model retry and the fallback chain. Each earlier
+        // occurrence was warned in the attempt loop.
+        logger.error(`[Hidden Reasoning Only] Quest ${questId}: ${err.message}`);
+        setErrorReply(HIDDEN_REASONING_ONLY_EMPTY_REPLY);
+        quest.type = 'error';
+        setTerminalQuestStatus(quest, 'done');
+        finalQuest = await saveQuest(quest);
+        return;
       } else if (err instanceof Error && isToolPairingError(err)) {
         // User-friendly error message instead of stuck spinner
         logger.error(`[Tool Pairing Error] Quest ${questId}: ${err.message}`);
@@ -8854,6 +8911,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
    * Handles caching of system file IDs, deduplication, and parallel URL/fab file processing.
    */
   private async buildDataSources({
+    fileInputsAllowed = true,
     defaultAdminSettings,
     sessionFabFileIds,
     messageFileIds,
@@ -8867,7 +8925,9 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     modelInfo,
     logger,
     processStartTime,
+    excludeUserSystemFiles = false,
   }: {
+    fileInputsAllowed?: boolean;
     defaultAdminSettings: Record<string, string>;
     sessionFabFileIds: string[];
     messageFileIds: string[];
@@ -8883,6 +8943,8 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     modelInfo: ModelInfo;
     logger: Logger;
     processStartTime: number;
+    /** Set for a turn whose prompt the user did not author (request-level disableUserIntegrations). */
+    excludeUserSystemFiles?: boolean;
   }): Promise<{
     urlMessages: IMessage[];
     remainingUserPrompt: string;
@@ -8965,17 +9027,21 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       enabledSystemFileIds = (this.user.systemFiles ?? []).filter(file => file.enabled).map(file => file.fileId);
       this.systemFilesCache.set(systemFilesCacheKey, [globalSystemFileIds, enabledSystemFileIds]);
     }
+    if (excludeUserSystemFiles) enabledSystemFileIds = [];
+
+    // Cache the configured IDs above, then apply this turn's admission without poisoning the cache.
+    if (!fileInputsAllowed) enabledSystemFileIds = [];
 
     // Defer the retrievable-corpus subset out of the inline set (resolveCorpusInlinePlan); the
     // offered search_knowledge_base tool fetches those on demand. Only knowledge IDs are affected -
     // message/session fab files and system files always inline.
     const deferred = new Set(deferredKnowledgeIds);
-    const inlineKnowledgeIds = sessionKnowledgeIds.filter(id => !deferred.has(id));
+    const inlineKnowledgeIds = fileInputsAllowed ? sessionKnowledgeIds.filter(id => !deferred.has(id)) : [];
 
     // Pre-compute file dedup (synchronous) before deciding whether to skip
     const allFileIdsBeforeDedup = [
-      ...sessionFabFileIds,
-      ...messageFileIds,
+      ...(fileInputsAllowed ? sessionFabFileIds : []),
+      ...(fileInputsAllowed ? messageFileIds : []),
       ...enabledSystemFileIds,
       ...globalSystemFileIds,
       ...inlineKnowledgeIds,

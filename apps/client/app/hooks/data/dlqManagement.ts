@@ -46,6 +46,8 @@ export interface DlqMessage {
    */
   failureSignature?: string;
   body: string;
+  /** The queue's bodies are visible to full admins only; body is '' (bodyWithheld in server-utils dlqMessageRow.ts). */
+  bodyWithheld?: boolean;
   sentTimestamp?: string;
   approximateReceiveCount?: string;
   approximateFirstReceiveTimestamp?: string;

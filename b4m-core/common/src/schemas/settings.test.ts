@@ -1636,6 +1636,24 @@ describe('young-account spend alarm override settings', () => {
   );
 });
 
+describe('provider spend alarm override settings', () => {
+  it.each(['providerSpendOpenaiUsdPerHour', 'providerSpendAnthropicUsdPerHour'] as const)(
+    '%s defaults to 0, reads numeric strings, rejects negatives and junk, and stays admin-only',
+    key => {
+      const setting = settingsMap[key];
+      expect(setting.schema.parse(undefined)).toBe(0);
+      expect(setting.schema.parse('')).toBe(0);
+      expect(setting.schema.parse('0')).toBe(0);
+      expect(setting.schema.parse('50')).toBe(50);
+      expect(setting.schema.parse('45.5')).toBe(45.5);
+      expect(setting.schema.safeParse(-1).success).toBe(false);
+      expect(setting.schema.safeParse('abc').success).toBe(false);
+      expect(API_SERVICE_GROUPS.CREDITS.settings.some(entry => entry.key === key)).toBe(true);
+      expect(new Set<string>(userReadableSettingKeys()).has(key)).toBe(false);
+    }
+  );
+});
+
 describe('preference arena settings exposure', () => {
   it('keeps every arena setting except the enabled flag out of the user-readable set', () => {
     const readable = new Set<string>(userReadableSettingKeys());

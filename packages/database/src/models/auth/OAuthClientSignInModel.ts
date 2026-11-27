@@ -4,7 +4,7 @@ import BaseRepository from '@bike4mind/db-core';
 
 /**
  * When an OAuth client first and last got a sign-in for a user: one row per (user, client), written
- * when an authorization code is issued. Unlike OAuthGrant it outlives a revoked consent, so it
+ * when an authorization code is redeemed for tokens. Unlike OAuthGrant it outlives a revoked consent, so it
  * answers which apps a person has signed in to, not which they may still sign in to.
  */
 export interface IOAuthClientSignInDocument extends IMongoDocument {

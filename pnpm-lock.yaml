@@ -73,6 +73,9 @@ importers:
       '@bike4mind/infra':
         specifier: workspace:*
         version: link:b4m-core/infra
+      '@bike4mind/tsgo':
+        specifier: workspace:*
+        version: link:packages/tsgo
       '@changesets/changelog-github':
         specifier: ^0.7.0
         version: 0.7.0(encoding@0.1.13)
@@ -100,9 +103,6 @@ importers:
       '@types/node':
         specifier: ^24.0.0
         version: 24.12.3
-      '@typescript/native-preview':
-        specifier: 7.0.0-dev.20260707.2
-        version: 7.0.0-dev.20260707.2
       esbuild:
         specifier: 0.28.1
         version: 0.28.1
@@ -157,6 +157,9 @@ importers:
       '@aws-sdk/client-apigatewaymanagementapi':
         specifier: ^3.1150.0
         version: 3.1151.0
+      '@aws-sdk/client-application-auto-scaling':
+        specifier: 3.1151.0
+        version: 3.1151.0
       '@aws-sdk/client-bedrock-runtime':
         specifier: ^3.1150.0
         version: 3.1151.0
@@ -168,6 +171,12 @@ importers:
         version: 3.1151.0
       '@aws-sdk/client-cloudwatch-logs':
         specifier: ^3.1150.0
+        version: 3.1151.0
+      '@aws-sdk/client-ecs':
+        specifier: 3.1151.0
+        version: 3.1151.0
+      '@aws-sdk/client-elastic-load-balancing-v2':
+        specifier: 3.1151.0
         version: 3.1151.0
       '@aws-sdk/client-eventbridge':
         specifier: ^3.1150.0
@@ -786,6 +795,9 @@ importers:
       '@bike4mind/local-models':
         specifier: workspace:*
         version: link:../../b4m-core/local-models
+      '@bike4mind/tsgo':
+        specifier: workspace:*
+        version: link:../../packages/tsgo
       '@bike4mind/typescript-config':
         specifier: workspace:*
         version: link:../../packages/typescript-config
@@ -1114,7 +1126,7 @@ importers:
         version: 24.12.3
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1154,7 +1166,7 @@ importers:
         version: 1.5.6
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1170,7 +1182,7 @@ importers:
     devDependencies:
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1201,7 +1213,7 @@ importers:
         version: 9.1.0(zod@4.6.6)
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       tsx:
         specifier: 4.23.0
         version: 4.23.0
@@ -1220,7 +1232,7 @@ importers:
     devDependencies:
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1242,7 +1254,7 @@ importers:
         version: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1318,7 +1330,7 @@ importers:
         version: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1334,7 +1346,7 @@ importers:
     devDependencies:
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1346,7 +1358,7 @@ importers:
         version: 24.0.4
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1395,7 +1407,7 @@ importers:
         version: link:../local-models
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1414,7 +1426,7 @@ importers:
     devDependencies:
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1451,7 +1463,7 @@ importers:
     devDependencies:
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1463,7 +1475,7 @@ importers:
     devDependencies:
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1475,7 +1487,7 @@ importers:
     devDependencies:
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1487,7 +1499,7 @@ importers:
     devDependencies:
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1635,7 +1647,7 @@ importers:
         version: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1712,7 +1724,7 @@ importers:
         version: 8.24.8(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1818,7 +1830,7 @@ importers:
         version: 2.15.0(@types/node@25.9.6)(typescript@5.9.3)
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1837,7 +1849,7 @@ importers:
     devDependencies:
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2045,7 +2057,7 @@ importers:
         version: 4.0.0(@types/react@19.3.0)
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       tsx:
         specifier: ^4.23.0
         version: 4.23.0
@@ -2122,7 +2134,7 @@ importers:
         version: 11.3.0(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       tsx:
         specifier: ^4.23.0
         version: 4.23.0
@@ -2141,7 +2153,7 @@ importers:
     devDependencies:
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       tsx:
         specifier: ^4.23.0
         version: 4.23.0
@@ -2162,7 +2174,7 @@ importers:
         version: link:../../b4m-core/local-models
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2308,7 +2320,7 @@ importers:
         version: 3.9.6
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
+        version: 0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -2509,6 +2521,12 @@ importers:
         specifier: ^4.1.12
         version: 4.1.12(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.12)(@vitest/ui@4.1.12)(jsdom@29.1.1(@noble/hashes@2.4.0)(canvas@3.2.1))(msw@2.15.0(@types/node@24.12.3)(typescript@5.9.3))(vite@8.3.4(@types/node@24.12.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.9.1))
 
+  packages/tsgo:
+    dependencies:
+      typescript-7:
+        specifier: npm:typescript@7.0.2
+        version: typescript@7.0.2
+
   packages/typescript-config: {}
 
 packages:
@@ -2578,6 +2596,10 @@ packages:
     resolution: {integrity: sha512-xrdRdaJGzzhsf/DkQ4JC2wlghDam8Zd5JZC/7hfB4enHPByzAS2kNU0PBg03l+FJI2NbEPnUVARSZ9wXldq9sA==}
     engines: {node: '>=20.0.0'}
 
+  '@aws-sdk/client-application-auto-scaling@3.1151.0':
+    resolution: {integrity: sha512-oT2iU6S1xQ8AxLYV4kY8Q33adyAvzce2Lv19WTWJmqfN83KIbZ9oTPAAL2kldw5mVjmXdvoOZ5UJwTVT24yI0g==}
+    engines: {node: '>=20.0.0'}
+
   '@aws-sdk/client-bedrock-runtime@3.1151.0':
     resolution: {integrity: sha512-9+uz+wrdF/HCGyPr6TMy08c8vqpJVeDmSMipAFDJOZxf/EXX2dcHBj9+h16f9H0KOIfzkwMINkxGbjnga4BXbw==}
     engines: {node: '>=20.0.0'}
@@ -2608,6 +2630,14 @@ packages:
 
   '@aws-sdk/client-ec2@3.1151.0':
     resolution: {integrity: sha512-v2+XdOK6V/bKQxAxVrlcF32sttqlq6nIxJDyhFGu5nAs7tA8xRaRzhp6PrCOUdUhPygspzvzqvY6B5+jZGwT7Q==}
+    engines: {node: '>=20.0.0'}
+
+  '@aws-sdk/client-ecs@3.1151.0':
+    resolution: {integrity: sha512-l5K4Te1a1JdGhA/UHsB7iWmzSWDv2z9M6fuHWy1vvDd/Lernl815WWJn48BzIyS0V3GjteEt9n+P/W6XFt94lA==}
+    engines: {node: '>=20.0.0'}
+
+  '@aws-sdk/client-elastic-load-balancing-v2@3.1151.0':
+    resolution: {integrity: sha512-70N3uu+7FDRLGvt/JwFD3OcW3CsGEZ+HRx0M1S9tinNcvbawmNn8l46X9YN1vC3yUER69fZxrEbBpHMZ5PCP1g==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/client-eventbridge@3.1151.0':
@@ -6294,52 +6324,125 @@ packages:
     resolution: {integrity: sha512-UexrHGnGTpbuQHct2ExOc2ZcFbGUS9FOesCxxqdBGcpI1BxYu/LZ6U8Aq6/72XtF/qRBk9nhuGHFJIXXMhPMdw==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
 
-  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260707.2':
-    resolution: {integrity: sha512-wny2pgKjGbiZtnOIHVa3tXC1UfDqxNEFzyPGmiqybedG8hipG2Nfp0l5UxbaKCjkLacUpH/W5bP2hBOMVhCOzg==}
+  '@typescript/typescript-aix-ppc64@7.0.2':
+    resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
+    engines: {node: '>=16.20.0'}
+    cpu: [ppc64]
+    os: [aix]
+
+  '@typescript/typescript-darwin-arm64@7.0.2':
+    resolution: {integrity: sha512-gowzar9MwS/aRWp6f3a4KUqzRjAZjOsmGNCM6LcTgXum+dBfgsBVMN+AgvOCCbguXyick6LJhpBszxMebJ8syA==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [darwin]
 
-  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260707.2':
-    resolution: {integrity: sha512-Afc7M5zOwo+GpfcYwz5Z8HMB2tPVsui7nNIqEuuFB73MPdVqNn/Wmpe4tP4MRri0AtJnJknoHBaTJ/VDAp/Jhw==}
+  '@typescript/typescript-darwin-x64@7.0.2':
+    resolution: {integrity: sha512-SZ9xZInqApNlNGc9s0W1VSsktYSOe9cFqNOIqmN1Gs8SmkjKZYFt017G4VwPxASInODuAdbTW7sXiFUf893RgA==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [darwin]
 
-  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260707.2':
-    resolution: {integrity: sha512-iITBa2WjjTI5N9t5l7Z4KoOSI+2zBlhbvFzsD/f8qX8QoKjz/Y4DPyBDgezYi8nkqjjksbgSOJ3/ykzhwrB9cg==}
+  '@typescript/typescript-freebsd-arm64@7.0.2':
+    resolution: {integrity: sha512-W5NH4y/J0plIIS5b2xvTEkU7JFxyqdMAOgf+Ilhl0vHQXKO5dZoxd+C/jEtq56c4F3wk71RB4BMRQ2XdI+bwYQ==}
+    engines: {node: '>=16.20.0'}
+    cpu: [arm64]
+    os: [freebsd]
+
+  '@typescript/typescript-freebsd-x64@7.0.2':
+    resolution: {integrity: sha512-UMGDx5sTpzNw3WiPebH7l90IWfJggEd+egHt/q6p7/Cm3zqoV7VxkGXt+3DxPIw8CcmvAB0j3sVVfbhX+M4Tpw==}
+    engines: {node: '>=16.20.0'}
+    cpu: [x64]
+    os: [freebsd]
+
+  '@typescript/typescript-linux-arm64@7.0.2':
+    resolution: {integrity: sha512-Qh4eU4/y3yDjnfjjyPYihMj5/ODIlmt+Bzu17OI+fiSRDW57QmU5SiN63exPRNJPKUzcc1INa1NXdrJ+MqHjUQ==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [linux]
 
-  '@typescript/native-preview-linux-arm@7.0.0-dev.20260707.2':
-    resolution: {integrity: sha512-hJm/UOqZTr9FHmR7uNm8VGX4oKtfWk0Jem0zPeJFNC8ckGUfSBueyiEYMZB+XmRc1aG4x1E46y3CplP4CLHvGQ==}
+  '@typescript/typescript-linux-arm@7.0.2':
+    resolution: {integrity: sha512-gffT3xPz9sR7j/YJExkyPntrI0P2EP9XbOyWzth2/Gs0RstK+90RBcO0ncXoXy/beYll1SXw846Nf2zdnEz0QQ==}
     engines: {node: '>=16.20.0'}
     cpu: [arm]
     os: [linux]
 
-  '@typescript/native-preview-linux-x64@7.0.0-dev.20260707.2':
-    resolution: {integrity: sha512-du0dzi6y97Po5vDNdPJTyyijHCpaS22JLRnKZEJXBDaO9gCIymOv/5QQokFRuOlQm0bWl3i9PF4OVdGP6uAOQA==}
+  '@typescript/typescript-linux-loong64@7.0.2':
+    resolution: {integrity: sha512-uEHck9i8hoAzXPiYRib1O7miOnz23SxIeVl6F4LXox+qov1K35jHcEW6VHKvZI+pyvl7fZEP4MCU5LYvIq1GuQ==}
+    engines: {node: '>=16.20.0'}
+    cpu: [loong64]
+    os: [linux]
+
+  '@typescript/typescript-linux-mips64el@7.0.2':
+    resolution: {integrity: sha512-R4KvAMnE43W5Qeqb0Ly56O3mWMWIAgsMyz36DCaycd5nbg/9kzm0liw3JocfRqyJY0KPmzFjbswozXyW0DnIYA==}
+    engines: {node: '>=16.20.0'}
+    cpu: [mips64el]
+    os: [linux]
+
+  '@typescript/typescript-linux-ppc64@7.0.2':
+    resolution: {integrity: sha512-DORx5b3sd/4S7eayxm4FQv+A7CrkUIGRaHiwI8oiHTAI1fAPWhF4J0vAlkC8biAlHSVVwxMQ3tjZ2/DVbnQiiA==}
+    engines: {node: '>=16.20.0'}
+    cpu: [ppc64]
+    os: [linux]
+
+  '@typescript/typescript-linux-riscv64@7.0.2':
+    resolution: {integrity: sha512-wf0jqEDOjrPRnKwYRyyJDRo11KMbvMFrU+q4zqKyChODBzvlkbhNQfKvLxQCcwTpdDaXSHZTVuh0JoCrKCUMHQ==}
+    engines: {node: '>=16.20.0'}
+    cpu: [riscv64]
+    os: [linux]
+
+  '@typescript/typescript-linux-s390x@7.0.2':
+    resolution: {integrity: sha512-IkwJc3L7yhytWd/ewjyxNDfOmswCm9GWMJT/ue/dU4aZNbwZeYAetq42VyLmsmSjvoX7z74X6ZaYCtzAr0EuGw==}
+    engines: {node: '>=16.20.0'}
+    cpu: [s390x]
+    os: [linux]
+
+  '@typescript/typescript-linux-x64@7.0.2':
+    resolution: {integrity: sha512-EYdf2cNg7rgCWJnxCdJ+F3V39O8ihb37eHAu1LK8oAFizgTQbPOK7zHHXbPt8rX24COqODXeI3sIf0fCXG7H/A==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [linux]
 
-  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260707.2':
-    resolution: {integrity: sha512-SsAwfhyHJ1akgBc+99z4+hwdbHsdWaKB8EwCNIMA6JfSLMeUjffrYvxu+vfMyxVtOVOz7RrRXRoiDiu4a2sCtg==}
+  '@typescript/typescript-netbsd-arm64@7.0.2':
+    resolution: {integrity: sha512-+polYF4MF04aPpO5FTkHran9yUQDSXqy5GiSDKpsll5jy3l3+g9QLhpf39T+ePtefhXLOGrLl0QIjkQP6VnelA==}
+    engines: {node: '>=16.20.0'}
+    cpu: [arm64]
+    os: [netbsd]
+
+  '@typescript/typescript-netbsd-x64@7.0.2':
+    resolution: {integrity: sha512-8YIT0EHM/3dq10ZOVF/A7pc/YSMtbcecct4rWtexrnSCHOPcpC2KTLXfTCR6vDpnSiY12heNb1GiN/wu+T/FyA==}
+    engines: {node: '>=16.20.0'}
+    cpu: [x64]
+    os: [netbsd]
+
+  '@typescript/typescript-openbsd-arm64@7.0.2':
+    resolution: {integrity: sha512-APT8+ClYnuYm1u9+kgGXoMj2VzWzcymwh2gNSQVySHfkRDGOTVkoWLjCmOQSaO+PoqQ57B0flRp9SA+7GnnkzQ==}
+    engines: {node: '>=16.20.0'}
+    cpu: [arm64]
+    os: [openbsd]
+
+  '@typescript/typescript-openbsd-x64@7.0.2':
+    resolution: {integrity: sha512-yX7s+Q0Dln0Dt9tEzZsAjXXR/+ytBM7AlglaqyeMPxQszJ1JhlJdZ6jLA+IzldHtflX81em7lDao1xXu+aRRkg==}
+    engines: {node: '>=16.20.0'}
+    cpu: [x64]
+    os: [openbsd]
+
+  '@typescript/typescript-sunos-x64@7.0.2':
+    resolution: {integrity: sha512-dLJDGaLZ1D4HPQn62u1n8mBDkJREwMsAkCdkwd4Ieqw+x3TUyTsqY0YiBCtE6H6OzzgGk3iuZ3vFWRS+E8/d1g==}
+    engines: {node: '>=16.20.0'}
+    cpu: [x64]
+    os: [sunos]
+
+  '@typescript/typescript-win32-arm64@7.0.2':
+    resolution: {integrity: sha512-Gyl1Vy6OsWesLzmq+EP0Fb7b4Nid5232AvcA2SFcdYreldpNtYFFofPjnt62y9hQy7VTaZp65ICJjuAQRaVcIQ==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [win32]
 
-  '@typescript/native-preview-win32-x64@7.0.0-dev.20260707.2':
-    resolution: {integrity: sha512-DL4u27stv0fo71sVhOzHSwE+YMZsbBijVI+kg5dLDLilSH79WFTJ8RSQ46vJrCMt+Gjlv/JOZP1PuLJDfioYeQ==}
+  '@typescript/typescript-win32-x64@7.0.2':
+    resolution: {integrity: sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [win32]
-
-  '@typescript/native-preview@7.0.0-dev.20260707.2':
-    resolution: {integrity: sha512-oUGp+Rep/hqMhPunyinsALUwSlzHINSxitifPiSaeqoKOKD2OlR9NE3TaPqwsl4NlGslsOSUXI1JotWQzpYCPg==}
-    engines: {node: '>=16.20.0'}
-    hasBin: true
 
   '@ucast/core@1.10.2':
     resolution: {integrity: sha512-ons5CwXZ/51wrUPfoduC+cO7AS1/wRb0ybpQJ9RrssossDxVy4t49QxWoWgfBDvVKsz9VXzBk9z0wqTdZ+Cq8g==}
@@ -12503,6 +12606,11 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
+  typescript@7.0.2:
+    resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
+    engines: {node: '>=16.20.0'}
+    hasBin: true
+
   uc.micro@2.1.0:
     resolution: {integrity: sha512-ARDJmphmdvUk6Glw7y9DQ2bFkKBHwQHLi2lsaH6PPmz/Ka9sFOBsBluozhDltWmnv9u/cF6Rt87znRTPV+yp/A==}
 
@@ -13316,8 +13424,8 @@ snapshots:
 
   '@aws-sdk/checksums@3.1001.3':
     dependencies:
-      '@aws-sdk/core': 3.978.3
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/core': 3.978.5
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
@@ -13327,6 +13435,17 @@ snapshots:
       '@aws-sdk/core': 3.978.3
       '@aws-sdk/credential-provider-node': 3.972.86
       '@aws-sdk/types': 3.974.6
+      '@smithy/core': 3.36.1
+      '@smithy/fetch-http-handler': 5.8.0
+      '@smithy/node-http-handler': 4.12.1
+      '@smithy/types': 4.19.0
+      tslib: 2.8.1
+
+  '@aws-sdk/client-application-auto-scaling@3.1151.0':
+    dependencies:
+      '@aws-sdk/core': 3.978.5
+      '@aws-sdk/credential-provider-node': 3.972.86
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/fetch-http-handler': 5.8.0
       '@smithy/node-http-handler': 4.12.1
@@ -13425,6 +13544,28 @@ snapshots:
       '@aws-sdk/credential-provider-node': 3.972.86
       '@aws-sdk/middleware-sdk-ec2': 3.972.62
       '@aws-sdk/types': 3.974.6
+      '@smithy/core': 3.36.1
+      '@smithy/fetch-http-handler': 5.8.0
+      '@smithy/node-http-handler': 4.12.1
+      '@smithy/types': 4.19.0
+      tslib: 2.8.1
+
+  '@aws-sdk/client-ecs@3.1151.0':
+    dependencies:
+      '@aws-sdk/core': 3.978.5
+      '@aws-sdk/credential-provider-node': 3.972.86
+      '@aws-sdk/types': 3.975.0
+      '@smithy/core': 3.36.1
+      '@smithy/fetch-http-handler': 5.8.0
+      '@smithy/node-http-handler': 4.12.1
+      '@smithy/types': 4.19.0
+      tslib: 2.8.1
+
+  '@aws-sdk/client-elastic-load-balancing-v2@3.1151.0':
+    dependencies:
+      '@aws-sdk/core': 3.978.5
+      '@aws-sdk/credential-provider-node': 3.972.86
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/fetch-http-handler': 5.8.0
       '@smithy/node-http-handler': 4.12.1
@@ -13583,7 +13724,7 @@ snapshots:
 
   '@aws-sdk/core@3.978.3':
     dependencies:
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/types': 3.975.0
       '@aws-sdk/xml-builder': 3.972.41
       '@aws/lambda-invoke-store': 0.3.0
       '@smithy/core': 3.36.1
@@ -13796,14 +13937,14 @@ snapshots:
 
   '@aws-sdk/eventstream-handler-node@3.972.36':
     dependencies:
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/middleware-eventstream@3.972.31':
     dependencies:
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
@@ -13819,24 +13960,24 @@ snapshots:
 
   '@aws-sdk/middleware-sdk-s3@3.972.79':
     dependencies:
-      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/core': 3.978.5
       '@aws-sdk/signature-v4-multi-region': 3.996.48
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/middleware-sdk-sqs@3.972.44':
     dependencies:
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
 
   '@aws-sdk/middleware-websocket@3.972.56':
     dependencies:
-      '@aws-sdk/core': 3.978.3
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/core': 3.978.5
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/fetch-http-handler': 5.8.0
       '@smithy/signature-v4': 5.7.4
@@ -13887,7 +14028,7 @@ snapshots:
 
   '@aws-sdk/signature-v4-multi-region@3.996.48':
     dependencies:
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/types': 3.975.0
       '@smithy/signature-v4': 5.7.4
       '@smithy/types': 4.19.0
       tslib: 2.8.1
@@ -13910,9 +14051,9 @@ snapshots:
 
   '@aws-sdk/token-providers@3.1151.0':
     dependencies:
-      '@aws-sdk/core': 3.978.3
+      '@aws-sdk/core': 3.978.5
       '@aws-sdk/nested-clients': 3.997.48
-      '@aws-sdk/types': 3.974.6
+      '@aws-sdk/types': 3.975.0
       '@smithy/core': 3.36.1
       '@smithy/types': 4.19.0
       tslib: 2.8.1
@@ -17759,36 +17900,65 @@ snapshots:
       '@typescript-eslint/types': 8.63.0
       eslint-visitor-keys: 5.0.1
 
-  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260707.2':
+  '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
 
-  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260707.2':
+  '@typescript/typescript-darwin-arm64@7.0.2':
     optional: true
 
-  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260707.2':
+  '@typescript/typescript-darwin-x64@7.0.2':
     optional: true
 
-  '@typescript/native-preview-linux-arm@7.0.0-dev.20260707.2':
+  '@typescript/typescript-freebsd-arm64@7.0.2':
     optional: true
 
-  '@typescript/native-preview-linux-x64@7.0.0-dev.20260707.2':
+  '@typescript/typescript-freebsd-x64@7.0.2':
     optional: true
 
-  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260707.2':
+  '@typescript/typescript-linux-arm64@7.0.2':
     optional: true
 
-  '@typescript/native-preview-win32-x64@7.0.0-dev.20260707.2':
+  '@typescript/typescript-linux-arm@7.0.2':
     optional: true
 
-  '@typescript/native-preview@7.0.0-dev.20260707.2':
-    optionalDependencies:
-      '@typescript/native-preview-darwin-arm64': 7.0.0-dev.20260707.2
-      '@typescript/native-preview-darwin-x64': 7.0.0-dev.20260707.2
-      '@typescript/native-preview-linux-arm': 7.0.0-dev.20260707.2
-      '@typescript/native-preview-linux-arm64': 7.0.0-dev.20260707.2
-      '@typescript/native-preview-linux-x64': 7.0.0-dev.20260707.2
-      '@typescript/native-preview-win32-arm64': 7.0.0-dev.20260707.2
-      '@typescript/native-preview-win32-x64': 7.0.0-dev.20260707.2
+  '@typescript/typescript-linux-loong64@7.0.2':
+    optional: true
+
+  '@typescript/typescript-linux-mips64el@7.0.2':
+    optional: true
+
+  '@typescript/typescript-linux-ppc64@7.0.2':
+    optional: true
+
+  '@typescript/typescript-linux-riscv64@7.0.2':
+    optional: true
+
+  '@typescript/typescript-linux-s390x@7.0.2':
+    optional: true
+
+  '@typescript/typescript-linux-x64@7.0.2':
+    optional: true
+
+  '@typescript/typescript-netbsd-arm64@7.0.2':
+    optional: true
+
+  '@typescript/typescript-netbsd-x64@7.0.2':
+    optional: true
+
+  '@typescript/typescript-openbsd-arm64@7.0.2':
+    optional: true
+
+  '@typescript/typescript-openbsd-x64@7.0.2':
+    optional: true
+
+  '@typescript/typescript-sunos-x64@7.0.2':
+    optional: true
+
+  '@typescript/typescript-win32-arm64@7.0.2':
+    optional: true
+
+  '@typescript/typescript-win32-x64@7.0.2':
+    optional: true
 
   '@ucast/core@1.10.2': {}
 
@@ -23923,7 +24093,7 @@ snapshots:
 
   robust-predicates@3.0.3: {}
 
-  rolldown-plugin-dts@0.27.14(@typescript/native-preview@7.0.0-dev.20260707.2)(rolldown@1.2.13)(typescript@5.9.3):
+  rolldown-plugin-dts@0.27.14(rolldown@1.2.13)(typescript@5.9.3):
     dependencies:
       dts-resolver: 3.0.0
       get-tsconfig: 5.0.0-beta.5
@@ -23933,7 +24103,6 @@ snapshots:
       yuku-codegen: 0.8.3
       yuku-parser: 0.8.3
     optionalDependencies:
-      '@typescript/native-preview': 7.0.0-dev.20260707.2
       typescript: 5.9.3
     transitivePeerDependencies:
       - oxc-resolver
@@ -24956,7 +25125,7 @@ snapshots:
     optionalDependencies:
       typescript: 5.9.3
 
-  tsdown@0.22.14(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37):
+  tsdown@0.22.14(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37):
     dependencies:
       ansis: 4.3.1
       cac: 7.0.0
@@ -24967,7 +25136,7 @@ snapshots:
       obug: 2.1.4
       picomatch: 4.0.7
       rolldown: 1.2.13
-      rolldown-plugin-dts: 0.27.14(@typescript/native-preview@7.0.0-dev.20260707.2)(rolldown@1.2.13)(typescript@5.9.3)
+      rolldown-plugin-dts: 0.27.14(rolldown@1.2.13)(typescript@5.9.3)
       tinyexec: 1.3.1
       tinyglobby: 0.2.17
       tree-kill: 1.2.2
@@ -25100,6 +25269,29 @@ snapshots:
   typescript-event-target@1.1.1: {}
 
   typescript@5.9.3: {}
+
+  typescript@7.0.2:
+    optionalDependencies:
+      '@typescript/typescript-aix-ppc64': 7.0.2
+      '@typescript/typescript-darwin-arm64': 7.0.2
+      '@typescript/typescript-darwin-x64': 7.0.2
+      '@typescript/typescript-freebsd-arm64': 7.0.2
+      '@typescript/typescript-freebsd-x64': 7.0.2
+      '@typescript/typescript-linux-arm': 7.0.2
+      '@typescript/typescript-linux-arm64': 7.0.2
+      '@typescript/typescript-linux-loong64': 7.0.2
+      '@typescript/typescript-linux-mips64el': 7.0.2
+      '@typescript/typescript-linux-ppc64': 7.0.2
+      '@typescript/typescript-linux-riscv64': 7.0.2
+      '@typescript/typescript-linux-s390x': 7.0.2
+      '@typescript/typescript-linux-x64': 7.0.2
+      '@typescript/typescript-netbsd-arm64': 7.0.2
+      '@typescript/typescript-netbsd-x64': 7.0.2
+      '@typescript/typescript-openbsd-arm64': 7.0.2
+      '@typescript/typescript-openbsd-x64': 7.0.2
+      '@typescript/typescript-sunos-x64': 7.0.2
+      '@typescript/typescript-win32-arm64': 7.0.2
+      '@typescript/typescript-win32-x64': 7.0.2
 
   uc.micro@2.1.0: {}
 

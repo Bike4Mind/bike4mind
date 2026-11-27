@@ -28,7 +28,13 @@ import { S3Storage } from '@bike4mind/fab-pipeline';
 import { Logger } from '@bike4mind/observability';
 import { fabFilesService, scopedSettingsService } from '@bike4mind/services';
 import { getFilesStorage } from '../utils/storage/index';
-import { callableFunctionDataKey, callableFunctionDataPrefix, callableFunctionDataStagingKey } from './dataKeys';
+import {
+  callableFunctionDataKey,
+  callableFunctionDataPrefix,
+  callableFunctionDataStagingKey,
+  callableFunctionLiveSourcePrefix,
+} from './dataKeys';
+import { CALLABLE_FUNCTION_SOURCE_LAMBDA_MAX_BYTES } from './fetchSource';
 
 /**
  * Data files pinned to a saved function: copied once by hash under the function's own prefix in the function-data
@@ -160,11 +166,15 @@ export async function resolveCallableFunctionDataLimits(user: { id: string }): P
   };
 }
 
+/** The most one source fetch can return, which each source holds of the per-function total. */
+export const callableFunctionSourceMaxBytes = (limits: CallableFunctionDataLimits): number =>
+  Math.min(limits.fileBytes, CALLABLE_FUNCTION_SOURCE_LAMBDA_MAX_BYTES);
+
 const userOwner = (actor: { id: string }) => ({ ownerType: 'user' as const, ownerKey: actor.id });
 const notFound = () => new NotFoundError('Tool not found');
 const changed = () =>
   new ConflictError('The tool changed since you opened it. Reload it and try again.', { code: 'version_changed' });
-const megabytes = (bytes: number) => `${Math.floor(bytes / MIB)} MB`;
+export const megabytes = (bytes: number) => `${Math.floor(bytes / MIB)} MB`;
 
 async function readHead(actor: { id: string }, artifactId: string) {
   const artifact = await artifactRepository.findOne({ id: artifactId, userId: actor.id });
@@ -203,8 +213,9 @@ export async function pinCallableFunctionData(
     );
   }
   const pins = fn.pin.dataPins ?? [];
-  if (pins.some(pin => pin.name === input.name)) {
-    throw new ConflictError(`A data file named ${input.name} is already pinned.`, { code: 'data_name_taken' });
+  const sources = fn.sources ?? [];
+  if (pins.some(pin => pin.name === input.name) || sources.some(source => source.name === input.name)) {
+    throw new ConflictError(`A data file or source named ${input.name} already exists.`, { code: 'data_name_taken' });
   }
   if (pins.length >= CALLABLE_FUNCTION_DATA_LIMITS.maxPins) {
     throw new ConflictError(`A tool can have at most ${CALLABLE_FUNCTION_DATA_LIMITS.maxPins} data files.`, {
@@ -213,7 +224,7 @@ export async function pinCallableFunctionData(
     });
   }
 
-  const file = await fabFilesService.assertFabFileAccessById(actor, input.fileId, {
+  const file = await fabFilesService.assertFabFileAccessById(actor, input.fileId.trim(), {
     db: { fabFiles: fabFileRepository },
   });
   if (!file.filePath) {
@@ -231,7 +242,8 @@ export async function pinCallableFunctionData(
   }
 
   const limits = deps.limits ?? (await resolveCallableFunctionDataLimits(actor));
-  const pinnedBytes = pins.reduce((sum, pin) => sum + pin.bytes, 0);
+  const pinnedBytes =
+    pins.reduce((sum, pin) => sum + pin.bytes, 0) + sources.length * callableFunctionSourceMaxBytes(limits);
   const checkSize = (bytes: number) => {
     if (bytes > limits.fileBytes) {
       throw new BadRequestError(`A data file can be at most ${megabytes(limits.fileBytes)}.`, {
@@ -240,7 +252,8 @@ export async function pinCallableFunctionData(
       });
     }
     if (pinnedBytes + bytes > limits.totalBytes) {
-      throw new BadRequestError(`A tool's data files can add up to at most ${megabytes(limits.totalBytes)}.`, {
+      const total = megabytes(limits.totalBytes);
+      throw new BadRequestError(`A tool's data files and sources can add up to at most ${total}.`, {
         code: 'data_total_too_large',
         limit: limits.totalBytes,
       });
@@ -310,10 +323,18 @@ export async function unpinCallableFunctionData(
   const kept = pins.filter(pin => pin !== removed);
   const updated = await callableFunctionRepository.setDataPins(fn.id, userOwner(actor), fn, kept);
   if (!updated) throw changed();
-  // Read again: a pin of the same bytes may have committed since. A failed delete leaves an orphan for the prefix
-  // delete; the unpin itself has already happened.
+  // Read again: a pin or source pin of the same bytes may have committed since. A failed delete leaves an orphan
+  // for the prefix delete; the unpin itself has already happened.
   const fresh = await callableFunctionRepository.findByIdForOwner(fn.id, userOwner(actor));
-  const stillNamed = (fresh?.pin.dataPins ?? kept).some(pin => pin.sha256 === removed.sha256);
+  const latest = fresh?.pin ?? { dataPins: kept, sourcePins: fn.pin.sourcePins };
+  // Recipients keep calling the last promotion, so its files stay until a promotion moves them on.
+  const promoted = (fresh ?? fn).promoted?.pin;
+  const stillNamed = [
+    ...(latest.dataPins ?? []),
+    ...(latest.sourcePins ?? []),
+    ...(promoted?.dataPins ?? []),
+    ...(promoted?.sourcePins ?? []),
+  ].some(entry => entry.sha256 === removed.sha256);
   if (!stillNamed) {
     try {
       await (deps.storage ?? getCallableFunctionDataStorage()).delete(callableFunctionDataKey(fn.id, removed.sha256));
@@ -339,6 +360,25 @@ export async function linkCallableFunctionDataForBrowser(
   if (!fn) throw notFound();
   const pin = fn.pin.dataPins?.find(entry => entry.name === name);
   if (!pin) throw new NotFoundError('Data file not found');
+  const url = await signCallableFunctionDataBrowserLink(
+    fn.id,
+    callableFunctionDataKey(fn.id, pin.sha256),
+    `/api/callable-functions/${encodeURIComponent(fn.id)}/data/${encodeURIComponent(pin.name)}?bytes=1`,
+    deps
+  );
+  return { name: pin.name, sha256: pin.sha256, bytes: pin.bytes, url };
+}
+
+/**
+ * A one-minute browser link to one stored object of a function, signed only by the browser reader role, or by
+ * storage that can sign for the browser where there is no data bucket; `bytesRoute` where neither can.
+ */
+export async function signCallableFunctionDataBrowserLink(
+  functionId: string,
+  key: string,
+  bytesRoute: string,
+  deps: CallableFunctionDataDeps = {}
+): Promise<string> {
   const bucket = process.env[CALLABLE_FUNCTION_DATA_BUCKET_ENV];
   const roleArn = process.env[CALLABLE_FUNCTION_DATA_BROWSER_ROLE_ENV];
   const storage = deps.storage ?? getCallableFunctionDataStorage();
@@ -350,7 +390,7 @@ export async function linkCallableFunctionDataForBrowser(
         : undefined;
   const sign = async (by: Pick<S3Storage, 'getSignedUrl'>) => {
     try {
-      return await by.getSignedUrl(callableFunctionDataKey(fn.id, pin.sha256), 'get', {
+      return await by.getSignedUrl(key, 'get', {
         audience: 'browser',
         expiresIn: CALLABLE_FUNCTION_DATA_BROWSER_LINK_SECONDS,
         ResponseContentType: 'application/octet-stream',
@@ -359,16 +399,13 @@ export async function linkCallableFunctionDataForBrowser(
       });
     } catch (error) {
       // No other signer is tried: a missing browser role or a refused assume leaves the browser with no link.
-      Logger.error('[CALLABLE_FUNCTION_DATA_BROWSER_LINK_FAILED]', { functionId: fn.id, error: String(error) });
+      Logger.error('[CALLABLE_FUNCTION_DATA_BROWSER_LINK_FAILED]', { functionId, error: String(error) });
       throw new ServiceUnavailableError('Pinned data files cannot be read in the browser right now.', {
         code: 'data_link_unavailable',
       });
     }
   };
-  const url = signer
-    ? await sign(signer)
-    : `/api/callable-functions/${encodeURIComponent(fn.id)}/data/${encodeURIComponent(pin.name)}?bytes=1`;
-  return { name: pin.name, sha256: pin.sha256, bytes: pin.bytes, url };
+  return signer ? sign(signer) : bytesRoute;
 }
 
 /** The pinned bytes of one of the owner's functions, served by the read route where no browser link can be signed. */
@@ -401,24 +438,38 @@ export async function signCallableFunctionDataLinks(
   fn: { id: string; pin: { dataPins?: ICallableFunctionDataPin[] } },
   storage: CallableFunctionDataStorage = getCallableFunctionDataStorage()
 ): Promise<CallableFunctionDataLink[]> {
+  return signCallableFunctionDataEntries(fn.id, fn.pin.dataPins ?? [], storage);
+}
+
+/** The same links for stored objects of one function named by key, such as its fetched sources. */
+export async function signCallableFunctionDataEntries(
+  functionId: string,
+  entries: { name: string; sha256: string; bytes: number; key?: string }[],
+  storage?: CallableFunctionDataStorage
+): Promise<CallableFunctionDataLink[]> {
+  if (entries.length === 0) return [];
+  const signer = storage ?? getCallableFunctionDataStorage();
   return Promise.all(
-    (fn.pin.dataPins ?? []).map(async ({ name, sha256, bytes }) => ({
+    entries.map(async ({ name, sha256, bytes, key }) => ({
       name,
       sha256,
       bytes,
-      url: await storage.getSignedUrl(callableFunctionDataKey(fn.id, sha256), 'get', {
+      url: await signer.getSignedUrl(key ?? callableFunctionDataKey(functionId, sha256), 'get', {
         expiresIn: CALLABLE_FUNCTION_DATA_LINK_SECONDS,
       }),
     }))
   );
 }
 
-/** Deletes every data object of one function. */
+/** Deletes every data object of one function, its live source fetches included. */
 export async function deleteCallableFunctionDataObjects(
   functionId: string,
   storage: CallableFunctionDataStorage = getCallableFunctionDataStorage()
 ): Promise<number> {
-  return storage.deletePrefix(callableFunctionDataPrefix(functionId));
+  return (
+    (await storage.deletePrefix(callableFunctionDataPrefix(functionId))) +
+    (await storage.deletePrefix(callableFunctionLiveSourcePrefix(functionId)))
+  );
 }
 
 /**

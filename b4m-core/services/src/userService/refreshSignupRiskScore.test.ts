@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { settingsMap, type ISignupRiskScore, type SignupDomainReview } from '@bike4mind/common';
 import { invalidateSettingsCache } from '@bike4mind/utils';
-import { refreshSignupRiskScore, type RefreshSignupRiskScoreAdapters } from './refreshSignupRiskScore';
+import {
+  emailSubdomainHost,
+  refreshSignupRiskScore,
+  type RefreshSignupRiskScoreAdapters,
+} from './refreshSignupRiskScore';
 import { SIGNUP_BURST_HOLD_REASONS } from './signupBurstDetector';
 
 const SIGNED_UP = new Date('2026-10-20T10:00:00Z');
@@ -14,11 +18,13 @@ const setup = ({
   spent = 0,
   settings = {} as Record<string, unknown>,
   review = null as SignupDomainReview | null,
+  hostSignups = { total: 1, banned: 0 },
 } = {}) => {
   const setRiskScore = vi.fn(async (_userId: string, _riskScore: ISignupRiskScore) => undefined);
   const creditsSpentByUser = vi.fn(async () => spent);
   const warn = vi.fn();
   const findReview = vi.fn(async (_domain: string) => review);
+  const countSignupsOnEmailHost = vi.fn(async (_host: string, _from: Date, _to: Date) => hostSignups);
   const adapters: RefreshSignupRiskScoreAdapters = {
     db: {
       users: {
@@ -26,6 +32,7 @@ const setup = ({
           id === 'gone' ? null : { id, email: 'jane.doe@example.com', createdAt: SIGNED_UP, ...user }
         ),
         setRiskScore,
+        countSignupsOnEmailHost,
       } as unknown as RefreshSignupRiskScoreAdapters['db']['users'],
       userApiKeys: { findFirstCreatedAtByUserId: vi.fn(async () => firstKeyAt) },
       usageEvents: { creditsSpentByUser },
@@ -46,7 +53,7 @@ const setup = ({
     now: NOW,
   };
   const stored = () => setRiskScore.mock.calls[0]?.[1];
-  return { adapters, setRiskScore, creditsSpentByUser, findReview, warn, stored };
+  return { adapters, setRiskScore, creditsSpentByUser, countSignupsOnEmailHost, findReview, warn, stored };
 };
 
 describe('refreshSignupRiskScore', () => {
@@ -115,6 +122,55 @@ describe('refreshSignupRiskScore', () => {
       ['no hold on the domain', null],
     ])('leaves %s unflagged', async (_label, review) => {
       expect((await burstSignal(review)).flagged).toBe(false);
+    });
+  });
+
+  describe('email subdomain', () => {
+    it('counts signups on the email subdomain within the window either side of signup', async () => {
+      const { adapters, countSignupsOnEmailHost, stored } = setup({
+        user: { email: 'qzxkvwplt@Box.Example.net' },
+        hostSignups: { total: 10, banned: 2 },
+        firstKeyAt: new Date(SIGNED_UP.getTime() + 9 * 1000),
+      });
+
+      await refreshSignupRiskScore('u1', adapters);
+
+      expect(countSignupsOnEmailHost).toHaveBeenCalledWith(
+        'box.example.net',
+        new Date('2026-10-19T10:00:00Z'),
+        new Date('2026-10-21T10:00:00Z')
+      );
+      expect(stored()?.signals.map(s => s.signal)).toEqual([
+        'emailSubdomainBurst',
+        'bannedEmailSubdomainSibling',
+        'instantApiKey',
+        'quickApiKey',
+      ]);
+      expect(stored()?.reviewState).toBe('pending');
+    });
+
+    it('uses the configured window', async () => {
+      const { adapters, countSignupsOnEmailHost } = setup({
+        user: { email: 'a@box.example.net' },
+        settings: { signupRiskScoring: { emailSubdomainWindowHours: 4 } },
+      });
+
+      await refreshSignupRiskScore('u1', adapters);
+
+      expect(countSignupsOnEmailHost).toHaveBeenCalledWith(
+        'box.example.net',
+        new Date('2026-10-20T06:00:00Z'),
+        new Date('2026-10-20T14:00:00Z')
+      );
+    });
+
+    it('skips the lookup for an email on a bare registrable domain', async () => {
+      const { adapters, countSignupsOnEmailHost, stored } = setup({ hostSignups: { total: 50, banned: 5 } });
+
+      await refreshSignupRiskScore('u1', adapters);
+
+      expect(countSignupsOnEmailHost).not.toHaveBeenCalled();
+      expect(stored()).toMatchObject({ score: 0, reviewState: 'none' });
     });
   });
 
@@ -216,4 +272,16 @@ describe('refreshSignupRiskScore', () => {
     await expect(refreshSignupRiskScore('u1', adapters)).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalledWith('Signup risk score refresh failed', { userId: 'u1', error: 'write failed' });
   });
+});
+
+describe('emailSubdomainHost', () => {
+  it.each([
+    ['a@box.example.net', 'box.example.net'],
+    ['a@Inner.Box.Example.COM.', 'inner.box.example.com'],
+    ['a@dept.example.co.uk', 'dept.example.co.uk'],
+  ])('returns the subdomain host of %s', (email, host) => expect(emailSubdomainHost(email)).toBe(host));
+
+  it.each(['a@example.com', 'a@example.co.uk', 'a@localhost', 'no-at-sign', ''])('returns null for %j', email =>
+    expect(emailSubdomainHost(email)).toBeNull()
+  );
 });

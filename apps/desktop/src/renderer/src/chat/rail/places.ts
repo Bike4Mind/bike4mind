@@ -17,7 +17,7 @@ export type Place = 'chat' | 'code' | 'studio' | 'agents' | 'library';
 /** The session modes a sidebar lists and New starts. */
 export type SessionPlace = Exclude<ChatSessionMode, 'studio'>;
 
-export type StudioArea = 'create' | 'productions';
+export type StudioArea = 'create' | 'productions' | 'library';
 
 export const PLACES: readonly { place: Place; label: string; digit: number }[] = [
   { place: 'chat', label: 'Chat', digit: 1 },
@@ -68,7 +68,7 @@ export function readPlaceMemory(): PlaceMemory | null {
       place,
       ...(typeof chat === 'string' ? { chat } : {}),
       ...(typeof code === 'string' ? { code } : {}),
-      ...(studio === 'create' || studio === 'productions' ? { studio } : {}),
+      ...(studio === 'create' || studio === 'productions' || studio === 'library' ? { studio } : {}),
       ...(typeof studioSession === 'string' ? { studioSession } : {}),
     };
   } catch {

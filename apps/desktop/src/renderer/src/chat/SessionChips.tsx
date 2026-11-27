@@ -25,6 +25,7 @@ import {
   type ChatProject,
   type RecentFolder,
 } from '@shared/chat';
+import { hostChat } from '../host/hostChat';
 import { describeChipRow, displayPath, type ChipRowState } from './chipState';
 import { useHomeDirectory } from './homeDirectory';
 import { BranchIcon, CheckIcon, CloseIcon, FolderIcon, FolderPlusIcon } from './icons';
@@ -797,10 +798,10 @@ function useBranches(directory: string | null, workingDirectory: string | null, 
     let current = true;
     const workspace = workingDirectory ?? directory;
     void Promise.all([
-      window.b4m.chat.inspectProject(directory),
+      hostChat.inspectProject(directory),
       // Swallowed rather than awaited strictly: a worktree that has been deleted must still
       // leave the branch list standing, since that menu is the only way back out of it.
-      workspace === directory ? null : window.b4m.chat.inspectProject(workspace).catch(() => null),
+      workspace === directory ? null : hostChat.inspectProject(workspace).catch(() => null),
     ]).then(([inspected, inWorkspace]) => {
       if (!current) return;
       setState({

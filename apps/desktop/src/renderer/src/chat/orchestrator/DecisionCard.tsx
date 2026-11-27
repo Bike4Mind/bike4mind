@@ -6,6 +6,7 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import { SESSION_EXPIRED_STOP, type SendMessageResult } from '@shared/chat';
 import type { ErrorPendingDecision, PendingDecision, StoppedPendingDecision } from '@shared/pendingDecisions';
+import { ASK_USER_TOOL_NAME } from '@shared/questions';
 import { HeldRelayRow } from '../HeldRelayCard';
 import { TaskDecisionCard } from '../TaskDecisionCards';
 import { PendingRequests } from './AgentPeekDrawer';
@@ -89,7 +90,10 @@ export function DecisionBody({
   onOpenDetails,
   onSettled,
   onAnswered,
-}: DecisionCardProps & { onAnswered(): void }) {
+}: DecisionCardProps & {
+  /** It was answered here: approved or denied for an approval, else answered. */
+  onAnswered(outcome: 'approved' | 'denied' | 'answered'): void;
+}) {
   const { sessionId } = decision;
   switch (decision.kind) {
     case 'approval':
@@ -115,16 +119,37 @@ export function DecisionBody({
           </Sheet>
         );
       }
-      return <PendingRequests calls={[decision.call]} onAnswered={onAnswered} />;
+      return (
+        <PendingRequests
+          sessionId={sessionId}
+          calls={[decision.call]}
+          onAnswered={answer =>
+            onAnswered(
+              decision.call.name === ASK_USER_TOOL_NAME
+                ? 'answered'
+                : answer.decision === 'deny'
+                  ? 'denied'
+                  : 'approved'
+            )
+          }
+        />
+      );
     case 'question':
-      return <TaskDecisionCard sessionId={sessionId} title={asker.name} decision={decision.decision} />;
+      return (
+        <TaskDecisionCard
+          sessionId={sessionId}
+          title={asker.name}
+          decision={decision.decision}
+          onAnswered={() => onAnswered('answered')}
+        />
+      );
     case 'held-relay':
       return (
         <HeldRelayRow
           held={decision.held}
           onResolve={async (heldId, deliver) => {
             await window.b4m.chat.resolveHeldRelay(sessionId, heldId, deliver);
-            onSettled?.();
+            onAnswered('answered');
           }}
           onOpenSession={onOpenDetails}
         />

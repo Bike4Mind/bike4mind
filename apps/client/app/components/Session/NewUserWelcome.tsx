@@ -18,6 +18,7 @@ import { STARTER_PROMPTS, shouldShowNewUserWelcome, welcomeCanStart, welcomeCred
 import { isAwaitingEmailVerification } from '@client/app/utils/onboarding';
 import { claimFirstRunImpression } from '@client/app/utils/firstRunImpression';
 import SignupGrantStatus from '../subscription/SignupGrantStatus';
+import { TutorialOffer } from '../tutorial/core/TutorialOffer';
 
 const dismissKey = (userId: string) => `newUserWelcomeDismissed:${userId}`;
 
@@ -200,6 +201,7 @@ const NewUserWelcome = () => {
           ))}
         </Stack>
       )}
+      <TutorialOffer />
       <Link
         level="body-xs"
         href={ExternalLinks.privacy}

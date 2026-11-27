@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within, fireEvent } from '@testing-library/react';
+import { cleanup, render, screen, within, fireEvent } from '@testing-library/react';
 import type { ComponentType } from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -80,6 +80,8 @@ vi.mock('@client/app/hooks/data/entitlements', () => ({ useEntitlements: () => (
 // The meetings row is gated the same way, through a hook that wraps useEntitlements, so it needs
 // its own stub rather than riding on the one above.
 vi.mock('@client/app/hooks/data/meetings', () => ({ useMeetingsAccess: () => false }));
+const functionsOn = vi.hoisted(() => ({ value: false }));
+vi.mock('@client/app/hooks/data/callableFunctions', () => ({ useCallableFunctionsEnabled: () => functionsOn.value }));
 vi.mock('@client/app/components/Files/Browser', () => ({
   useFileBrowser: () => ({ open: false, setOpen: vi.fn() }),
 }));
@@ -127,6 +129,7 @@ beforeEach(() => {
   useMusicModelsMock.mockReturnValue({ data: [] });
   useAudioProvidersMock.mockReturnValue({ data: { speech: [], soundEffects: [] } });
   location.pathname = '/new';
+  functionsOn.value = false;
   adminSettings.authedSettingsLoaded = false;
   adminSettings.spacesOn = false;
   navItems.length = 0;
@@ -596,6 +599,23 @@ describe('SidenavNav More overflow', () => {
 
     expect(navRowIds(container)).toHaveLength(8);
     expect(moreItemIds(openMore())).toEqual(['sidenav-more-projects', 'sidenav-more-artifacts']);
+  });
+
+  it('offers Functions beside Artifacts only while callable functions are on', () => {
+    seeEverything();
+    renderNav();
+    expect(within(openMore()).queryByTestId('sidenav-more-functions')).toBeNull();
+    cleanup();
+
+    functionsOn.value = true;
+    renderNav();
+    const more = openMore();
+    expect(moreItemIds(more)).toContain('sidenav-more-functions');
+    expect(moreItemIds(more).indexOf('sidenav-more-functions')).toBe(
+      moreItemIds(more).indexOf('sidenav-more-artifacts') + 1
+    );
+    fireEvent.click(within(more).getByTestId('sidenav-more-functions'));
+    expect(navigate).toHaveBeenCalledWith({ to: '/functions' });
   });
 
   it('navigates from a More item', () => {

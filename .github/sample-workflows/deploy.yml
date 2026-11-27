@@ -15,6 +15,9 @@ jobs:
   deploy:
     runs-on: ubuntu-latest-m
     name: Deploy
+    # The deploy roles trust these environment names, not the repository as a
+    # whole, so the job must declare one to assume a role.
+    environment: ${{ github.event_name == 'push' && 'staging' || 'preview' }}
     concurrency:
       group: deploy-${{ github.ref_name }}
       cancel-in-progress: false
@@ -269,6 +272,7 @@ jobs:
 
   cleanup-preview:
     runs-on: ubuntu-latest-m
+    environment: preview
     concurrency:
       group: cleanup-${{ github.ref_name }}
       cancel-in-progress: false

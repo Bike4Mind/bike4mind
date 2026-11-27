@@ -262,7 +262,7 @@ describe('Use in chat', () => {
     await act(async () => offered?.('local', 'qwen3.5:0.8b')?.());
     expect(createSession).not.toHaveBeenCalled();
     await sendDraft();
-    expect(deleteSession).toHaveBeenCalledWith('fresh-1');
+    expect(deleteSession).toHaveBeenCalledWith('fresh-1', false);
     expect(document.querySelector('[data-testid="chat-send-error"]')?.textContent).toContain('draft settings');
     createSession.mockRejectedValueOnce(new Error('disk full'));
     await sendDraft();
@@ -275,7 +275,7 @@ describe('Use in chat', () => {
     await openModels();
     await act(async () => offered?.('local', 'qwen3.5:0.8b')?.());
     await sendDraft();
-    expect(deleteSession).toHaveBeenCalledWith('fresh-1');
+    expect(deleteSession).toHaveBeenCalledWith('fresh-1', false);
     expect(document.querySelector('[data-testid="chat-send-error"]')?.textContent).toContain(
       'Could not remove the unsent'
     );

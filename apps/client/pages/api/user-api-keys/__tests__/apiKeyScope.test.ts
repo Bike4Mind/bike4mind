@@ -38,16 +38,6 @@ vi.mock('@server/middlewares/baseApi', async () => {
     },
   };
 });
-// The shipped window has no cutoff yet, so every key is legacy; simulate one to tell the two apart.
-const SIMULATED_CUTOFF = new Date('2026-06-01T00:00:00Z');
-vi.mock('@bike4mind/server-utils/middlewares/apiKeyScopeGate', async importOriginal => {
-  const actual = await importOriginal<typeof import('@bike4mind/server-utils/middlewares/apiKeyScopeGate')>();
-  return {
-    ...actual,
-    isLegacyApiKey: (createdAt: Date | undefined, now?: Date) =>
-      actual.isLegacyApiKey(createdAt, now, { cutoff: SIMULATED_CUTOFF, endsAt: null }),
-  };
-});
 vi.mock('@bike4mind/services', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/services')>();
   return { ...actual, userApiKeyService: { validateUserApiKey: validateUserApiKeyMock } };
@@ -86,7 +76,7 @@ import billingOrganizations from '../billing-organizations';
 const loggerInfo = vi.fn();
 const KEY = 'b4m_live_0123456789abcdef0123456789abcdef';
 const LEGACY_CREATED_AT = new Date('2026-01-01T00:00:00Z');
-const POST_CUTOFF_CREATED_AT = new Date('2026-09-01T00:00:00Z');
+const POST_CUTOFF_CREATED_AT = new Date('2026-11-26T00:00:00Z');
 
 // The legacy-pass log is deduped per key id, so each key needs its own id.
 let keySeq = 0;

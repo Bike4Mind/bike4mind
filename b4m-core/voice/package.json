@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/voice",
-  "version": "0.11.9",
+  "version": "0.11.15",
   "publishConfig": {
     "access": "restricted"
   },
@@ -33,9 +33,8 @@
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
     "dev": "tsdown --watch",
-    "typecheck": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit --types node",
-    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "typecheck:tsc": "tsc --noEmit",
+    "typecheck":"tsgo --noEmit --types node",
     "test": "vitest run",
     "test:watch": "vitest"
   },

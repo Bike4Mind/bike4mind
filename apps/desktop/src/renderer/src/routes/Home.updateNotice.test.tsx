@@ -8,7 +8,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { desktopTheme } from '../theme';
 import { Home } from './Home';
 import { writeSessionPanelOpen } from '../chat/sessionPanelState';
-import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
+import { chatBackedHostBridge, chatStubs } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -116,7 +116,7 @@ function stubLoopSession() {
     updatedAt: '2026-10-01T00:00:00.000Z',
   };
   window.b4m.chat.listSessions = vi.fn(async () => [session]);
-  window.b4m.chat.getSession = vi.fn(async () => ({ ...session, messages: [] }));
+  chatStubs().getSession = vi.fn(async () => ({ ...session, messages: [] }));
   window.b4m.chat.getLoop = vi.fn(async () => ({
     sessionId: session.id,
     prompt: 'Check',

@@ -4,8 +4,11 @@ import type { EventBridgeEvent } from 'aws-lambda';
 import {
   BUSY_BLOCK_HELD_CATEGORIES,
   PUSH_NOTIFICATION_CATEGORIES,
+  type InterruptionFeedback,
   type LiveActivityPushEvent,
+  type PushNotificationCategory,
   type PushNotificationEvent,
+  type PushNotificationPreferences,
 } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
@@ -613,6 +616,61 @@ describe('deliverPush', () => {
       })),
     });
     await expect(deliverPush(EVENT, deps, logger)).resolves.toMatchObject({ status: 'sent', delivered: 1 });
+  });
+
+  describe('block-end brief push and interruption feedback', () => {
+    const blockEnd = (blockEndCategories?: PushNotificationCategory[]) => ({
+      ...EVENT,
+      category: 'brief_ready' as const,
+      ...(blockEndCategories && { blockEndCategories }),
+    });
+    const withFeedback = (interruptionFeedback?: InterruptionFeedback, preferences?: PushNotificationPreferences) =>
+      makeDeps([{ token: 'tok-a', environment: 'production' }], {
+        loadRecipient: vi.fn(async () => ({ preferences, redactContent: false, interruptionFeedback })),
+      });
+
+    it('holds the push when every reported category was taught to stay quiet', async () => {
+      const { deps } = withFeedback({ agent_completed: true, agent_failed: true });
+      await expect(deliverPush(blockEnd(['agent_completed']), deps, logger)).resolves.toEqual({
+        status: 'skipped',
+        reason: 'interruption_feedback_hold',
+      });
+      expect(deps.transport.send).not.toHaveBeenCalled();
+    });
+
+    it.each<[string, InterruptionFeedback | undefined, PushNotificationCategory[]]>([
+      ['no feedback is stored', undefined, ['agent_completed']],
+      ['only another category was taught', { agent_failed: true }, ['agent_completed']],
+      ['the feedback was turned back off', { agent_completed: false }, ['agent_completed']],
+      ['the brief carries a decision', { agent_completed: true }, ['agent_completed', 'approval_needed']],
+      ['the brief carries other content', { agent_completed: true }, ['agent_completed', 'brief_ready']],
+      ['the brief reports nothing', { agent_completed: true }, []],
+    ])('delivers when %s', async (_label, feedback, categories) => {
+      const { deps } = withFeedback(feedback);
+      await expect(deliverPush(blockEnd(categories), deps, logger)).resolves.toMatchObject({
+        status: 'sent',
+        delivered: 1,
+      });
+    });
+
+    it('delivers a brief_ready push that is not a block-end push', async () => {
+      const { deps } = withFeedback({ agent_completed: true, agent_failed: true });
+      await expect(deliverPush(blockEnd(), deps, logger)).resolves.toMatchObject({ status: 'sent', delivered: 1 });
+    });
+
+    it('still delivers the held-runs digest', async () => {
+      const { deps } = withFeedback({ agent_completed: true, agent_failed: true });
+      const digest = { ...EVENT, category: 'agent_completed' as const, busyBlockDigest: true as const };
+      await expect(deliverPush(digest, deps, logger)).resolves.toMatchObject({ status: 'sent', delivered: 1 });
+    });
+
+    it('reports a switched-off brief_ready as disabled, not as held', async () => {
+      const { deps } = withFeedback({ agent_completed: true }, { brief_ready: false });
+      await expect(deliverPush(blockEnd(['agent_completed']), deps, logger)).resolves.toEqual({
+        status: 'skipped',
+        reason: 'category_disabled',
+      });
+    });
   });
 
   it('drops the event when the user no longer exists', async () => {

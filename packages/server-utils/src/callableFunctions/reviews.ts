@@ -2,6 +2,7 @@ import {
   ConflictError,
   NotFoundError,
   callableFunctionReviewStatus,
+  recipientCallableFunction,
   reviewHash,
   toCallableFunctionShared,
   type CallableFunctionAccess,
@@ -12,7 +13,7 @@ import {
   type ICallableFunctionShared,
 } from '@bike4mind/common';
 import { callableFunctionRepository, callableFunctionReviewRepository } from '@bike4mind/database';
-import { canCallFunction, displayNamesOf } from './sharing';
+import { canCallFunction, displayNamesOf, interfaceChangesSince, reviewedInterface } from './sharing';
 import type { CallableFunctionActor } from './registry';
 
 /**
@@ -57,24 +58,27 @@ export interface CallableFunctionOffer {
  */
 export async function callableFunctionOffer(
   caller: { id: string },
-  fn: Pick<ICallableFunctionDocument, 'id' | 'ownerType' | 'ownerKey' | 'grants' | 'state' | 'contract'>,
+  fn: Pick<ICallableFunctionDocument, 'id' | 'ownerType' | 'ownerKey' | 'grants' | 'state' | 'contract'> &
+    Partial<Pick<ICallableFunctionDocument, 'promoted'>>,
   options: { headless: boolean }
 ): Promise<CallableFunctionOffer | null> {
   const access = await canCallFunction(caller, fn);
   if (!access) return null;
   if (access === 'owner') return { access, approval: 'default' };
+  const contract = fn.state === 'live' ? fn.contract : fn.promoted?.contract;
   const review = await callableFunctionReviewRepository.findFor(fn.id, caller.id);
-  if (!review || !(await isCurrentReview(review, fn.contract))) return null;
+  if (!contract || !review || !(await isCurrentReview(review, contract))) return null;
   if (options.headless && review.approval === 'always_ask') return null;
   return { access, approval: review.approval };
 }
 
 /** The function as a recipient reads it; another person's function, or the caller's own, reads as not found. */
 async function readShared(actor: CallableFunctionActor, id: string) {
-  const fn = await callableFunctionRepository.findById(id);
-  if (!fn) throw notFound();
-  const access = await canCallFunction(actor, fn);
-  if (!access || access === 'owner') throw notFound();
+  const record = await callableFunctionRepository.findById(id);
+  if (!record) throw notFound();
+  const access = await canCallFunction(actor, record);
+  const fn = recipientCallableFunction(record);
+  if (!access || access === 'owner' || !fn) throw notFound();
   return { fn, access, hash: await reviewHash(fn.contract) };
 }
 
@@ -84,10 +88,12 @@ async function sharedView(
   hash: string,
   userId: string
 ): Promise<ICallableFunctionShared> {
+  const review = await callableFunctionReviewRepository.findFor(fn.id, userId);
   return toCallableFunctionShared(fn, access, {
     ownerName: (await displayNamesOf([fn.userId]))[0]!,
     reviewHash: hash,
-    review: await callableFunctionReviewRepository.findFor(fn.id, userId),
+    review,
+    changes: interfaceChangesSince(review, fn.contract, hash),
   });
 }
 
@@ -111,6 +117,7 @@ export async function reviewSharedCallableFunction(
     userId: actor.id,
     reviewHash: hash,
     approval: input.approval,
+    reviewed: reviewedInterface(fn.contract),
   });
   return sharedView(fn, access, hash, actor.id);
 }

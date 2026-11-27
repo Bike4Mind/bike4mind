@@ -45,12 +45,20 @@ export interface IArtifactRepository extends IBaseRepository<IArtifactDocument> 
 
   /**
    * Partial update keyed on the custom `id` that re-checks write access (owner or
-   * permissions.canWrite) and not-deleted in the write filter; null when either fails.
+   * permissions.canWrite) and not-deleted in the write filter; null when either fails. `extraFilter`
+   * adds conditions to that filter.
    */
   updateWithWriteAccess(
     userId: string,
-    data: Partial<IArtifactDocument> & { id: string }
+    data: Partial<IArtifactDocument> & { id: string },
+    extraFilter?: Record<string, unknown>
   ): Promise<IArtifactDocument | null>;
+
+  /** Atomically allocates the next version number; null when write access fails or the counter is unseeded. */
+  claimNextVersionNumber(userId: string, id: string): Promise<number | null>;
+
+  /** Seeds the version counter under the write-access filter; a no-op when set or access is refused. */
+  seedVersionCounter(userId: string, id: string, seed: number): Promise<void>;
 
   /** Transfers scoped ownership and removes the departing owner's explicit grants atomically. */
   reassignMemberContent(
@@ -108,6 +116,9 @@ export interface IArtifactVersionRepository extends IBaseRepository<IArtifactVer
   findActiveVersion(artifactId: string): Promise<IArtifactVersionDocument | null>;
   findByUser(userId: string): Promise<IArtifactVersionDocument[]>;
   getVersionHistory(artifactId: string): Promise<IArtifactVersionDocument[]>;
+
+  /** Retires older rows permanently before activating the captured forward-only parent pointer. */
+  activatePointerVersion(artifactId: string, pointer: { id: string; version: number }): Promise<void>;
 
   // Version management
   createVersion(

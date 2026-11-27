@@ -65,6 +65,7 @@ import { usePrAttentionSort } from './prAttentionSort';
 import { keepMenuOpen } from './keepMenuOpen';
 import { MessageSessionDialog } from './MessageSessionDialog';
 import {
+  AgentsIcon,
   ArrowLeftIcon,
   ArtifactIcon,
   CheckIcon,
@@ -77,6 +78,7 @@ import {
   SubSessionsIcon,
 } from './icons';
 import { foldedParents, toggleFolded, useFoldedParents, useNestedSessions } from './nestedSessions';
+import { orchestratorIds } from './orchestratorIds';
 import { matchSessionShortcut } from './rail/shortcuts';
 import { ResizeHandle } from './ResizeHandle';
 import { SectionNameDialog, type SectionNameRequest } from './SectionNameDialog';
@@ -336,6 +338,25 @@ function FoldPill({
   );
 }
 
+/**
+ * Marks an orchestrator's row with the composer's Orchestrate icon, so it reads apart from a session
+ * that only nests plain sub-sessions. Named for assistive tech, since the badge beside it names only the status.
+ */
+function OrchestratorGlyph() {
+  return (
+    <Box
+      component="span"
+      role="img"
+      aria-label="Orchestrator"
+      title="Orchestrator"
+      data-testid="chat-session-orchestrator-glyph"
+      sx={{ display: 'grid', color: 'primary.plainColor', '& svg': { width: 13, height: 13 } }}
+    >
+      <AgentsIcon />
+    </Box>
+  );
+}
+
 /** One object for the whole list, stable across renders, so a memoized row only redraws when its own data does. */
 interface RowActions {
   select: (sessionId: string) => void;
@@ -365,6 +386,8 @@ interface RowProps extends NestProps {
   actions: RowActions;
   /** Set on a search result found by issue or PR number: what it matched, e.g. `PR #1234`. */
   refChip?: string;
+  /** Marks the session as an orchestrator (orchestratorIds), apart from one that only nests sub-sessions. */
+  orchestrator?: boolean;
 }
 
 /** The right-aligned letter that runs a row menu item while the menu is open; see onRowMenuKeyDown. */
@@ -561,6 +584,7 @@ const SessionRow = memo(function SessionRow({
   subFoldable = true,
   hintTitle,
   refChip,
+  orchestrator = false,
 }: RowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<'main' | 'move'>('main');
@@ -769,12 +793,16 @@ const SessionRow = memo(function SessionRow({
         data-session-pr-state={pr?.state}
       >
         <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center', minWidth: 0, width: '100%' }}>
-          <SessionBadge
-            status={status}
-            pr={pr}
-            outcome={session.lastOutcome}
-            deciding={pendingDecisionOf(session.workerTask) !== undefined}
-          />
+          {/* One Stack child, so the glyph sits closer to the badge than the Stack's spacing would put it. */}
+          <Box sx={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <SessionBadge
+              status={status}
+              pr={pr}
+              outcome={session.lastOutcome}
+              deciding={pendingDecisionOf(session.workerTask) !== undefined}
+            />
+            {orchestrator && <OrchestratorGlyph />}
+          </Box>
           {editing ? (
             <RenameInput title={session.title} onDone={onRenameDone} />
           ) : (
@@ -1253,6 +1281,7 @@ export function SessionList({
     () => (nested ? parentHints(sessions, sections.children) : new Map<string, string>()),
     [nested, sessions, sections.children]
   );
+  const orchestrators = useMemo(() => orchestratorIds(sessions), [sessions]);
 
   const descendants = useMemo(() => {
     const cache = new Map<string, ChatSessionSummary[]>();
@@ -1459,6 +1488,7 @@ export function SessionList({
         subFolded={folded}
         subFoldable={!searching}
         hintTitle={hints.get(session.id)}
+        orchestrator={orchestrators.has(session.id)}
       />,
       ...(folded
         ? []
@@ -1481,6 +1511,7 @@ export function SessionList({
       subFoldable={false}
       hintTitle={hints.get(session.id)}
       refChip={refLabel(match.ref)}
+      orchestrator={orchestrators.has(session.id)}
     />
   );
 

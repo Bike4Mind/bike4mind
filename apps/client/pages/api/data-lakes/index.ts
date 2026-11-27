@@ -1,5 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
+import {
+  DATA_LAKE_READ_SCOPES,
+  assertDataLakeShareScope,
+  assertDataLakeWriteScope,
+} from '@bike4mind/server-utils/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@bike4mind/server-utils/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -109,6 +113,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     assertDataLakeWriteScope(req);
     const userId = req.user.id;
     const params = CreateDataLakeRequestInput.parse(req.body);
+    // Same rule as the PUT: a readership gate field needs the share scope.
+    if (params.requiredUserTag !== undefined || params.requiredEntitlement !== undefined) {
+      assertDataLakeShareScope(req);
+    }
 
     // Scope to the caller's active account-switcher org (sent in the body), authorization-
     // validated against their memberships first - never trusted as-is. Undefined -> personal.

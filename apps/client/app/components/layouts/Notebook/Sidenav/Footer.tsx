@@ -1,4 +1,5 @@
 import NetworkStatus from '@client/app/components/NetworkStatus';
+import PreviewSleepBanner from '@client/app/components/PreviewSleepBanner';
 import DesktopAppPromoButton from '@client/app/components/DesktopAppPromo/DesktopAppPromoButton';
 import { useIsPWA } from '@client/app/hooks/useIsPWA';
 import { isLocalhost } from '@client/app/utils/isLocalhost';
@@ -19,6 +20,8 @@ const SidenavFooter = () => {
         backgroundColor: theme.palette.background.surface2,
       })}
     >
+      <PreviewSleepBanner placement="sidenav" />
+
       {/* Network / service-worker / websocket status pills — localhost only */}
       {isLocalhost && (
         <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '10px' }}>

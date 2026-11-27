@@ -126,6 +126,10 @@ export const NOT_COVERED: readonly { shape: string; reason: string }[] = [
     shape: 'aws.appautoscaling.Policy',
     reason: 'Desired-count rule for an inventoried service, no compute of its own.',
   },
+  {
+    shape: 'aws.appautoscaling.ScheduledAction',
+    reason: 'Timed task-count bounds for an inventoried preview service, no compute of its own.',
+  },
   { shape: 'aws.cloudwatch.Dashboard', reason: 'Observability view, no compute.' },
   { shape: 'aws.cloudwatch.LogMetricFilter', reason: 'Metric extraction feeding alarms, no compute.' },
   {

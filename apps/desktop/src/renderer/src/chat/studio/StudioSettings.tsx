@@ -39,11 +39,14 @@ export function StudioSettings({
   draft,
   disabled,
   edit,
+  part = 'all',
 }: {
   controller: StudioController;
   draft: StudioCreationDraft;
   disabled: boolean;
   edit(draft: StudioCreationDraft): void;
+  /** The model picker alone, everything but it, or both: the Studio place draws them in separate panels, as web does. */
+  part?: 'all' | 'model' | 'options';
 }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -201,186 +204,198 @@ export function StudioSettings({
     (draft.kind === 'image' && (referenceMax > 0 || s.references?.length)) ||
     (draft.kind === 'video' && (s.mode === 'image_to_video' || s.references?.length));
   return (
-    <Stack spacing={2} data-testid="studio-model-settings">
-      {draft.kind === 'image' &&
-        select(
-          'model',
-          'Image model',
-          catalog.images.map(model => ({ value: model.id, label: model.name }))
-        )}
-      {draft.kind === 'video' &&
-        select(
-          'model',
-          'Video model',
-          catalog.videos.map(model => ({ value: model.id, label: model.display_name }))
-        )}
-      {draft.kind === 'music' &&
-        select(
-          'model',
-          'Music model',
-          catalog.music.map(model => ({ value: model.id, label: model.display_name }))
-        )}
-      {draft.kind === 'speech' &&
-        select(
-          'provider',
-          'Voice provider',
-          catalog.speech.map(value => ({ value, label: value === 'openai' ? 'OpenAI' : 'ElevenLabs' }))
-        )}
-      {draft.kind === 'sound-effect' && (
-        <Typography level="body-xs" textColor="text.tertiary">
-          ElevenLabs Sound Effects
-        </Typography>
-      )}
-      {draft.kind === 'image' && (
+    <Stack spacing={2} data-testid={part === 'model' ? 'studio-model-picker' : 'studio-model-settings'}>
+      {part !== 'options' && (
         <>
-          <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 1.5 }}>
-            {select(
-              'count',
-              'Images',
-              [1, 2, 3, 4].map(value => ({ value: String(value), label: String(value) })),
-              '1'
+          {draft.kind === 'image' &&
+            select(
+              'model',
+              'Image model',
+              catalog.images.map(model => ({ value: model.id, label: model.name }))
             )}
-            {image &&
-              (() => {
-                const sizing = image.capabilities.sizing;
-                const sizes = 'presets' in sizing ? sizing.presets : [];
-                return (sizes.length > 0 || s.size) && select('size', 'Size', choices(sizes));
-              })()}
-            {image &&
-              (image.capabilities.qualities.length > 0 || s.quality) &&
-              select('quality', 'Quality', choices(image.capabilities.qualities))}
-            {image &&
-              (() => {
-                const ratios = image.capabilities.modes.generate?.aspectRatios;
-                return (
-                  (ratios || s.aspectRatio) &&
-                  select(
-                    'aspectRatio',
-                    'Aspect ratio',
-                    choices(ratios?.kind === 'discrete' ? ratios.values : ['1:1', '4:3', '3:4', '16:9', '9:16'])
-                  )
-                );
-              })()}
-          </Box>
-        </>
-      )}
-      {draft.kind === 'video' && (
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 1.5 }}>
-          {select(
-            'mode',
-            'Mode',
-            (video?.modes ?? ['text_to_video', 'image_to_video']).map(value => ({
-              value,
-              label: value === 'image_to_video' ? 'Image to video' : 'Text to video',
-            })),
-            'text_to_video'
-          )}
-          {number(
-            'durationSeconds',
-            'Duration (seconds)',
-            video?.duration.kind === 'range' ? video.duration.min : Math.min(...(video?.duration.values ?? [1])),
-            video?.duration.kind === 'range' ? video.duration.max : Math.max(...(video?.duration.values ?? [30]))
-          )}
-          {select('aspectRatio', 'Aspect ratio', choices(video?.aspect_ratios ?? []))}
-          {select('resolution', 'Resolution', choices(video?.resolutions ?? []))}
-          {(video?.audio === 'optional' || s.audio !== undefined) && toggle('audio', 'Include audio')}
-          {video?.audio !== 'optional' && (
-            <Typography level="body-xs">{video?.audio === 'always' ? 'Audio included' : 'Silent video'}</Typography>
-          )}
-        </Box>
-      )}
-      {draft.kind === 'music' && (
-        <>
-          {toggle('instrumental', 'Instrumental')}
-          {music?.vocals === 'never' && (
-            <Typography level="body-xs">This model supports instrumental music only.</Typography>
-          )}
-          <FormControl disabled={disabled}>
-            <FormLabel>Lyrics</FormLabel>
-            <Textarea
-              minRows={4}
-              placeholder="Optional lyrics"
-              value={s.lyrics ?? ''}
-              onChange={event => update({ lyrics: event.target.value || undefined })}
-              slotProps={{ textarea: { 'data-testid': 'studio-setting-lyrics' } }}
-            />
-          </FormControl>
-          {number(
-            'durationSeconds',
-            music?.duration.control === 'approximate' ? 'Approximate duration (seconds)' : 'Duration (seconds)',
-            music?.duration.control === 'fixed' ? music.duration.seconds : (music?.duration.min ?? 1),
-            music?.duration.control === 'fixed' ? music.duration.seconds : (music?.duration.max ?? 600)
-          )}
-        </>
-      )}
-      {draft.kind === 'speech' && (
-        <>
-          {select(
-            'voice',
-            'Voice',
-            s.provider === 'elevenlabs'
-              ? catalog.voices.map(voice => ({ value: voice.id, label: voice.name }))
-              : AVAILABLE_TTS_VOICES.map(voice => ({ value: voice.value, label: voice.label }))
-          )}
-          {select('format', 'Output format', choices(VOICE_VENDOR_SUPPORTED_FORMATS[s.provider ?? 'openai']))}
-          <Box component="details">
-            <Typography component="summary" level="body-sm" sx={{ cursor: 'pointer', mb: 1 }}>
-              Advanced voice settings
+          {draft.kind === 'video' &&
+            select(
+              'model',
+              'Video model',
+              catalog.videos.map(model => ({ value: model.id, label: model.display_name }))
+            )}
+          {draft.kind === 'music' &&
+            select(
+              'model',
+              'Music model',
+              catalog.music.map(model => ({ value: model.id, label: model.display_name }))
+            )}
+          {draft.kind === 'speech' &&
+            select(
+              'provider',
+              'Voice provider',
+              catalog.speech.map(value => ({ value, label: value === 'openai' ? 'OpenAI' : 'ElevenLabs' }))
+            )}
+          {draft.kind === 'sound-effect' && (
+            <Typography level="body-xs" textColor="text.tertiary">
+              ElevenLabs Sound Effects
             </Typography>
-            <Stack spacing={1.5}>
-              {text('model', 'Voice model (optional)')}
-              {text('languageCode', 'Language code (e.g. en)')}
-              {number('stability', 'Stability', 0, 1, 0.05)}
-              {number('similarityBoost', 'Similarity', 0, 1, 0.05)}
-            </Stack>
-          </Box>
+          )}
         </>
       )}
-      {draft.kind === 'sound-effect' && (
-        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 1.5 }}>
-          {number('durationSeconds', 'Duration (seconds)', 0.5, 30, 0.5)}
-          {number('promptInfluence', 'Prompt influence', 0, 1, 0.05)}
-          {text('format', 'Output format (optional)')}
-        </Box>
-      )}
-      {references && (
-        <Stack spacing={1}>
-          <Typography sx={studioMicroLabelSx}>{draft.kind === 'video' ? 'First frame' : 'Reference images'}</Typography>
-          {s.references?.map(reference => (
-            <Stack key={reference.fileId} direction="row" alignItems="center" justifyContent="space-between">
-              <Typography level="body-xs" noWrap>
-                {reference.name}
+      {part !== 'model' && (
+        <>
+          {draft.kind === 'image' && (
+            <>
+              <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 1.5 }}>
+                {select(
+                  'count',
+                  'Images',
+                  [1, 2, 3, 4].map(value => ({ value: String(value), label: String(value) })),
+                  '1'
+                )}
+                {image &&
+                  (() => {
+                    const sizing = image.capabilities.sizing;
+                    const sizes = 'presets' in sizing ? sizing.presets : [];
+                    return (sizes.length > 0 || s.size) && select('size', 'Size', choices(sizes));
+                  })()}
+                {image &&
+                  (image.capabilities.qualities.length > 0 || s.quality) &&
+                  select('quality', 'Quality', choices(image.capabilities.qualities))}
+                {image &&
+                  (() => {
+                    const ratios = image.capabilities.modes.generate?.aspectRatios;
+                    return (
+                      (ratios || s.aspectRatio) &&
+                      select(
+                        'aspectRatio',
+                        'Aspect ratio',
+                        choices(ratios?.kind === 'discrete' ? ratios.values : ['1:1', '4:3', '3:4', '16:9', '9:16'])
+                      )
+                    );
+                  })()}
+              </Box>
+            </>
+          )}
+          {draft.kind === 'video' && (
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 1.5 }}>
+              {select(
+                'mode',
+                'Mode',
+                (video?.modes ?? ['text_to_video', 'image_to_video']).map(value => ({
+                  value,
+                  label: value === 'image_to_video' ? 'Image to video' : 'Text to video',
+                })),
+                'text_to_video'
+              )}
+              {number(
+                'durationSeconds',
+                'Duration (seconds)',
+                video?.duration.kind === 'range' ? video.duration.min : Math.min(...(video?.duration.values ?? [1])),
+                video?.duration.kind === 'range' ? video.duration.max : Math.max(...(video?.duration.values ?? [30]))
+              )}
+              {select('aspectRatio', 'Aspect ratio', choices(video?.aspect_ratios ?? []))}
+              {select('resolution', 'Resolution', choices(video?.resolutions ?? []))}
+              {(video?.audio === 'optional' || s.audio !== undefined) && toggle('audio', 'Include audio')}
+              {video?.audio !== 'optional' && (
+                <Typography level="body-xs">{video?.audio === 'always' ? 'Audio included' : 'Silent video'}</Typography>
+              )}
+            </Box>
+          )}
+          {draft.kind === 'music' && (
+            <>
+              {toggle('instrumental', 'Instrumental')}
+              {music?.vocals === 'never' && (
+                <Typography level="body-xs">This model supports instrumental music only.</Typography>
+              )}
+              <FormControl disabled={disabled}>
+                <FormLabel>Lyrics</FormLabel>
+                <Textarea
+                  minRows={4}
+                  placeholder="Optional lyrics"
+                  value={s.lyrics ?? ''}
+                  onChange={event => update({ lyrics: event.target.value || undefined })}
+                  slotProps={{ textarea: { 'data-testid': 'studio-setting-lyrics' } }}
+                />
+              </FormControl>
+              {number(
+                'durationSeconds',
+                music?.duration.control === 'approximate' ? 'Approximate duration (seconds)' : 'Duration (seconds)',
+                music?.duration.control === 'fixed' ? music.duration.seconds : (music?.duration.min ?? 1),
+                music?.duration.control === 'fixed' ? music.duration.seconds : (music?.duration.max ?? 600)
+              )}
+            </>
+          )}
+          {draft.kind === 'speech' && (
+            <>
+              {select(
+                'voice',
+                'Voice',
+                s.provider === 'elevenlabs'
+                  ? catalog.voices.map(voice => ({ value: voice.id, label: voice.name }))
+                  : AVAILABLE_TTS_VOICES.map(voice => ({ value: voice.value, label: voice.label }))
+              )}
+              {select('format', 'Output format', choices(VOICE_VENDOR_SUPPORTED_FORMATS[s.provider ?? 'openai']))}
+              <Box component="details">
+                <Typography component="summary" level="body-sm" sx={{ cursor: 'pointer', mb: 1 }}>
+                  Advanced voice settings
+                </Typography>
+                <Stack spacing={1.5}>
+                  {text('model', 'Voice model (optional)')}
+                  {text('languageCode', 'Language code (e.g. en)')}
+                  {number('stability', 'Stability', 0, 1, 0.05)}
+                  {number('similarityBoost', 'Similarity', 0, 1, 0.05)}
+                </Stack>
+              </Box>
+            </>
+          )}
+          {draft.kind === 'sound-effect' && (
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 1.5 }}>
+              {number('durationSeconds', 'Duration (seconds)', 0.5, 30, 0.5)}
+              {number('promptInfluence', 'Prompt influence', 0, 1, 0.05)}
+              {text('format', 'Output format (optional)')}
+            </Box>
+          )}
+          {references && (
+            <Stack spacing={1}>
+              <Typography sx={studioMicroLabelSx}>
+                {draft.kind === 'video' ? 'First frame' : 'Reference images'}
               </Typography>
+              {s.references?.map(reference => (
+                <Stack key={reference.fileId} direction="row" alignItems="center" justifyContent="space-between">
+                  <Typography level="body-xs" noWrap>
+                    {reference.name}
+                  </Typography>
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    color="neutral"
+                    disabled={disabled}
+                    onClick={() =>
+                      update({ references: s.references?.filter(item => item.fileId !== reference.fileId) })
+                    }
+                  >
+                    Remove
+                  </Button>
+                </Stack>
+              ))}
               <Button
                 size="sm"
                 variant="outlined"
                 color="neutral"
-                disabled={disabled}
-                onClick={() => update({ references: s.references?.filter(item => item.fileId !== reference.fileId) })}
+                loading={uploading}
+                disabled={disabled || !controller.uploadReference || (s.references?.length ?? 0) >= referenceMax}
+                data-testid="studio-upload-reference-btn"
+                onClick={() => {
+                  void uploadReference();
+                }}
               >
-                Remove
+                Upload reference to Files
               </Button>
             </Stack>
-          ))}
-          <Button
-            size="sm"
-            variant="outlined"
-            color="neutral"
-            loading={uploading}
-            disabled={disabled || !controller.uploadReference || (s.references?.length ?? 0) >= referenceMax}
-            data-testid="studio-upload-reference-btn"
-            onClick={() => {
-              void uploadReference();
-            }}
-          >
-            Upload reference to Files
-          </Button>
-        </Stack>
-      )}
-      {error && (
-        <Alert color="danger" size="sm">
-          {error}
-        </Alert>
+          )}
+          {error && (
+            <Alert color="danger" size="sm">
+              {error}
+            </Alert>
+          )}
+        </>
       )}
     </Stack>
   );

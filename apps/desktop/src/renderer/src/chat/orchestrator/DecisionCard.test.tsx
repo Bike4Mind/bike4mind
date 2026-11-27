@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
+import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
 import { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatToolCall } from '@shared/chat';
 import type { PendingDecision } from '@shared/pendingDecisions';
-import { DecisionCard } from './DecisionCard';
+import { DecisionBody, DecisionCard } from './DecisionCard';
 import { createThemedMount, el, query } from './testUtils';
 
 const chat = {
@@ -34,7 +35,7 @@ beforeEach(() => {
   chat.respondToApproval.mockResolvedValue(undefined);
   chat.answerTaskDecision.mockResolvedValue(undefined);
   chat.resolveHeldRelay.mockResolvedValue(undefined);
-  (window as unknown as { b4m: unknown }).b4m = { chat };
+  (window as unknown as { b4m: unknown }).b4m = { host: chatBackedHostBridge(), chat };
 });
 
 afterEach(() => themed.unmount());
@@ -168,5 +169,82 @@ describe('DecisionCard', () => {
     });
     await act(async () => el('decision-card-continue-btn').click());
     expect(el('decision-card-continue-btn').hasAttribute('disabled')).toBe(true);
+  });
+});
+
+describe('DecisionBody', () => {
+  const onAnswered = vi.fn();
+  const renderBody = (decision: PendingDecision) =>
+    themed.render(
+      <DecisionBody decision={decision} asker={asker} onOpenDetails={onOpenDetails} onAnswered={onAnswered} />
+    );
+
+  it('says a denied approval was denied', async () => {
+    await renderBody({
+      kind: 'approval',
+      sessionId: 'g',
+      decisionId: 'approval:ap1',
+      approvalId: 'ap1',
+      call: call('file_write'),
+      collectsSecrets: false,
+    });
+    await act(async () => el('chat-tool-deny').click());
+    expect(chat.respondToApproval).toHaveBeenCalledWith('ap1', expect.objectContaining({ decision: 'deny' }));
+    expect(onAnswered).toHaveBeenCalledWith('denied');
+  });
+
+  it('says an approved tool was approved', async () => {
+    await renderBody({
+      kind: 'approval',
+      sessionId: 'g',
+      decisionId: 'approval:ap1',
+      approvalId: 'ap1',
+      call: call('file_write'),
+      collectsSecrets: false,
+    });
+    await act(async () => el('chat-tool-approve-once').click());
+    expect(onAnswered).toHaveBeenCalledWith('approved');
+  });
+
+  it('says a skipped ask-the-user card was answered, not denied', async () => {
+    await renderBody({
+      kind: 'approval',
+      sessionId: 'g',
+      decisionId: 'approval:ap1',
+      approvalId: 'ap1',
+      call: {
+        ...call('ask_user'),
+        input: {
+          questions: [
+            {
+              question: 'Which branch?',
+              options: [
+                { label: 'main', description: 'd' },
+                { label: 'dev', description: 'd' },
+              ],
+            },
+          ],
+        },
+      },
+      collectsSecrets: false,
+    });
+    await act(async () => el('chat-question-skip').click());
+    expect(chat.respondToApproval).toHaveBeenCalledWith('ap1', { decision: 'deny' });
+    expect(onAnswered).toHaveBeenCalledWith('answered');
+  });
+
+  it('says a question answered here was answered', async () => {
+    await renderBody({
+      kind: 'question',
+      sessionId: 'g',
+      decisionId: 'question:d1',
+      decision: {
+        id: 'd1',
+        askedAt: '2026-10-01',
+        question: { header: 'Branch', question: 'Which branch?', options: [{ label: 'main', description: '' }] },
+      },
+    });
+    await act(async () => el('chat-question-skip').click());
+    expect(onAnswered).toHaveBeenCalledWith('answered');
   });
 });

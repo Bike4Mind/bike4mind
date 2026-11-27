@@ -8,6 +8,7 @@ import Modal from '@mui/joy/Modal';
 import ModalDialog from '@mui/joy/ModalDialog';
 import Textarea from '@mui/joy/Textarea';
 import type { ChatSessionSummary } from '@shared/chat';
+import { hostChat } from '../host/hostChat';
 
 /**
  * Sends the user's own message into a conversation that is not the open one. It goes through the
@@ -31,7 +32,7 @@ export function MessageSessionDialog({
     setSending(true);
     setError(null);
     try {
-      const result = await window.b4m.chat.sendMessage({ sessionId: session.id, text: text.trim() });
+      const result = await hostChat.sendMessage({ sessionId: session.id, text: text.trim() });
       if (result.ok) {
         onClose();
         return;

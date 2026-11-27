@@ -26,6 +26,7 @@ const { state, sendPrompt, setChatInputValue, logEvent } = vi.hoisted(() => ({
   logEvent: vi.fn(),
 }));
 
+vi.mock('@client/app/components/tutorial/core/TutorialOffer', () => ({ TutorialOffer: () => null }));
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({
     currentUser: {

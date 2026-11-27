@@ -4,7 +4,7 @@ import { ISessionDocument } from './SessionTypes';
 import { IRegInviteDocument } from './RegistrationInviteType';
 import { IOrganizationDocument } from './OrganizationTypes';
 import { ICounters } from './CounterTypes';
-import type { PushNotificationPreferences } from '../../schemas/pushNotification';
+import type { InterruptionFeedback, PushNotificationPreferences } from '../../schemas/pushNotification';
 import type { BriefSchedule } from '../../schemas/brief';
 import { IMementoDocument } from './MementoTypes';
 import { ICreditHolder, ICreditHolderFlooredDebit, ICreditHolderMethods } from './CreditHolderTypes';
@@ -274,6 +274,12 @@ export interface IUserPreferences {
   briefSchedule?: BriefSchedule;
   /** Opt-in for a brief after each synced busy block; set through `PUT /api/v1/briefs/busy-blocks`. */
   busyBlockBrief?: { enabled: boolean };
+  /**
+   * Which block-end brief pushes to hold (see isBlockEndPushHeld). The run summary sent when the block brief
+   * does not cover the runs still goes out. Set through `PUT /api/v1/assistant/interruptions`; a general
+   * preferences write can still revert or clear it.
+   */
+  interruptionFeedback?: InterruptionFeedback;
 }
 
 /**
@@ -918,6 +924,9 @@ export interface IUser extends ICreditHolder {
    */
   authorizedEmailAddresses?: string[];
 
+  /** Platform addresses this user held before; they are never reassigned to another user. */
+  releasedPlatformEmailAddresses?: { address: string; releasedAt: Date }[];
+
   /**
    * User's preferred voice for voice sessions
    * Falls back to admin setting if not set
@@ -1350,6 +1359,11 @@ export interface IUserRepository
    * in id order; pass the last id back as `afterId` for the next page.
    */
   findRiskScoringCandidateIds: (since: Date, options: { afterId?: string; limit: number }) => Promise<string[]>;
+  /**
+   * Non-system users created within [from, to] whose email host is exactly `host` (case-insensitive,
+   * soft-deleted rows included), and how many of them are banned. Feeds the signup risk score.
+   */
+  countSignupsOnEmailHost: (host: string, from: Date, to: Date) => Promise<{ total: number; banned: number }>;
   /** Unbanned users whose risk review is pending, highest score first, at most `limit`. */
   findPendingRiskReviews: (limit: number) => Promise<IUserDocument[]>;
   /** Count of the users findPendingRiskReviews would return; `options.limit` stops counting there. */

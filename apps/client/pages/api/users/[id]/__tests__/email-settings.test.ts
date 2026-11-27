@@ -114,3 +114,57 @@ describe('email-settings platformEmailAddress local part', () => {
     expect(mockUpdate).not.toHaveBeenCalled();
   });
 });
+
+describe('email-settings released platform addresses', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindOne.mockResolvedValue(null);
+    mockUpdate.mockReturnValue({
+      select: () => Promise.resolve({ platformEmailAddress: 'x', authorizedEmailAddresses: [] }),
+    });
+  });
+
+  it('refuses an address another user held before', async () => {
+    mockFindById.mockReturnValue(stored(null));
+    mockFindOne.mockResolvedValue({ _id: 'u2' });
+
+    const res = await patch({ platformEmailAddress: 'old@example.com' });
+
+    expect(res._getStatusCode()).toBe(409);
+    expect(mockFindOne).toHaveBeenCalledWith({
+      _id: { $ne: 'u1' },
+      $or: [
+        { platformEmailAddress: 'old@example.com' },
+        { 'releasedPlatformEmailAddresses.address': 'old@example.com' },
+      ],
+    });
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the previous address bound to the user when they change it', async () => {
+    mockFindById.mockReturnValue(stored('Old@example.com'));
+
+    const res = await patch({ platformEmailAddress: 'new@example.com' });
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'u1',
+      {
+        $set: { platformEmailAddress: 'new@example.com' },
+        $push: { releasedPlatformEmailAddresses: { address: 'old@example.com', releasedAt: expect.any(Date) } },
+      },
+      expect.any(Object)
+    );
+  });
+
+  it('records nothing as released when the address is unchanged or set for the first time', async () => {
+    mockFindById.mockReturnValue(stored('same@example.com'));
+    await patch({ platformEmailAddress: 'same@example.com' });
+    mockFindById.mockReturnValue(stored(null));
+    await patch({ platformEmailAddress: 'first@example.com' });
+
+    for (const call of mockUpdate.mock.calls) {
+      expect(call[1]).not.toHaveProperty('$addToSet');
+    }
+  });
+});

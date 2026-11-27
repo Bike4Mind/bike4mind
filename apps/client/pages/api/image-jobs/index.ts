@@ -12,7 +12,9 @@ import {
   ChatImageJobsBodySchema,
   IMAGE_JOB_PROMPT_MAX_CHARS,
   TERMINAL_GENERATION_JOB_STATES,
+  chatMessageResponseSchema,
   questGenerationJobs,
+  redactChatMessageForViewer,
   redactSessionForClient,
   type ChatImageJobsBody,
   type ChatImageJobsResponse,
@@ -267,8 +269,12 @@ const handler = baseApi({ auth: 'jwtOnly' }).post(
         generationJobs,
       };
 
+      // A retry can settle the owner's turn for an edit-share user, so the turn goes out as every other chat
+      // route sends it: response fields only, owner-only data withheld from a non-owner.
       const response: ChatImageJobsResponse = {
-        quest: settledQuest,
+        quest: chatMessageResponseSchema.parse(
+          redactChatMessageForViewer(settledQuest, session.userId === req.user.id)
+        ) as IChatHistoryItemDocument,
         session: redactSessionForClient(session),
         originalPrompt: body.prompt,
         enhancedPrompt: effectivePrompt,

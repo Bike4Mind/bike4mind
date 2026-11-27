@@ -14,7 +14,6 @@ export type StuckExecutionItem = {
   organizationId?: string;
   sessionId: string;
   questId: string;
-  query: string;
   model: string;
   status: AgentExecutionStatus;
   totalCreditsUsed: number;

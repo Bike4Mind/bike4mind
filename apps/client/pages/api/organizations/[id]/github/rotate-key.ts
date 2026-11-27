@@ -35,7 +35,7 @@ const RotateKeySchema = z.object({
   privateKey: z.string().min(1, 'privateKey is required').max(MAX_PRIVATE_KEY_LENGTH, 'privateKey too long'),
 });
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(
     rateLimit({
       limit: 3,

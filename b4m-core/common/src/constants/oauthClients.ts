@@ -9,9 +9,16 @@
  * own id as OAuthDeviceClientId so a rename here fails its build; clients kept
  * outside this repo have no such check, so removing an id here locks them out.
  */
-export const OAUTH_DEVICE_CLIENT_IDS = ['b4m-cli', 'b4m-desktop'] as const;
+export const OAUTH_DEVICE_CLIENT_IDS = ['b4m-cli', 'b4m-desktop', 'b4m-host'] as const;
 
 export type OAuthDeviceClientId = (typeof OAUTH_DEVICE_CLIENT_IDS)[number];
+
+/**
+ * The headless remote host (apps/desktop/src/host). It signs in on its own machine with the
+ * device flow, under its own id so a host session can be told apart from a Desktop app and
+ * revoked separately.
+ */
+export const HOST_DEVICE_CLIENT_ID: OAuthDeviceClientId = 'b4m-host';
 
 /**
  * How a DeviceAuthorization row created before `clientId` was persisted must be
@@ -23,6 +30,7 @@ export const LEGACY_DEVICE_CLIENT_ID: OAuthDeviceClientId = 'b4m-cli';
 const DISPLAY_NAMES: Record<OAuthDeviceClientId, string> = {
   'b4m-cli': 'B4M CLI',
   'b4m-desktop': 'B4M Desktop',
+  'b4m-host': 'B4M Host',
 };
 
 /**
@@ -127,9 +135,13 @@ export const FEDERATED_ADMIN_STATUS_SCOPE = 'federated:admin-status';
 export const OAUTH_IDENTITY_SCOPES = ['openid', 'email', 'profile'] as const;
 export const OAUTH_FEDERATED_DEFAULT_SCOPES = ['ai:generate', 'me:read'] as const;
 
+// ApiKeyScope.FUNCTIONS_INVOKE and FUNCTIONS_AUTHOR, which the AI-token exchange (pages/api/oauth/ai-token.ts)
+// mints beside the chat scopes on its key.
+export const OAUTH_FUNCTIONS_SCOPES = ['functions:invoke', 'functions:author'] as const;
+
 // Never part of a registration's default allowedScopes: each is granted to a client deliberately,
 // one client at a time.
-export const OAUTH_OPT_IN_SCOPES = [FEDERATED_ADMIN_STATUS_SCOPE] as const;
+export const OAUTH_OPT_IN_SCOPES = [FEDERATED_ADMIN_STATUS_SCOPE, ...OAUTH_FUNCTIONS_SCOPES] as const;
 
 // Scopes an admin can grant to a client; shared by the admin edit form and updateOAuthClient.
 export const OAUTH_CLIENT_SCOPES = [

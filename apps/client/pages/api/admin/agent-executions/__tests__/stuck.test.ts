@@ -53,4 +53,32 @@ describe('GET /api/admin/agent-executions/stuck delegated access', () => {
     await expect((handler as unknown as Route)(req, res)).rejects.toThrow('Missing permission');
     expect(h.listStuck).not.toHaveBeenCalled();
   });
+
+  it('never returns the prompt text of the listed executions', async () => {
+    const now = new Date();
+    h.listStuck.mockResolvedValue([
+      {
+        id: 'e1',
+        userId: 'u2',
+        sessionId: 's1',
+        questId: 'q1',
+        query: 'private prompt text',
+        createdAt: now,
+        updatedAt: now,
+      },
+    ]);
+    const { req, res } = createMocks({ method: 'GET' });
+    (req as unknown as Record<string, unknown>).user = {
+      id: 'u1',
+      isAdmin: false,
+      adminPermissions: ['settings:manage'],
+    };
+
+    await (handler as unknown as Route)(req, res);
+
+    const body = res._getJSONData();
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0]).not.toHaveProperty('query');
+    expect(JSON.stringify(body)).not.toContain('private prompt text');
+  });
 });

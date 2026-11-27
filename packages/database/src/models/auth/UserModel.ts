@@ -10,6 +10,7 @@ import {
   USER_ACCOUNT_SEGMENTS,
   type UserAccountSegment,
   type BriefSchedule,
+  type InterruptionFeedback,
   ConflictError,
 } from '@bike4mind/common';
 import { toProviderEndUserId } from '@bike4mind/llm-adapters';
@@ -233,6 +234,11 @@ const UserPreferencesSchema = new Schema(
     },
     busyBlockBrief: {
       type: new Schema({ enabled: { type: Boolean } }, { _id: false }),
+    },
+    // Must stay in sync with InterruptionFeedbackSchema (@bike4mind/common). Kept out of busyBlockBrief,
+    // which setBusyBlocks overwrites whole.
+    interruptionFeedback: {
+      type: new Schema({ agent_completed: { type: Boolean }, agent_failed: { type: Boolean } }, { _id: false }),
     },
   },
   { _id: false }
@@ -1592,6 +1598,22 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     ]);
   }
 
+  // The createdAt range rides the createdAt index, so the unindexed email regex only scans that window.
+  async countSignupsOnEmailHost(host: string, from: Date, to: Date): Promise<{ total: number; banned: number }> {
+    const normalized = host.trim().toLowerCase();
+    if (!normalized) return { total: 0, banned: 0 };
+    const filter = {
+      createdAt: { $gte: from, $lte: to },
+      email: { $regex: `@${escapeRegExp(normalized)}\\s*$`, $options: 'i' },
+      isSystem: { $ne: true },
+    };
+    const [total, banned] = await Promise.all([
+      this.model.countDocuments(filter),
+      this.model.countDocuments({ ...filter, isBanned: true }),
+    ]);
+    return { total, banned };
+  }
+
   async findRiskScoringCandidateIds(since: Date, options: { afterId?: string; limit: number }): Promise<string[]> {
     const rows = await this.model
       .find(
@@ -1989,6 +2011,35 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
       blocks: (user?.busyBlocks ?? []).map(({ start, end }) => ({ start, end })),
       nextBlockBriefAt: user?.nextBlockBriefAt ?? null,
     };
+  }
+
+  async getInterruptionFeedback(userId: string): Promise<InterruptionFeedback> {
+    const user = await this.model
+      .findById(userId, { 'preferences.interruptionFeedback': 1 })
+      .lean<Pick<IUserDocument, 'preferences'>>();
+    const stored = user?.preferences?.interruptionFeedback;
+    return {
+      ...(typeof stored?.agent_completed === 'boolean' && { agent_completed: stored.agent_completed }),
+      ...(typeof stored?.agent_failed === 'boolean' && { agent_failed: stored.agent_failed }),
+    };
+  }
+
+  /** Merges the keys present in `patch`; an omitted key keeps its stored value. Returns the stored state. */
+  async setInterruptionFeedback(userId: string, patch: InterruptionFeedback): Promise<InterruptionFeedback> {
+    const set: Record<string, boolean> = {};
+    for (const [category, value] of Object.entries(patch)) {
+      if (typeof value === 'boolean') set[`preferences.interruptionFeedback.${category}`] = value;
+    }
+    if (Object.keys(set).length > 0) {
+      await this.ensurePreferencesObject(userId);
+      await this.model.updateOne(
+        { _id: userId, 'preferences.interruptionFeedback': null },
+        { $set: { 'preferences.interruptionFeedback': {} } },
+        { runValidators: true }
+      );
+      await this.model.updateOne({ _id: userId }, { $set: set }, { runValidators: true });
+    }
+    return this.getInterruptionFeedback(userId);
   }
 
   /**
@@ -2646,6 +2697,16 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     // Email Integration (Email-to-Platform Ingestion)
     platformEmailAddress: { type: String, unique: true, sparse: true },
     authorizedEmailAddresses: { type: [String], default: [] },
+    // Addresses this user held before; never reassigned to anyone else.
+    releasedPlatformEmailAddresses: {
+      type: [
+        new Schema(
+          { address: { type: String, required: true }, releasedAt: { type: Date, required: true } },
+          { _id: false }
+        ),
+      ],
+      default: undefined,
+    },
     preferredVoice: { type: String, default: null },
     voiceOverrideId: { type: String, default: null },
     voiceSystemPromptOverride: { type: String, default: null },
@@ -2949,6 +3010,10 @@ UserSchema.index(
   { partialFilterExpression: { nextBlockBriefAt: { $type: 'date' } }, name: 'user_nextBlockBriefAt' }
 );
 // platformEmailAddress index is already created by the 'unique: true' option in the schema definition
+UserSchema.index(
+  { 'releasedPlatformEmailAddresses.address': 1 },
+  { sparse: true, name: 'user_releasedPlatformEmailAddresses_address' }
+);
 
 // Add text index for fast user search in admin panel
 UserSchema.index(

@@ -87,7 +87,9 @@ export const createSceneCompositionContract = defineEndpoint({
     404: {
       description:
         'An input file id is not one of your files, is deleted, or is still being scanned ' +
-        '(`errorCode: input_file_not_found`).',
+        '(`errorCode: input_file_not_found`). An API key without `files:read` may only name generated files ' +
+        'and images staged by an `ai:generate` key without `files:write`; any other file is reported the ' +
+        'same way.',
       schema: SceneCompositionErrorResponseSchema,
     },
     422: {

@@ -92,6 +92,17 @@ describe('classifyToolRisk', () => {
     expect(risk.reasons.length).toBeGreaterThan(0);
   });
 
+  it('never rates text hidden behind a mid-word hash as low', () => {
+    const risk = classifyToolRisk(new ToolCatalog().resolve('bash_execute'), { command: 'ls a#b; touch x' });
+    expect(risk.level).not.toBe('low');
+  });
+
+  it('rates a tool marked as MCP high', () => {
+    const catalog = new ToolCatalog();
+    catalog.markMcpTool('github__create_issue');
+    expect(classifyToolRisk(catalog.resolve('github__create_issue'), {}).level).toBe('high');
+  });
+
   it('falls back to the permission category for non-shell tools', () => {
     expect(classifyToolRisk(plainTool('auto_approve'), {}).level).toBe('low');
     expect(classifyToolRisk(plainTool('prompt_default'), {}).level).toBe('medium');

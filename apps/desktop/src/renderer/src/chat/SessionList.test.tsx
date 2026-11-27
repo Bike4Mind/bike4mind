@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import type { ChatSessionMode, ChatSessionStatus, ChatSessionSummary } from '@shared/chat';
+import type { WorkerTask } from '@shared/orchestration';
 import { EMPTY_SIDEBAR_SECTIONS } from '@shared/sidebarSections';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopTheme } from '../theme';
@@ -469,6 +470,23 @@ describe('sub-sessions an agent spawned', () => {
     expect([depthOf('Root'), depthOf('Kid A'), depthOf('Grandkid'), depthOf('Kid B')]).toEqual([null, '1', '2', '1']);
     expect(all('chat-session-fold-btn').map(pill => pill.textContent)).toEqual(['3', '1']);
     expect([hintOf('Kid A'), hintOf('Kid B'), hintOf('Grandkid')]).toEqual([null, null, null]);
+  });
+
+  it('marks orchestrators, and not a parent of plain sub-sessions, with the orchestrator glyph', async () => {
+    const glyphOn = (title: string) =>
+      rowOf(title).closest('li')?.querySelector('[data-testid="chat-session-orchestrator-glyph"]') ?? null;
+    await mount([
+      ...sessions(),
+      summary('fresh', 'Fresh orchestrator', { orchestrate: true }),
+      summary('lapsed', 'Lapsed orchestrator'),
+      summary('worker', 'Worker', {
+        origin: { parentSessionId: 'lapsed', depth: 1, seedPrompt: 'go' },
+        workerTask: {} as WorkerTask,
+      }),
+    ]);
+    expect(glyphOn('Fresh orchestrator')?.getAttribute('aria-label')).toBe('Orchestrator');
+    expect(glyphOn('Lapsed orchestrator')).not.toBeNull();
+    expect([glyphOn('Root'), glyphOn('Kid A'), glyphOn('Worker')]).toEqual([null, null, null]);
   });
 
   it('caps the indent at three levels and labels deeper sessions', async () => {

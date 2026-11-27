@@ -83,22 +83,26 @@ import { Session } from '@bike4mind/database/auth';
 import handler from '../index';
 
 // Authenticates by API key: apiKeyAuth sets req.user and the real auth middleware then skips passport.
-function fire(method: 'GET' | 'DELETE') {
+function fire(method: 'GET' | 'DELETE', query: Record<string, string> = {}) {
   const { req, res } = createMocks(
-    { method, url: '/api/sessions', headers: { 'x-api-key': 'sk-test-valid-key' } },
+    { method, url: '/api/sessions', query, headers: { 'x-api-key': 'sk-test-valid-key' } },
     { eventEmitter: EventEmitter }
   );
   // any: node-mocks-http mocks aren't structurally the Express Request/Response types.
   return { req: req as any, res: res as any };
 }
 
-function keyWithScopes(scopes: ApiKeyScope[]) {
+const LEGACY_CREATED_AT = new Date('2026-01-01T00:00:00Z');
+const POST_CUTOFF_CREATED_AT = new Date('2026-11-26T00:00:00Z');
+
+function keyWithScopes(scopes: ApiKeyScope[], createdAt: Date = LEGACY_CREATED_AT) {
   mockValidate.mockResolvedValue({
     isValid: true,
     keyId: 'k1',
     userId: 'user-1',
     scopes,
     rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    createdAt,
   });
 }
 
@@ -186,8 +190,7 @@ describe('/api/sessions API-key scopes', () => {
     expect(mockSearchOwnSessions).toHaveBeenCalledTimes(1);
   });
 
-  // Every key is legacy until the legacy window's cutoff is set, so keys that miss the scopes still
-  // get through the door; the refusal they get after the window ends is pinned in apiKeyScopeGate.test.ts.
+  // A key created before the legacy cutoff that misses the scopes still gets through the door.
   it.each([
     ['an unscoped key', []],
     ['a non-notebook key', [ApiKeyScope.ME_READ]],
@@ -199,6 +202,15 @@ describe('/api/sessions API-key scopes', () => {
     expect(res._getStatusCode()).toBe(200);
   });
 
+  it('refuses GET for a non-notebook key created after the legacy cutoff', async () => {
+    keyWithScopes([ApiKeyScope.ME_READ], POST_CUTOFF_CREATED_AT);
+    const { req, res } = fire('GET');
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockSearchOwnSessions).not.toHaveBeenCalled();
+  });
+
   it.each(['GET', 'DELETE'] as const)('refuses %s at the door for a confined key', async method => {
     keyWithScopes([ApiKeyScope.EMBED_CHAT]);
     const { req, res } = fire(method);
@@ -208,5 +220,72 @@ describe('/api/sessions API-key scopes', () => {
     expect(JSON.stringify(res._getData())).toContain('Insufficient API key permissions');
     expect(mockSearchOwnSessions).not.toHaveBeenCalled();
     expect(mockDeleteMany).not.toHaveBeenCalled();
+  });
+
+  describe('keyset paging', () => {
+    const ID_A = '65f000000000000000000001';
+    const ID_B = '65f000000000000000000002';
+    const AT = new Date('2026-01-02T03:04:05.678Z');
+
+    beforeEach(() => keyWithScopes([ApiKeyScope.READ_NOTEBOOKS]));
+
+    it('mints a cursor from the last row and resumes from it with the same order', async () => {
+      mockSearchOwnSessions.mockResolvedValueOnce({ data: [{ id: ID_A }], hasMore: true, last: { id: ID_A, at: AT } });
+      const first = fire('GET');
+      await handler(first.req, first.res);
+      const { nextCursor, hasMore } = JSON.parse(first.res._getData());
+      expect(hasMore).toBe(true);
+      expect(typeof nextCursor).toBe('string');
+      expect(mockSearchOwnSessions.mock.calls[0][3]).toEqual({ after: undefined });
+
+      mockSearchOwnSessions.mockResolvedValueOnce({ data: [{ id: ID_B }], hasMore: false });
+      const second = fire('GET', { cursor: nextCursor });
+      await handler(second.req, second.res);
+      expect(second.res._getStatusCode()).toBe(200);
+      expect(mockSearchOwnSessions.mock.calls[1][3]).toEqual({ after: { id: ID_A, at: AT } });
+      expect(mockSearchOwnSessions.mock.calls[1][1].orderBy).toEqual({ field: 'lastUpdated', direction: 'desc' });
+      expect(JSON.parse(second.res._getData()).nextCursor).toBeNull();
+    });
+
+    it('round-trips an _id cursor', async () => {
+      const order = { 'orderBy[field]': '_id', 'orderBy[direction]': 'asc' };
+      mockSearchOwnSessions.mockResolvedValueOnce({ data: [{ id: ID_A }], hasMore: true, last: { id: ID_A } });
+      const first = fire('GET', order);
+      await handler(first.req, first.res);
+      const { nextCursor } = JSON.parse(first.res._getData());
+
+      const second = fire('GET', { ...order, cursor: nextCursor });
+      await handler(second.req, second.res);
+      expect(mockSearchOwnSessions.mock.calls[1][3]).toEqual({ after: { id: ID_A } });
+    });
+
+    it('keeps the offset path for callers that send no cursor', async () => {
+      mockSearchOwnSessions.mockResolvedValueOnce({ data: [{ id: ID_A }], hasMore: true });
+      const { req, res } = fire('GET', { 'pagination[page]': '4', 'pagination[limit]': '25' });
+      await handler(req, res);
+      expect(mockSearchOwnSessions.mock.calls[0][1].pagination).toEqual({ page: 4, limit: 25 });
+      expect(JSON.parse(res._getData())).toEqual({ data: [{ id: ID_A }], hasMore: true, nextCursor: null });
+    });
+
+    it.each([
+      ['a malformed cursor', { cursor: 'not-a-cursor' }],
+      ['a cursor minted for another order', { cursor: 'x', 'orderBy[field]': 'name', 'orderBy[direction]': 'asc' }],
+    ])('answers 422 for %s', async (_label, query) => {
+      const { req, res } = fire('GET', query);
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(mockSearchOwnSessions).not.toHaveBeenCalled();
+    });
+
+    it('answers 422 for a lastUpdated cursor replayed against the _id order', async () => {
+      mockSearchOwnSessions.mockResolvedValueOnce({ data: [{ id: ID_A }], hasMore: true, last: { id: ID_A, at: AT } });
+      const first = fire('GET');
+      await handler(first.req, first.res);
+      const { nextCursor } = JSON.parse(first.res._getData());
+
+      const replay = fire('GET', { cursor: nextCursor, 'orderBy[field]': '_id', 'orderBy[direction]': 'desc' });
+      await handler(replay.req, replay.res);
+      expect(replay.res._getStatusCode()).toBe(422);
+    });
   });
 });

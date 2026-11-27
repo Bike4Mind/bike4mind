@@ -85,7 +85,7 @@ vi.mock('@bike4mind/server-utils/utils/agentExecutorFunctionName', () => ({
   resolveAgentExecutorFunctionName: mockResolveExecutorName,
 }));
 
-import { ApiKeyScope, CreditHolderType, DATA_LAKE_TOOL_NAMES } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType, DATA_LAKE_TOOL_NAMES, FILE_READ_TOOL_NAMES } from '@bike4mind/common';
 import { startAgentExecution, sweepMemoSize, type StartAgentExecutionInput } from './startAgentExecution';
 import { HEADLESS_CONNECTION_ID } from '@bike4mind/server-utils/utils/headlessConnection';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER } from './executionLimits';
@@ -794,7 +794,7 @@ describe('startAgentExecution', () => {
         userId: 'writer',
         apiKeyInfo: {
           keyId: 'k2',
-          scopes: [ApiKeyScope.DATALAKE_WRITE],
+          scopes: [ApiKeyScope.DATALAKE_WRITE, ApiKeyScope.READ_FILES],
           ownerUntrusted: false,
           billingOwnerType: CreditHolderType.User,
         },
@@ -803,7 +803,10 @@ describe('startAgentExecution', () => {
     );
     await startAgentExecution(input({ userId: 'session' }), logger);
 
-    expect(mockCreateExecution.mock.calls[0][0].scopeDeniedTools).toEqual([...DATA_LAKE_TOOL_NAMES]);
+    expect(mockCreateExecution.mock.calls[0][0].scopeDeniedTools).toEqual([
+      ...DATA_LAKE_TOOL_NAMES,
+      ...FILE_READ_TOOL_NAMES,
+    ]);
     expect(mockCreateExecution.mock.calls[1][0]).not.toHaveProperty('scopeDeniedTools');
     expect(mockCreateExecution.mock.calls[2][0]).not.toHaveProperty('scopeDeniedTools');
     expect(mockCreateExecution.mock.calls[0][0].adminRoleWithheld).toBe(true);

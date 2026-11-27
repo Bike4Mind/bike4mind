@@ -22,6 +22,7 @@ export * from './renderWorker';
 export * from './callableFunctionData';
 export * from './callableFunctionRuntime';
 export * from './chatCompletion';
+export * from './previewSleep';
 export * from './web';
 export * from './callableFunctionDataPolicy';
 export * from './llm';

@@ -16,8 +16,10 @@ const {
   mockSetThrottleTier,
   mockGradeDetections,
   mockEmailSuspensionNotice,
+  mockRequestApproval,
   txnState,
 } = vi.hoisted(() => ({
+  mockRequestApproval: vi.fn(),
   mockEmailSuspensionNotice: vi.fn(),
   mockGradeDetections: vi.fn(),
   mockSetThrottleTier: vi.fn(),
@@ -178,6 +180,7 @@ vi.mock('@bike4mind/server-utils/utils/adminAudit', async importOriginal => ({
 
 // The gate's own behaviour is covered in server/auth/stepUp.test.ts; here only where it applies.
 vi.mock('@server/auth/stepUp', () => ({ requireStepUp: mockRequireStepUp }));
+vi.mock('@server/admin/approvals/service', () => ({ requestApproval: mockRequestApproval }));
 // The setting gate and the mail are covered in server/users/suspensionNoticeEmail.test.ts; here only the call.
 vi.mock('@server/users/suspensionNoticeEmail', () => ({ emailSuspensionNoticeIfEnabled: mockEmailSuspensionNotice }));
 vi.mock('@bike4mind/server-utils/billing/linkedAccounts', () => ({ propagateAccountRisk: mockPropagateAccountRisk }));
@@ -222,6 +225,7 @@ beforeEach(() => {
   mockUserFindById.mockReset().mockReturnValue({ id: 'u1', name: 'Existing Name' });
   mockAdminUpdateUser.mockReset().mockResolvedValue({ user: undefined, creditAdjustment: undefined });
   mockRecord.mockReset().mockResolvedValue(null);
+  mockRequestApproval.mockReset();
   mockDeny.mockReset().mockImplementation(async () => {
     throw new ForbiddenError('Admins cannot perform this action on their own account.');
   });
@@ -1162,38 +1166,93 @@ describe('PUT /api/users/:id/update - admin audit trail', () => {
       expect(mockAdminUpdateUser.mock.calls[1][1].currentCredits).toBeUndefined();
     });
 
-    it('allows a self credit change and flags it in the audit entry', async () => {
-      mockUserFindById.mockReturnValue(target({ id: ADMIN.id }));
-      mockAdminUpdateUser.mockResolvedValue({ user: target({ id: ADMIN.id }), creditAdjustment: adjustment(50) });
+    const PENDING = { approvalId: 'approval1', status: 'pending', expiresAt: new Date(0) };
+
+    it.each([
+      ['creditDelta', { creditDelta: 50 }],
+      ['a raised currentCredits', { currentCredits: 150 }],
+    ])('holds a self credit grant sent as %s for another full admin', async (_label, credits) => {
+      mockUserFindById.mockReturnValue(target({ id: ADMIN.id, currentCredits: 100 }));
+      mockRequestApproval.mockResolvedValue(PENDING);
       const { res, promise } = run({
         user: ADMIN,
         userId: ADMIN.id,
-        body: { creditDelta: 50, creditReason: CREDIT_REASON },
+        body: { ...credits, creditReason: CREDIT_REASON },
       });
       await promise;
 
-      expect(res._getStatusCode()).toBe(200);
-      expect(mockDeny).not.toHaveBeenCalled();
-      expect(mockRecord).toHaveBeenCalledWith(
+      expect(res._getStatusCode()).toBe(202);
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+      expect(mockRequestApproval).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ action: 'user.credits.adjusted', details: { credits: 50, selfGrant: true } })
+        expect.objectContaining({
+          action: 'user.credits.self_grant',
+          params: { userId: ADMIN.id, creditDelta: 50, creditReason: CREDIT_REASON },
+          reason: CREDIT_REASON,
+          requiredPermission: 'credits:approve_self_grant',
+          requiresFullAdmin: false,
+        })
       );
     });
 
-    it('flags a credit change to the account an impersonating admin impersonates from', async () => {
+    it('holds a credit grant to the account an impersonating admin impersonates from', async () => {
       mockUserFindById.mockReturnValue(target({ id: 'A' }));
-      mockAdminUpdateUser.mockResolvedValue({ user: target({ id: 'A' }), creditAdjustment: adjustment(50) });
-      const { promise } = run({
+      mockRequestApproval.mockResolvedValue(PENDING);
+      const { res, promise } = run({
         user: { id: 'B', isAdmin: true, impersonatedBy: 'A' },
         userId: 'A',
         body: { creditDelta: 50, creditReason: CREDIT_REASON },
       });
       await promise;
 
-      expect(mockDeny).not.toHaveBeenCalled();
+      expect(res._getStatusCode()).toBe(202);
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    });
+
+    it('refuses a held self-grant sent with other changes, writing nothing', async () => {
+      mockUserFindById.mockReturnValue(target({ id: ADMIN.id }));
+      await expect(
+        run({ user: ADMIN, userId: ADMIN.id, body: { name: 'Renamed', creditDelta: 50, creditReason: CREDIT_REASON } })
+          .promise
+      ).rejects.toMatchObject({ statusCode: 400 });
+      expect(mockRequestApproval).not.toHaveBeenCalled();
+      expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+    });
+
+    it('applies a self credit grant at once for an admin holding credits:self_grant, still flagged', async () => {
+      const exempt = { ...ADMIN, adminPermissions: ['credits:self_grant'] };
+      mockUserFindById.mockReturnValue(target({ id: ADMIN.id }));
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ id: ADMIN.id }), creditAdjustment: adjustment(50) });
+      const { res, promise } = run({
+        user: exempt,
+        userId: ADMIN.id,
+        body: { creditDelta: 50, creditReason: CREDIT_REASON },
+      });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRequestApproval).not.toHaveBeenCalled();
       expect(mockRecord).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ action: 'user.credits.adjusted', details: { credits: 50, selfGrant: true } })
+      );
+    });
+
+    it('applies a self credit deduction at once, flagged', async () => {
+      mockUserFindById.mockReturnValue(target({ id: ADMIN.id }));
+      mockAdminUpdateUser.mockResolvedValue({ user: target({ id: ADMIN.id }), creditAdjustment: adjustment(-30) });
+      const { res, promise } = run({
+        user: ADMIN,
+        userId: ADMIN.id,
+        body: { creditDelta: -30, creditReason: CREDIT_REASON },
+      });
+      await promise;
+
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRequestApproval).not.toHaveBeenCalled();
+      expect(mockRecord).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ action: 'user.credits.adjusted', details: { credits: -30, selfGrant: true } })
       );
     });
 

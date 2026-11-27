@@ -1,5 +1,5 @@
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
-import { chatCompletionCapacity } from './chatCompletionCapacity';
+import { chatCompletionCapacity, chatCompletionScaling } from './chatCompletionCapacity';
 import {
   DEFAULT_LAMBDA_ENVIRONMENT,
   isPreviewStage,
@@ -382,7 +382,7 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   // 1 vCPU needs 2–8 GB — both combos below are valid Fargate sizes.
   cpu: isProd ? '1 vCPU' : '0.5 vCPU',
   memory: isProd ? '2 GB' : '1 GB',
-  scaling: isProd ? { min: 2, max: 6, cpuUtilization: 70 } : { min: 1, max: 2 },
+  scaling: chatCompletionScaling(isProd),
   capacity: chatCompletionCapacity(isPreviewStage),
   link: [
     ...linkedSecrets,

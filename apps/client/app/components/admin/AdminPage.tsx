@@ -45,6 +45,7 @@ import { AdminTab } from './adminSidebarConfig';
 import { canRenderAdminTab } from './adminTabRenderability';
 import { useAdminTabUrlSync } from './useAdminTabUrlSync';
 import { useAdminModal } from './useAdminModal';
+import { useRecordAdminTabVisit } from './Dashboard/useRecordAdminTabVisit';
 import { UndoToastProvider } from './shared/UndoToast';
 import { adminPageFrame } from './shared/adminStyles';
 
@@ -132,6 +133,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
   // outlives the page, and a panel committed once would already have fired its requests.
   const activeTab =
     typeof storedActiveTab === 'number' && !isAdminTabRenderable(storedActiveTab) ? null : storedActiveTab;
+  useRecordAdminTabVisit(activeTab);
 
   // Admin Floating Chat (docked-session floating chat pattern)
   const adminSessionId = useAdminAssistantSession(!!currentUser?.isAdmin);

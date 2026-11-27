@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  REVERSIBLE_TIER_ENFORCE_BAR,
   SHADOW_DETECTION_ENFORCE_BAR,
   shadowDetectionSignalTrip,
   shadowDetectionReadiness,
@@ -55,6 +56,28 @@ describe('shadowDetectionReadiness', () => {
       shadowDetectionReadiness(row({ confirmedAbuse: minConclusive, legitimateHuman: 5, legitimateAutomation: 5 }))
         .status
     ).toBe('below_bar');
+  });
+});
+
+describe('shadowDetectionReadiness against the reversible-tier bar', () => {
+  it('sits below the Contain bar', () => {
+    expect(REVERSIBLE_TIER_ENFORCE_BAR.minConclusive).toBeLessThan(SHADOW_DETECTION_ENFORCE_BAR.minConclusive);
+    expect(REVERSIBLE_TIER_ENFORCE_BAR.minPrecision).toBeLessThan(SHADOW_DETECTION_ENFORCE_BAR.minPrecision);
+  });
+
+  it('is ready for the reversible tiers while still collecting for Contain', () => {
+    const graded = row({ confirmedAbuse: 19, legitimateHuman: 1 });
+    expect(shadowDetectionReadiness(graded, REVERSIBLE_TIER_ENFORCE_BAR)).toEqual({
+      status: 'ready',
+      conclusive: 20,
+      precision: 0.95,
+    });
+    expect(shadowDetectionReadiness(graded).status).toBe('collecting');
+  });
+
+  it('is below the reversible bar under its precision floor', () => {
+    const graded = row({ confirmedAbuse: 17, legitimateHuman: 3 });
+    expect(shadowDetectionReadiness(graded, REVERSIBLE_TIER_ENFORCE_BAR).status).toBe('below_bar');
   });
 });
 

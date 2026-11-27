@@ -118,6 +118,7 @@ export async function bulkDeleteFilesForUser(req: Request, fileIds: string[]): P
               ...lakeMembershipAuditDb,
             },
             storage: getFilesStorage(),
+            session,
             generatedCopies: getGeneratedCopyStore(),
             onDeleteComplete: async (deleted, sizeToDeduct) => {
               refunds.push({ owner: storageOwnerOf(deleted), bytes: -sizeToDeduct });

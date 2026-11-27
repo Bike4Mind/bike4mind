@@ -394,6 +394,18 @@ describe('provider spend stage gating', () => {
     expect(resources.dashboard).not.toHaveBeenCalled();
   });
 
+  it('exports the hourly spend alarms for the admin threshold override', async () => {
+    const { providerReportedSpendAlarms } = await load('production');
+    expect(Object.keys(providerReportedSpendAlarms).sort()).toEqual(['anthropic', 'openai']);
+    const arn = providerReportedSpendAlarms.openai?.arn as unknown as { value: string };
+    expect(arn.value).toBe('alarm-arn-providerReportedSpendHourly-openai');
+  });
+
+  it('exports no spend alarms on an unmonitored stage', async () => {
+    const { providerReportedSpendAlarms } = await load('preview');
+    expect(providerReportedSpendAlarms).toEqual({});
+  });
+
   it('skips poller alarms on a monitored preview, where the cron does not exist', async () => {
     vi.stubEnv('ENABLE_MONITORING', 'true');
     resources.cron = undefined;

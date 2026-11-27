@@ -174,6 +174,23 @@ describe('B4mApiClient', () => {
     await expect(client.getOwnKeyScopes()).resolves.toBeUndefined();
   });
 
+  it('reads the scopes of a key that may not list keys from the header on its refusal', async () => {
+    const refusal = (scopes: string) =>
+      new AxiosError('Forbidden', '403', undefined, undefined, {
+        status: 403,
+        headers: { 'x-api-key-scopes': scopes },
+        data: { error: 'Insufficient API key permissions', required_scopes: ['api-keys:manage', 'admin:*'] },
+      } as unknown as AxiosResponse);
+    const own = () => new B4mApiClient('http://localhost:3000', undefined, 'b4m_live_key').getOwnKeyScopes();
+
+    mockGet.mockRejectedValueOnce(refusal('functions:invoke'));
+    await expect(own()).resolves.toEqual(['functions:invoke']);
+    mockGet.mockRejectedValueOnce(refusal('functions:invoke,notebooks:read'));
+    await expect(own()).resolves.toEqual(['functions:invoke', 'notebooks:read']);
+    mockGet.mockRejectedValueOnce(refusal(''));
+    await expect(own()).resolves.toEqual([]);
+  });
+
   it('still fails on an error other than 403', async () => {
     mockGet.mockRejectedValueOnce(
       new AxiosError('Server error', '500', undefined, undefined, { status: 500, data: {} } as AxiosResponse)

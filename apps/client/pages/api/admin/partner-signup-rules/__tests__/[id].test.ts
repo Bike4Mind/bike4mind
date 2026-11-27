@@ -261,7 +261,7 @@ describe('/api/admin/partner-signup-rules/[id] - admin audit', () => {
   });
 });
 
-describe('/api/admin/partner-signup-rules/[id] - managed rule tags (PUT)', () => {
+describe('/api/admin/partner-signup-rules/[id] - delegated admins (PUT)', () => {
   const DELEGATE = { isAdmin: false, id: 'delegate-1', adminPermissions: ['settings:manage'] };
 
   beforeEach(() => {
@@ -270,35 +270,9 @@ describe('/api/admin/partner-signup-rules/[id] - managed rule tags (PUT)', () =>
     repo.update.mockResolvedValue({ id: 'r1', domain: 'partner.com', enabled: true });
   });
 
-  it.each([
-    ['adds one', ['beta', 'optihashi:pro', 'datalake:acme-legal']],
-    ['removes one', ['beta']],
-    ['re-cases one', ['beta', 'OptiHashi:pro']],
-  ])('refuses a delegate edit that %s managed tag with a 403 and never writes', async (_label, tags) => {
-    const { req, res } = makeReqRes('PUT', { user: DELEGATE, body: { tags } });
-    await expect(handlers.put(req, res)).rejects.toThrow('Only full administrators can assign managed tags');
-    expect(repo.update).not.toHaveBeenCalled();
-  });
-
-  it('lets a delegate change ordinary tags while keeping the managed ones', async () => {
-    const { req, res } = makeReqRes('PUT', { user: DELEGATE, body: { tags: ['gamma', 'optihashi:pro'] } });
-    await handlers.put(req, res);
-    expect(res._getStatusCode()).toBe(200);
-    expect(repo.update).toHaveBeenCalledWith(expect.objectContaining({ tags: ['gamma', 'optihashi:pro'] }));
-  });
-
-  it('lets a delegate update a rule without sending tags', async () => {
-    const { req, res } = makeReqRes('PUT', { user: DELEGATE, body: { enabled: false } });
-    await handlers.put(req, res);
-    expect(res._getStatusCode()).toBe(200);
-  });
-
-  it('judges a delegate against the rule as read inside the transaction', async () => {
-    repo.findById
-      .mockResolvedValueOnce({ id: 'r1', domain: 'partner.com', tags: ['beta'] })
-      .mockResolvedValueOnce({ id: 'r1', domain: 'partner.com', tags: ['beta', 'optihashi:pro'] });
-    const { req, res } = makeReqRes('PUT', { user: DELEGATE, body: { tags: ['gamma'] } });
-    await expect(handlers.put(req, res)).rejects.toThrow('Only full administrators can assign managed tags');
+  it('refuses a settings:manage delegate with a 403 and never writes', async () => {
+    const { req, res } = makeReqRes('PUT', { user: DELEGATE, body: { organizationId: 'org-2' } });
+    await expect(handlers.put(req, res)).rejects.toThrow(/only full administrators/i);
     expect(repo.update).not.toHaveBeenCalled();
   });
 

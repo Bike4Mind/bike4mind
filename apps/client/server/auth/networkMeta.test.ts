@@ -39,6 +39,11 @@ const AWS_REQUEST = reqWith({
 });
 
 describe('readNetworkMeta', () => {
+  it('takes the first user-agent when the header repeats', () => {
+    const req = { headers: { 'user-agent': ['first', 'second'] }, socket: {} } as unknown as NetworkRequest;
+    expect(readNetworkMeta(req).userAgent).toBe('first');
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -167,6 +172,18 @@ describe('recordSignupNetwork', () => {
     expect(requestRiskEvidenceRefresh).toHaveBeenCalledWith('u1', 'signup', expect.any(Logger));
   });
 
+  it('writes the signup client on the event when given', async () => {
+    await recordSignupNetwork({ req: AWS_REQUEST, userId: 'u1', method: 'google', clientId: 'client-1' });
+
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ type: 'signup', clientId: 'client-1' }));
+  });
+
+  it.each([undefined, null, ''])('omits clientId from the signup event when it is %j', async clientId => {
+    await recordSignupNetwork({ req: AWS_REQUEST, userId: 'u1', method: 'google', clientId });
+
+    expect(record.mock.calls[0][0]).not.toHaveProperty('clientId');
+  });
+
   it('still logs the signup event when the user write fails, and never throws', async () => {
     updateOne.mockRejectedValueOnce(new Error('db down'));
 
@@ -191,6 +208,11 @@ describe('recordLoginEvent', () => {
   beforeEach(() => {
     record.mockReset().mockResolvedValue(undefined);
     warn.mockClear();
+  });
+
+  it('never writes a clientId on a login event', async () => {
+    await recordLoginEvent({ req: AWS_REQUEST, userId: 'u1', method: 'otc' });
+    expect(record.mock.calls[0][0]).not.toHaveProperty('clientId');
   });
 
   it('logs a login event with the request network', async () => {

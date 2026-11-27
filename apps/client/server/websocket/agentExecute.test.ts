@@ -111,6 +111,7 @@ import {
   checkApiKeyRateLimitOrThrow,
   checkRateLimit,
 } from '@bike4mind/server-utils/cli/auth';
+import { buildChildExecutionSnapshots } from '@server/utils/childExecutionSnapshot';
 import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { endAgentRunLiveActivity } from '@bike4mind/server-utils/utils/liveActivityPush';
 import { persistRunAsQuest } from '@bike4mind/server-utils/utils/persistRunAsQuest';
@@ -865,6 +866,15 @@ describe('reconnect command', () => {
         sessionId: 'session-1',
       }),
     ]);
+  });
+
+  it('builds child snapshots unredacted: reconnect is gated on the caller having started the run', async () => {
+    mockFindActiveBySessionId.mockResolvedValueOnce({ ...baseExecution, status: 'running' });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (func as any)(reconnectEvent({ sessionId: 'session-1' }), {}, noopLogger);
+
+    expect(buildChildExecutionSnapshots).toHaveBeenCalledWith('exec-1', { isOwner: true });
   });
 
   it('echoes the stored sessionId when asked by executionId alone', async () => {

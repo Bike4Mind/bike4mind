@@ -32,6 +32,8 @@ export const VoiceSessionContextSchema = z
     apiKeyBillingOwnerType: z.enum([CreditHolderType.User, CreditHolderType.Organization]).optional(),
     // That key lacks the admin scope, so the proxy withholds the owner's admin role on its reload.
     adminRoleWithheld: z.boolean().optional(),
+    // Trusted file-input admission from the minting door; absent key claims fail closed downstream.
+    fileInputsAllowed: z.boolean().optional(),
     // ISO start of the credit hold this call bills against, so its activity marks only that hold.
     // Optional: tokens minted before the claim existed still verify until they expire.
     // Follow-up: make it required once one token TTL has passed after deploy, deleting the proxy's claimless branch.

@@ -27,14 +27,14 @@ GitHub only links a commit to your account when the email is verified there, and
 | Task | Command (cached) | Uncached fallback |
 |------|------------------|-------------------|
 | **Verify a branch (default)** | `pnpm verify` | see below |
-| Type check all (what CI gates: tsgo, tsc fallback) | `pnpm turbo:typecheck:fast` | `pnpm -w typecheck:fast && pnpm -r typecheck:fast` |
-| Type check all, pure tsc (nightly baseline) | `pnpm turbo:typecheck` | `pnpm -r typecheck` |
+| Type check all (what CI gates: TypeScript 7 as `tsgo`) | `pnpm turbo:typecheck` | `pnpm -w typecheck && pnpm -r typecheck` |
+| Type check all, pure tsc (nightly baseline) | `pnpm turbo:typecheck:tsc` | `pnpm -w typecheck:tsc && pnpm -r typecheck:tsc` |
 | Test all | `pnpm turbo:test` | `pnpm -r test` |
 | Lint (CI parity) | `pnpm lint:check` | — |
 | Build core packages | `pnpm turbo:core:build` | `pnpm core:build` |
 | Test one package | `pnpm --filter <pkg> test` | e.g. `pnpm --filter @bike4mind/agents test` |
 
-Verify before pushing: `pnpm verify`. It runs `typecheck:fast` and `test` only for the packages your branch changed against `origin/main` (`TURBO_SCM_BASE` overrides), their dependents, and any package whose turbo.json inputs read a changed file (e.g. `workers` for an `apps/client` change), then lints only the changed files. Root config and lockfile changes widen it to the full graph; root `package.json`, lockfile and lint config changes also run the full lint. Extra flags go to turbo: `pnpm verify --concurrency=4` on a busy machine; `--no-lint`, `--tasks typecheck:fast` narrow it. CI still runs everything; reach for the full-repo commands above only when a change is cross-cutting.
+Verify before pushing: `pnpm verify`. It runs `typecheck` and `test` only for the packages your branch changed against `origin/main` (`TURBO_SCM_BASE` overrides), their dependents, and any package whose turbo.json inputs read a changed file (e.g. `workers` for an `apps/client` change), then lints only the changed files. Root config and lockfile changes widen it to the full graph; root `package.json`, lockfile and lint config changes also run the full lint. Extra flags go to turbo: `pnpm verify --concurrency=4` on a busy machine; `--no-lint`, `--tasks typecheck` narrow it. CI still runs everything; reach for the full-repo commands above only when a change is cross-cutting.
 
 ## Project structure
 

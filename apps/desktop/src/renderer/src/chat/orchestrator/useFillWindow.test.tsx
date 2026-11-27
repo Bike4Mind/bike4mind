@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { TAVERN_DIALOGUE_ATTR } from './tavern/dialogue';
+import { SCENE_DIALOGUE_ATTR } from './scene/dialogue';
 import { fillWindowKeyAction, useFillWindow, type FillWindow } from './useFillWindow';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -82,7 +82,7 @@ describe('fillWindowKeyAction', () => {
 
   it('leaves the Tavern dialogue box its own keys', () => {
     const box = mount(document.createElement('div'));
-    box.setAttribute(TAVERN_DIALOGUE_ATTR, '');
+    box.setAttribute(SCENE_DIALOGUE_ATTR, '');
     const choice = box.appendChild(document.createElement('button'));
     expect(fillWindowKeyAction(keyEvent('Escape', choice), true)).toBeNull();
     expect(fillWindowKeyAction(keyEvent('f', choice), true)).toBeNull();
@@ -139,7 +139,7 @@ describe('useFillWindow', () => {
     const { result } = renderHook({ available: true });
     act(() => result.current.setOn(true));
     const box = mount(document.createElement('div'));
-    box.setAttribute(TAVERN_DIALOGUE_ATTR, '');
+    box.setAttribute(SCENE_DIALOGUE_ATTR, '');
     press('Escape', box);
     expect(result.current.on).toBe(true);
   });

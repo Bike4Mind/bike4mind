@@ -291,7 +291,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'eventRule:infra/serviceHealthAlarms.ts:EcsTaskFailedToStartRule',
-    '01f62b8ab1bf553612fc628bc26d6241b1c4eafcb75c213306a47abc62679d7e'
+    '2b68b75cf6843e937ae8e8686a3eb7d2a5b68a5f3ff785b117d5cab8364b0a2f'
   ),
   hostedOnly(
     'eventRule:infra/providerSpend.ts:ProviderAdminKeyChangeRule',
@@ -315,6 +315,11 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
     'function:infra/agentExecutor.ts:AgentExecutor',
     '61cc1dd56ad310c15e1c92b912845dab751a421b1342e43d17c2a4d258c0a421',
     ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'cloudwatch:PutMetricData', 'events:PutEvents']
+  ),
+  hostedOnly(
+    'function:infra/callableFunctionSourceFetch.ts:callableFunctionSourceFetch',
+    '1509db58716ac7ef24d43c1a3f1bee9334f5ea9f18403fc1815ce458a8a2d0b5',
+    'Isolates hosted callable function source fetches outside the VPC with no secrets; self-host runs the same pinned fetch in-process when no fetch function is named.'
   ),
   gap('function:infra/database.ts:DatabaseCleaner', 'e52f8c2f59b621e25176f06917724c82cd678c213de7325e2d9ad064c2971b70'),
   gap(
@@ -881,7 +886,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   broker(
     'queue:infra/serviceHealthAlarms.ts:ServiceHealthAlarmHandlerDlq',
-    '6b4dee3c8d196df99d5167e3b8e68c215c9cd5ec5a1d2b482027edb7ab444870'
+    'e4bb21872791c985702b536156f97761b31bd8076566645850b9e6d87646ab6f'
   ),
   broker(
     'queue:infra/waf.ts:WafAlarmSlackHandlerDlq',
@@ -1227,8 +1232,8 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   hostedOnly(
     'schedule:infra/youngAccountSpendAlert.ts:youngAccountSpendAlert',
-    '0fdfbcaf8af6ffe9c4e387cf32b5e6e8ea3ab73a8c4a5e24f84e5150bfa6a80e',
-    'Hosted production abuse alert to Slack; not applicable to a portable deployment.',
+    'c7844fc8ec21721907300874349c2c0677aef7cb092f3041136af6b32f9bf2e9',
+    'Hosted production abuse alert to Slack and hosted CloudWatch alarm threshold sync; not applicable to a portable deployment.',
     ['cloudwatch:DescribeAlarms', 'cloudwatch:PutMetricAlarm', 'import:@aws-sdk/client-cloudwatch', 'ssm:GetParameter']
   ),
   hostedOnly(
@@ -1319,7 +1324,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'service:infra/chatCompletion.ts:ChatCompletion',
-    'b9fae2dab8c3517ddcdb55c3d54d0c1e9a818e346ae78b44349d1b2cb0aea0d1',
+    'c1f4e7cdb3ffd85316ea918cda0b0ba6c950e512143539c2539f146a36213a58',
     ['bedrock:*', 'cloudwatch:PutMetricData', 'events:PutEvents', 'execute-api:ManageConnections']
   ),
   gapBecause(
@@ -1352,7 +1357,7 @@ export const selfhostParityPolicy: readonly ParityPolicyEntry[] = [
   ),
   gap(
     'snsSubscription:infra/serviceHealthAlarms.ts:ServiceHealthAlarmTopic',
-    'b9684de008b3f96066f602e384ac8ca09caa3e766eec7e143d645e0581223a02',
+    '236d9e12c4b910de67db48aac7c6cd3b3d208f78b378c167a33f48c9f90c63d0',
     ['ssm:GetParameter']
   ),
   gap(

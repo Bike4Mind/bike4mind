@@ -13,6 +13,7 @@ import { perUserRateLimit } from '@server/middlewares/perUserRateLimit';
 import { decodeCursor, encodeCursor } from '@server/utils/cursorPagination';
 import { UnprocessableEntityError } from '@bike4mind/server-utils/utils/errors';
 import { toPublicArtifact, toPublicArtifactVersion } from '@server/artifacts/toPublicArtifact';
+import { isSupersededSave, readPointedContent } from '@server/artifacts/supersededSave';
 import { ARTIFACT_DB, hideArtifactDenial } from '@bike4mind/server-utils/artifacts/artifactAccess';
 
 const CURSOR_SCOPE = 'v1.artifacts.versions';
@@ -52,7 +53,7 @@ const createRoute = nextRouteForContract(createArtifactVersionContract, {
 
   // A denied edit is a 404 here, like PATCH: a caller cannot tell an artifact it may not edit from
   // one that does not exist.
-  const { artifact } = await hideArtifactDenial(
+  const { artifact, version } = await hideArtifactDenial(
     artifactService.update(
       req.user.id,
       {
@@ -67,8 +68,10 @@ const createRoute = nextRouteForContract(createArtifactVersionContract, {
     )
   );
 
+  // A save that lost the pointer race reports the version the artifact now points at, with that row's content.
+  const current = isSupersededSave(artifact, version) ? await readPointedContent(req.user.id, artifact) : content;
   res.setHeader('Cache-Control', 'private, no-store');
-  return res.status(201).json(toPublicArtifact(artifact, content));
+  return res.status(201).json(toPublicArtifact(artifact, current));
 });
 
 export const config = {

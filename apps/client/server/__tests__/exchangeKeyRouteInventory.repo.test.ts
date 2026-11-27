@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'fs';
 import path from 'path';
-import { ApiKeyScope, CONTRACTS } from '@bike4mind/common';
+import { ApiKeyScope, CONTRACTS, EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES } from '@bike4mind/common';
 import { DERIVED_API_KEY_SCOPE_ENDPOINTS } from '@bike4mind/server-utils/app/constants/apiKeyScopeEndpoints.generated';
 import { FILES_READ_OR_WRITE_OR_GENERATE_SCOPES } from '@bike4mind/server-utils/files/fileScopes';
 import {
@@ -17,15 +17,20 @@ import {
  * Invariant: a key minted for a connected app (the federated AI-token exchange) reaches only the
  * routes that declare its scopes, and of those only the ones listed here.
  *
- * Every baseApi door that resolves to ai:generate or me:read must be in the pinned registry list or
+ * Every baseApi door that resolves to an exchange scope must be in the pinned registry list or
  * DOOR_ONLY_ROUTES. The unresolvable-door check covers only inline-literal `baseApi({...})` doors;
  * options passed as a variable or with type arguments are covered by the registry only.
- * Adding a door for either scope fails this test until it is listed.
+ * Adding a door for any of them fails this test until it is listed.
  * verifyApiKey stack: it refuses exchange keys unless the caller passes `allowExchangeKeys`, and
  * only the completion routes do.
  */
 
-const EXCHANGE_SCOPES: string[] = [ApiKeyScope.AI_GENERATE, ApiKeyScope.ME_READ];
+// Every scope pages/api/oauth/ai-token.ts can mint.
+const EXCHANGE_SCOPES: string[] = [
+  ApiKeyScope.AI_GENERATE,
+  ApiKeyScope.ME_READ,
+  ...EXCHANGE_KEY_COMBINABLE_CONFINED_SCOPES,
+];
 
 // Scanned from outside pages/ (see sessionGrantRoutesRejectApiKeys.test.ts for why).
 const API_DIR = path.join(__dirname, '..', '..', 'pages', 'api');
@@ -96,9 +101,33 @@ const ALLOWED_CONTRACTS = new Set([
   'listObligations',
   'getObligation',
   'updateObligation',
+  // functions:invoke and functions:author, granted to a client one at a time (OAUTH_FUNCTIONS_SCOPES).
+  'listFunctions',
+  'getFunction',
+  'reviewFunction',
+  'invokeFunction',
+  'getFunctionCall',
+  'cancelFunctionCall',
+  'createFunction',
+  'listAuthoredFunctions',
+  'getAuthoredFunction',
+  'saveFunctionCode',
+  'updateFunction',
+  'deleteFunction',
+  'setFunctionExamples',
+  'runFunctionTests',
+  'pinFunctionData',
+  'unpinFunctionData',
+  'setFunctionSources',
+  'promoteFunction',
+  'getFunctionShare',
+  'shareFunction',
+  'unshareFunction',
+  'findFunctionRecipient',
+  'getFunctionCallSummary',
 ]);
 
-// Every endpoint the generated registry lists under ai:generate or me:read. The REFUSING_ROUTES are
+// Every endpoint the generated registry lists under an exchange scope. The REFUSING_ROUTES are
 // here because they name the scope at the door and refuse an exchange key in their handlers.
 const ALLOWED_ENDPOINTS = [
   'GET /api/credits/transactions',
@@ -174,6 +203,27 @@ const ALLOWED_ENDPOINTS = [
   'POST /api/v1/voice/sessions',
   'POST /api/v1/voice/sessions/:id/end',
   'POST /api/voice/v2/sessions/:id/activity',
+  'POST /api/mcp/functions',
+  'GET /api/v1/functions',
+  'GET /api/v1/functions/:id',
+  'POST /api/v1/functions/:id/review',
+  'POST /api/v1/functions/:id/invoke',
+  'GET /api/v1/functions/calls/:call_id',
+  'POST /api/v1/functions/calls/:call_id/cancel',
+  'POST /api/v1/functions',
+  'PATCH|DELETE /api/v1/functions/:id',
+  'GET /api/v1/functions/:id/calls',
+  'PUT /api/v1/functions/:id/code',
+  'POST /api/v1/functions/:id/data',
+  'DELETE /api/v1/functions/:id/data/:name',
+  'PUT /api/v1/functions/:id/examples',
+  'POST /api/v1/functions/:id/promote',
+  'GET /api/v1/functions/:id/recipient',
+  'GET|PUT|DELETE /api/v1/functions/:id/share',
+  'GET /api/v1/functions/:id/source',
+  'PUT /api/v1/functions/:id/sources',
+  'POST /api/v1/functions/:id/test-runs',
+  'GET /api/v1/functions/mine',
 ];
 
 // Routes whose door admits ai:generate but whose per-method check narrows it, so the registry omits them.
@@ -233,7 +283,7 @@ const GENERATED_ENDPOINTS: readonly string[] = EXCHANGE_SCOPES.flatMap(
 const routeSource = (route: string) => readFileSync(path.join(API_DIR, route), 'utf8');
 
 describe('keys minted for a connected app reach only their scoped routes', () => {
-  it('lists every contract that declares ai:generate or me:read', () => {
+  it('lists every contract that declares an exchange scope', () => {
     const declared = CONTRACTS.filter(c => c.scopes?.some(s => EXCHANGE_SCOPES.includes(s))).map(c => c.operationId);
     expect(
       declared.filter(id => !ALLOWED_CONTRACTS.has(id)),
@@ -242,7 +292,7 @@ describe('keys minted for a connected app reach only their scoped routes', () =>
     expect([...ALLOWED_CONTRACTS].filter(id => !declared.includes(id))).toEqual([]);
   });
 
-  it('lists every endpoint the generated registry opens to ai:generate or me:read', () => {
+  it('lists every endpoint the generated registry opens to an exchange scope', () => {
     const generated = [...new Set(GENERATED_ENDPOINTS)].sort();
     expect(
       generated.filter(e => !ALLOWED_ENDPOINTS.includes(e)),
@@ -251,7 +301,7 @@ describe('keys minted for a connected app reach only their scoped routes', () =>
     expect(ALLOWED_ENDPOINTS.filter(e => !generated.includes(e))).toEqual([]);
   });
 
-  it('finds every ai:generate or me:read door in the registry, and no door the generator cannot resolve', () => {
+  it('finds every exchange-scope door in the registry, and no door the generator cannot resolve', () => {
     const registryRoutes = new Set(ALLOWED_ENDPOINTS.map(e => e.slice(e.indexOf(' ') + 1)));
     const unlisted: string[] = [];
     const unresolved: string[] = [];
@@ -289,7 +339,9 @@ describe('keys minted for a connected app reach only their scoped routes', () =>
   });
 
   it.each(SCOPE_LESS_CREDENTIAL_ROUTES)('%s declares no scope an exchange key holds', route => {
-    expect(routeSource(route)).not.toMatch(/\b(AI_GENERATE|ME_READ|FILES_READ_OR_WRITE_OR_GENERATE_SCOPES)\b/);
+    expect(routeSource(route)).not.toMatch(
+      /\b(AI_GENERATE|ME_READ|FUNCTIONS_INVOKE|FUNCTIONS_AUTHOR|FILES_READ_OR_WRITE_OR_GENERATE_SCOPES)\b/
+    );
   });
 
   it('references allowExchangeKeys only from the pinned files', () => {

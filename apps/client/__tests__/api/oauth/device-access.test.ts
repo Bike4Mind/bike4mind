@@ -81,7 +81,7 @@ beforeEach(() => {
   mocks.issue.mockResolvedValue({ accessToken: 'access', refreshToken: 'refresh' });
 });
 
-describe.each(['b4m-cli', 'b4m-desktop', undefined])('device access policy (%s)', clientId => {
+describe.each(['b4m-cli', 'b4m-desktop', 'b4m-host', undefined])('device access policy (%s)', clientId => {
   it('refuses approval before changing pending state or counters', async () => {
     mocks.findByUserCode.mockResolvedValue(authorization(clientId));
     mocks.access.mockResolvedValue(false);

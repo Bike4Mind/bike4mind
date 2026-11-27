@@ -149,4 +149,12 @@ export const ADMIN_PERMISSION_LABELS: Record<AdminPermissionId, { label: string;
   'users:export': { label: 'Export user data', description: "Download a user's data subject export." },
   'settings:manage': { label: 'Manage settings', description: 'Change admin settings, tags and product access.' },
   'models:curate': { label: 'Curate models', description: 'Change which models are offered.' },
+  'credits:self_grant': {
+    label: 'Self-grant credits',
+    description: 'Add credits to their own account without a second admin approving. Never implied by Super Admin.',
+  },
+  'credits:approve_self_grant': {
+    label: 'Approve self-grants',
+    description: 'Approve credits another admin adds to their own account. Never implied by Super Admin.',
+  },
 };

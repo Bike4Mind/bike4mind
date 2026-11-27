@@ -89,6 +89,19 @@ export const DATA_LAKE_WRITE_TOOL_NAMES = [
 /** The data-lake tools that only read; withheld from an API key without datalake:read the same way. */
 export const DATA_LAKE_READ_TOOL_NAMES = ['list_my_data_lakes'] as const satisfies readonly B4MLLMTools[];
 
+/**
+ * The tools that read or reuse the content of the caller's files. A key without files:read is not
+ * offered these (fileToolsDeniedFor in server-utils files/fileScopes.ts).
+ */
+export const FILE_READ_TOOL_NAMES = [
+  'search_knowledge_base',
+  'retrieve_knowledge_content',
+  'count_knowledge_base',
+  'describe_knowledge_base',
+  'edit_file',
+  'edit_image',
+] as const satisfies readonly B4MLLMTools[];
+
 /** Every data-lake tool - offered, trimmed and paired together (see resolveEnabledTools in services). */
 export const DATA_LAKE_TOOL_NAMES = [
   ...DATA_LAKE_READ_TOOL_NAMES,

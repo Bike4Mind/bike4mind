@@ -1,5 +1,97 @@
 # @bike4mind/common
 
+## 31.4.0
+
+### Minor Changes
+
+- [#8602](https://github.com/Bike4Mind/bike4mind/pull/8602) [`36528fc`](https://github.com/Bike4Mind/bike4mind/commit/36528fc1f58b57e3df068623182179f189a544a4) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - hold the block-end push when the user muted agent run updates
+
+## 31.3.2
+
+### Patch Changes
+
+- [#8753](https://github.com/Bike4Mind/bike4mind/pull/8753) [`cce8f4c`](https://github.com/Bike4Mind/bike4mind/commit/cce8f4ce0b2912a23d561d1e12145cf03a1aef4d) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - tighten response fields for viewers of shared notebooks
+
+## 31.3.1
+
+### Patch Changes
+
+- [#8747](https://github.com/Bike4Mind/bike4mind/pull/8747) [`4dcc1f9`](https://github.com/Bike4Mind/bike4mind/commit/4dcc1f9cee9fdddb842c844617152106f11cd001) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - limit the fields the users subscription pushes
+
+## 31.3.0
+
+### Minor Changes
+
+- [#8607](https://github.com/Bike4Mind/bike4mind/pull/8607) [`25d3b82`](https://github.com/Bike4Mind/bike4mind/commit/25d3b82431087b7e5b393bc049ce6c53804d7a48) Thanks [@onoya](https://github.com/onoya)! - host core tutorials in the notebook with a picker, offer and per-step skip
+
+- [#8717](https://github.com/Bike4Mind/bike4mind/pull/8717) [`1338927`](https://github.com/Bike4Mind/bike4mind/commit/1338927868a5f77b806633effcc8a86da7841927) Thanks [@angelolao](https://github.com/angelolao)! - add OpenAI cache-write prerequisites
+
+- [#8723](https://github.com/Bike4Mind/bike4mind/pull/8723) [`e1dee9d`](https://github.com/Bike4Mind/bike4mind/commit/e1dee9da4be4aef95f2efacd97cc022c0b5c7273) Thanks [@onoya](https://github.com/onoya)! - sync web notebooks from a change feed instead of a full re-list
+
+- [#8746](https://github.com/Bike4Mind/bike4mind/pull/8746) [`5b285a2`](https://github.com/Bike4Mind/bike4mind/commit/5b285a2304fd865fba39fd15130a69339424d99a) Thanks [@onoya](https://github.com/onoya)! - show progress toward a reversible-tier graduation bar on the Detections page
+
+### Patch Changes
+
+- [#8665](https://github.com/Bike4Mind/bike4mind/pull/8665) [`cf0972e`](https://github.com/Bike4Mind/bike4mind/commit/cf0972ebfac550839150f9a0773fa27ed103c9bc) Thanks [@onoya](https://github.com/onoya)! - count verdicts on review-only detections in Graded and Precision
+
+- [#8705](https://github.com/Bike4Mind/bike4mind/pull/8705) [`2461e22`](https://github.com/Bike4Mind/bike4mind/commit/2461e2267ee7583121e554393aba27126cdccd70) Thanks [@vinchi777](https://github.com/vinchi777)! - require matching API key scopes on artifact, notebook, lake and integration routes
+
+- [#8718](https://github.com/Bike4Mind/bike4mind/pull/8718) [`8792f27`](https://github.com/Bike4Mind/bike4mind/commit/8792f27429dc3a9913edcb78e9b9b65ce167c880) Thanks [@vinchi777](https://github.com/vinchi777)! - bind Slack requests to their installation and scope Slack data
+
+- [#8722](https://github.com/Bike4Mind/bike4mind/pull/8722) [`56e6187`](https://github.com/Bike4Mind/bike4mind/commit/56e61877fc1120b0f7300eb3735ff282be194844) Thanks [@onoya](https://github.com/onoya)! - keyset-page the notebook list and stop writing on read
+
+- [#8749](https://github.com/Bike4Mind/bike4mind/pull/8749) [`b25356b`](https://github.com/Bike4Mind/bike4mind/commit/b25356bef91f562d363749d1174246e0d51dd186) Thanks [@vinchi777](https://github.com/vinchi777)! - open admin assistant tools only in the acting admin's own session
+
+- [#8750](https://github.com/Bike4Mind/bike4mind/pull/8750) [`2244e8c`](https://github.com/Bike4Mind/bike4mind/commit/2244e8cfa4a77790f8db454748f48c2bdd3a12e0) Thanks [@vinchi777](https://github.com/vinchi777)! - keep prompt text, summaries and credentials out of logs and analytics
+
+- [#8752](https://github.com/Bike4Mind/bike4mind/pull/8752) [`8e8cbf2`](https://github.com/Bike4Mind/bike4mind/commit/8e8cbf2285aef973abf3b72c055c48e80f55963b) Thanks [@vinchi777](https://github.com/vinchi777)! - bind webhook deliveries and platform email addresses to their owners
+
+## 31.2.0
+
+### Minor Changes
+
+- [#8656](https://github.com/Bike4Mind/bike4mind/pull/8656) [`515eea3`](https://github.com/Bike4Mind/bike4mind/commit/515eea3b9edb3304ef88282cfd40d73ccc295410) Thanks [@vinchi777](https://github.com/vinchi777)! - reuse saved characters as shot references in Productions
+
+- [#8697](https://github.com/Bike4Mind/bike4mind/pull/8697) [`bc52a90`](https://github.com/Bike4Mind/bike4mind/commit/bc52a9071c39c82dad846a7c167c442035b34dd4) Thanks [@onoya](https://github.com/onoya)! - sign the headless host in with its own client id
+
+### Patch Changes
+
+- [#8512](https://github.com/Bike4Mind/bike4mind/pull/8512) [`1f3511b`](https://github.com/Bike4Mind/bike4mind/commit/1f3511bbf98ae6bba50295f687462199c0744273) Thanks [@jarlacut](https://github.com/jarlacut)! - allocate artifact version numbers atomically
+
+- [#8708](https://github.com/Bike4Mind/bike4mind/pull/8708) [`dd11de0`](https://github.com/Bike4Mind/bike4mind/commit/dd11de0152114690f0056afadab899ec83c4bc4c) Thanks [@vinchi777](https://github.com/vinchi777)! - require full admin for trust-anchor admin writes and scope support reads
+
+- [#8709](https://github.com/Bike4Mind/bike4mind/pull/8709) [`fee111c`](https://github.com/Bike4Mind/bike4mind/commit/fee111c3f3b31cab78eac80fab7d63589c72627f) Thanks [@vinchi777](https://github.com/vinchi777)! - grandfather only pre-cutoff keys and apply key scope to rotation, fanout and billing
+
+## 31.1.0
+
+### Minor Changes
+
+- [#8408](https://github.com/Bike4Mind/bike4mind/pull/8408) [`6afd4ea`](https://github.com/Bike4Mind/bike4mind/commit/6afd4eab8bb90acbfeec78b4eed9058a60198bc2) Thanks [@dea0030](https://github.com/dea0030)! - report a step total on agent executions so clients can show real progress
+
+- [#8497](https://github.com/Bike4Mind/bike4mind/pull/8497) [`8623a01`](https://github.com/Bike4Mind/bike4mind/commit/8623a0113b7909e3ce148e9396bf6d97c09ab7b4) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - voice memo to drafted follow-up and reminders
+
+- [#8537](https://github.com/Bike4Mind/bike4mind/pull/8537) [`a11c0cf`](https://github.com/Bike4Mind/bike4mind/commit/a11c0cf401247443a6376e5b79d6900a0f86a213) Thanks [@maconard](https://github.com/maconard)! - pin data files to a saved function
+
+- [#8569](https://github.com/Bike4Mind/bike4mind/pull/8569) [`3f00e93`](https://github.com/Bike4Mind/bike4mind/commit/3f00e934992a3492dbb8f47505bd8b067a5bfe27) Thanks [@angelolao](https://github.com/angelolao)! - meter diagnostic calls and isolate recovery failures
+
+- [#8589](https://github.com/Bike4Mind/bike4mind/pull/8589) [`12b358b`](https://github.com/Bike4Mind/bike4mind/commit/12b358bacecc2013f9e2bd1374ed58168b36c658) Thanks [@poysama](https://github.com/poysama)! - add status domain schemas, projection and merge
+
+- [#8612](https://github.com/Bike4Mind/bike4mind/pull/8612) [`3e0c195`](https://github.com/Bike4Mind/bike4mind/commit/3e0c195286f2ec591f5c33721019a9d424cc25bb) Thanks [@poysama](https://github.com/poysama)! - make the system email sender an admin setting
+
+- [#8639](https://github.com/Bike4Mind/bike4mind/pull/8639) [`8c8733d`](https://github.com/Bike4Mind/bike4mind/commit/8c8733d96c49ee975bc6ae8a9c180315823300a5) Thanks [@cgtorniado](https://github.com/cgtorniado)! - let admins tune provider spend alarm ceilings
+
+- [#8643](https://github.com/Bike4Mind/bike4mind/pull/8643) [`2c94804`](https://github.com/Bike4Mind/bike4mind/commit/2c9480498cd3d2a6b24d23540b628815196f92ab) Thanks [@jebie](https://github.com/jebie)! - record the OAuth client a new account signed up through
+
+- [#8664](https://github.com/Bike4Mind/bike4mind/pull/8664) [`5e541b9`](https://github.com/Bike4Mind/bike4mind/commit/5e541b9abc6595f00af26afc8af83a7a633ba44e) Thanks [@onoya](https://github.com/onoya)! - score email-subdomain signup bursts and instant API keys in the signup risk score
+
+### Patch Changes
+
+- [#8601](https://github.com/Bike4Mind/bike4mind/pull/8601) [`17ce359`](https://github.com/Bike4Mind/bike4mind/commit/17ce35993635ab936e44104c60a6a91d1ba2f76a) Thanks [@maconard](https://github.com/maconard)! - generate UUIDs on plain-http self-host installs
+
+- [#8632](https://github.com/Bike4Mind/bike4mind/pull/8632) [`ba9375c`](https://github.com/Bike4Mind/bike4mind/commit/ba9375cba036cb49875994f90f48015561036d55) Thanks [@onoya](https://github.com/onoya)! - stop a quest with no readable message before it reaches the model
+
+- [#8655](https://github.com/Bike4Mind/bike4mind/pull/8655) [`4d0b544`](https://github.com/Bike4Mind/bike4mind/commit/4d0b544ae129a8a9a822f5e66b40686ad6196983) Thanks [@vinchi777](https://github.com/vinchi777)! - count knowledge base tool runs in the Answer Diagnosis Tools row
+
 ## 31.0.0
 
 ### Major Changes

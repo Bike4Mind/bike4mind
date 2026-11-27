@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/utils",
-  "version": "13.0.0",
+  "version": "13.1.5",
   "publishConfig": {
     "access": "restricted"
   },
@@ -298,9 +298,8 @@
     "clean": "rm -rf dist",
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
-    "typecheck": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit --types node",
-    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "typecheck:tsc": "tsc --noEmit",
+    "typecheck":"tsgo --noEmit --types node",
     "dev": "tsdown --watch",
     "test": "vitest run",
     "generate:webp-wasm": "node scripts/generateWebpDecoderWasm.mjs"

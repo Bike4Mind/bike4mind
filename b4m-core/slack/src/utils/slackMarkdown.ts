@@ -99,12 +99,30 @@ function tableToList(table: Table): List {
 }
 
 /**
+ * A model-written link never hides where it goes: unless the turn cited that URL or the label
+ * already names its host, the label carries the destination host. Non-http(s) links keep only
+ * the label.
+ */
+function toSlackLink(label: string, url: string, citedUrls: ReadonlySet<string>): string {
+  let host: string;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return label;
+    host = parsed.hostname;
+  } catch {
+    return label;
+  }
+  if (citedUrls.has(url) || label.toLowerCase().includes(host.toLowerCase())) return `<${url}|${label}>`;
+  return `<${url}|${label} (${host})>`;
+}
+
+/**
  * Process Markdown text for Slack delivery.
  *
  * 1. Parses the Markdown into an AST (unified + remark-parse + remark-gfm).
  * 2. Replaces all `table` nodes with `list` nodes (preserving link nodes).
  * 3. Stringifies the AST back to Markdown.
- * 4. Converts markdown links `[text](url)` to Slack links `<url|text>`.
+ * 4. Converts markdown links to Slack links (see toSlackLink).
  *
  * Returns clean Markdown with tables converted to lists and links in Slack format.
  */
@@ -128,11 +146,13 @@ export function processMarkdownForSlack(markdown: string, citables?: CitableSour
 
     let text = processor.stringify(tree);
 
-    // Convert markdown links [text](url) to Slack links <url|text>.
     // Link nodes in the AST are serialized cleanly by remark-stringify (no escaping).
     // Known limitation: URLs containing parentheses (e.g., Wikipedia) will truncate
     // at the first ')'. GitHub/Jira URLs never contain parentheses so this is safe.
-    text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<$2|$1>');
+    const citedUrls = new Set((citables ?? []).map(c => c.url).filter((u): u is string => !!u));
+    text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, url: string) =>
+      toSlackLink(label, url, citedUrls)
+    );
 
     return { text };
   } catch (error) {

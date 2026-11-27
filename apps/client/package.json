@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/client",
-  "version": "0.1.109",
+  "version": "0.1.115",
   "private": true,
   "scripts": {
     "postinstall": "node scripts/copy-tavern-assets.mjs && node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs",
@@ -22,9 +22,8 @@
     "lint": "eslint .",
     "check:bundle-size": "node scripts/check-server-bundle-size.mjs",
     "format": "prettier --write './**/*.{ts,tsx}'",
-    "typecheck": "NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit",
-    "typecheck:fast": "tsgo --noEmit",
+    "typecheck:tsc": "NODE_OPTIONS='--max-old-space-size=8192' tsc --noEmit",
+    "typecheck":"tsgo --noEmit",
     "test": "VITE_CONFIG_NATIVE_IGNORE_WARNING=true vitest run",
     "test:integration": "VITE_CONFIG_NATIVE_IGNORE_WARNING=true CLIENT_TEST_LANE=integration vitest run",
     "test:repo": "VITE_CONFIG_NATIVE_IGNORE_WARNING=true CLIENT_TEST_LANE=repo vitest run",
@@ -48,10 +47,13 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
     "@aws-sdk/client-apigatewaymanagementapi": "^3.1150.0",
+    "@aws-sdk/client-application-auto-scaling": "3.1151.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1150.0",
     "@aws-sdk/client-cloudfront": "^3.1150.0",
     "@aws-sdk/client-cloudwatch": "^3.1150.0",
     "@aws-sdk/client-cloudwatch-logs": "^3.1150.0",
+    "@aws-sdk/client-ecs": "3.1151.0",
+    "@aws-sdk/client-elastic-load-balancing-v2": "3.1151.0",
     "@aws-sdk/client-eventbridge": "^3.1150.0",
     "@aws-sdk/client-lambda": "^3.1150.0",
     "@aws-sdk/client-s3": "^3.1150.0",

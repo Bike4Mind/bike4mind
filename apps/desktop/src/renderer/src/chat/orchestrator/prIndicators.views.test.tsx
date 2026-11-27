@@ -10,7 +10,8 @@ import { ORCHESTRATOR_VIEWS } from './orchestratorViews';
 import { StageLayout } from './StageLayout';
 import { agentFixture, createThemedMount, el, viewAgentFixture, snapshotFixture } from './testUtils';
 import { renderOrchestratorView } from './viewRegistry';
-import { OverflowStack } from './tavern/OverflowStack';
+import { OverflowStack } from './scene/OverflowStack';
+import { chatBackedHostBridge } from '../../__fixtures__/chatBackedHostBridge';
 
 const themed = createThemedMount();
 const onSelect = vi.fn();
@@ -36,11 +37,11 @@ const props: OrchestratorViewProps = {
   personas: assignPersonas(roster),
 };
 const indicators = (root: ParentNode = document) => [...root.querySelectorAll('[data-pr-number]')];
-const agentIndicators = () =>
-  indicators().filter(badge => !badge.closest('[data-testid="orchestrator-tavern-quest-board"]'));
+const agentIndicators = () => indicators().filter(badge => !badge.closest('[data-testid$="-quest-board"]'));
 
 beforeEach(() => {
   (window as unknown as { b4m: unknown }).b4m = {
+    host: chatBackedHostBridge(),
     chat: {
       getSession: vi.fn().mockResolvedValue(null),
       onStreamEvent: vi.fn(() => () => undefined),
@@ -145,9 +146,11 @@ describe('PR indicators across Show agents views', () => {
   it('the overflow menu shows PRs without changing agent selection', async () => {
     await themed.render(
       <OverflowStack
+        testId="orchestrator-tavern"
         zone="workbench"
+        place="at the workbenches"
         point={{ x: 50, y: 50 }}
-        stacked={[{ agent: agents[0], character: 1, name: 'Worker' }]}
+        stacked={[{ agent: agents[0], sprite: { src: 'worker.png' }, name: 'Worker' }]}
         selectedId={null}
         onSelect={onSelect}
         onOpenPr={onOpenPr}

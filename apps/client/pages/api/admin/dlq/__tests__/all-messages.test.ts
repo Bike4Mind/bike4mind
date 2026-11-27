@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   counts: {} as Record<string, number | Error>,
   inFlight: {} as Record<string, number>,
   messages: {} as Record<string, Array<Record<string, unknown>> | Error>,
+  restricted: new Set<string>(),
   browse: vi.fn(),
   findFailures: vi.fn(),
   countAttempts: vi.fn(),
@@ -31,17 +32,18 @@ vi.mock('@server/middlewares/adminApi', () => ({
   },
 }));
 vi.mock('@bike4mind/server-utils/utils/dlqRegistry', () => ({
-  getDlqRegistry: () => [
-    {
-      label: 'billing',
-      sourceQueue: 'billingQueue',
-      describe: (body: { invoiceId?: string }) => (body.invoiceId ? { type: 'Invoice', id: body.invoiceId } : null),
-    },
-    { label: 'files', sourceQueue: 'filesQueue' },
-    { label: 'empty', sourceQueue: 'emptyQueue' },
-    { label: 'broken', sourceQueue: null },
-    { label: 'offstage', sourceQueue: 'cronQueue' },
-  ],
+  getDlqRegistry: () =>
+    [
+      {
+        label: 'billing',
+        sourceQueue: 'billingQueue',
+        describe: (body: { invoiceId?: string }) => (body.invoiceId ? { type: 'Invoice', id: body.invoiceId } : null),
+      },
+      { label: 'files', sourceQueue: 'filesQueue' },
+      { label: 'empty', sourceQueue: 'emptyQueue' },
+      { label: 'broken', sourceQueue: null },
+      { label: 'offstage', sourceQueue: 'cronQueue' },
+    ].map(entry => ({ ...entry, restrictedBody: h.restricted.has(entry.label) })),
   getDlqUrl: (label: string) => {
     if (label === 'offstage') throw new Error('Queue not linked on this stage');
     return `dlq:${label}`;
@@ -86,9 +88,9 @@ const sqsMessage = (id: string, sent: number, body = '{}') => ({
   Attributes: { SentTimestamp: String(sent), ApproximateReceiveCount: '2' },
 });
 
-async function call() {
+async function call(user: Record<string, unknown> = { id: 'admin-1' }) {
   const { req, res } = createMocks({ method: 'GET' });
-  (req as unknown as Record<string, unknown>).user = { id: 'admin-1' };
+  (req as unknown as Record<string, unknown>).user = user;
   await h.handler!(req, res);
   return res._getJSONData();
 }
@@ -97,6 +99,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.counts = { billing: 2, files: 1, empty: 0, broken: 1 };
   h.inFlight = {};
+  h.restricted = new Set();
   h.messages = {
     billing: [sqsMessage('b-old', 100, '{"invoiceId":"in_1"}'), sqsMessage('b-new', 300)],
     files: [sqsMessage('f-mid', 200)],
@@ -134,6 +137,27 @@ describe('GET /api/admin/dlq/all-messages', () => {
       ['f-mid', 'files'],
       ['b-old', 'billing'],
     ]);
+  });
+
+  it('withholds a restricted queue body from a delegated admin and keeps other queues readable', async () => {
+    h.restricted = new Set(['billing']);
+    h.messages.billing = [sqsMessage('b-new', 300, '{"to":"a@example.com","code":"123456"}')];
+    h.messages.files = [sqsMessage('f-mid', 200, '{"work":"visible"}')];
+    const { messages } = await call({ id: 'admin-1', isAdmin: false });
+    const byId = (id: string) => messages.find((m: { messageId: string }) => m.messageId === id);
+    expect(byId('b-new')).toMatchObject({ body: '', bodyWithheld: true });
+    expect(JSON.stringify(byId('b-new'))).not.toContain('123456');
+    expect(byId('f-mid').body).toBe('{"work":"visible"}');
+    expect(byId('f-mid')).not.toHaveProperty('bodyWithheld');
+  });
+
+  it('shows a restricted queue body to a full admin', async () => {
+    h.restricted = new Set(['billing']);
+    h.messages.billing = [sqsMessage('b-new', 300, '{"to":"a@example.com","code":"123456"}')];
+    const { messages } = await call({ id: 'admin-1', isAdmin: true });
+    const row = messages.find((m: { messageId: string }) => m.messageId === 'b-new');
+    expect(row.body).toContain('123456');
+    expect(row).not.toHaveProperty('bodyWithheld');
   });
 
   it('describes each message with its queue describe, or null', async () => {

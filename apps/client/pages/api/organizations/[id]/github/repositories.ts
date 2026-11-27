@@ -21,7 +21,7 @@ import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
 
 const logger = new Logger({ metadata: { component: 'org-github-repositories' } });
 
-const handler = baseApi()
+const handler = baseApi({ auth: 'jwtOnly' })
   // rate limited to prevent abuse - this makes real GitHub API calls
   .use(
     rateLimit({

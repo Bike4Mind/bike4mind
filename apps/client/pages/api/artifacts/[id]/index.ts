@@ -1,7 +1,10 @@
+import { ARTIFACT_DB } from '@bike4mind/server-utils/artifacts/artifactAccess';
 import { artifactService } from '@bike4mind/services';
 import { artifactRepository, artifactContentRepository, artifactVersionRepository } from '@bike4mind/database';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { ApiKeyScope } from '@bike4mind/common';
+import { assertApiKeyScope } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { hideArtifactDenial } from '@bike4mind/server-utils/artifacts/artifactAccess';
 import { z } from 'zod';
@@ -28,7 +31,10 @@ const UpdateArtifactSchema = z.object({
   versionMessage: z.string().max(500).optional(),
 });
 
-const handler = baseApi()
+const NOTEBOOKS_WRITE_REQUIRED = 'This API key is read-only for notebooks; notebooks:write is required';
+
+// Gated per verb below: the route-level scopes admit read keys for the GET.
+const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_NOTEBOOKS, ApiKeyScope.WRITE_NOTEBOOKS] })
   /**
    * GET /api/artifacts/[id]
    * Get artifact by ID with optional version and content parameters
@@ -91,6 +97,7 @@ const handler = baseApi()
    */
   .put(
     asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
+      assertApiKeyScope(req, [ApiKeyScope.WRITE_NOTEBOOKS], NOTEBOOKS_WRITE_REQUIRED);
       const userId = req.user?.id;
       const artifactId = req.query.id;
 
@@ -104,17 +111,7 @@ const handler = baseApi()
 
       const validatedData = UpdateArtifactSchema.parse(req.body);
 
-      const result = await artifactService.update(
-        userId,
-        { id: artifactId, ...validatedData },
-        {
-          db: {
-            artifacts: artifactRepository,
-            artifactContents: artifactContentRepository,
-            artifactVersions: artifactVersionRepository,
-          },
-        }
-      );
+      const result = await artifactService.update(userId, { id: artifactId, ...validatedData }, { db: ARTIFACT_DB });
 
       return res.json(result);
     })
@@ -125,6 +122,7 @@ const handler = baseApi()
    */
   .delete(
     asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
+      assertApiKeyScope(req, [ApiKeyScope.WRITE_NOTEBOOKS], NOTEBOOKS_WRITE_REQUIRED);
       const userId = req.user?.id;
       const artifactId = req.query.id;
 

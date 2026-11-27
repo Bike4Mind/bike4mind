@@ -17,6 +17,13 @@ export interface SignupRiskFacts {
   minutesToFirstApiKey?: number | null;
   /** Credits spent in the first 24 hours after signup. */
   creditsSpentFirst24h?: number | null;
+  /**
+   * Accounts, this one included, that signed up on the same email subdomain within the configured
+   * window; null when the email host is a bare registrable domain.
+   */
+  emailSubdomainSignups?: number | null;
+  /** Banned accounts among those on the same email subdomain within the window. */
+  bannedEmailSubdomainSignups?: number | null;
 }
 
 export interface SignupRiskContribution {
@@ -59,7 +66,22 @@ export function scoreSignupRisk(facts: SignupRiskFacts, scoring: SignupRiskScori
   if (facts.isDatacenter) add('datacenterNetwork', 1, 'Signed up from a hosting or datacenter network');
   if (facts.wafAnonIp) add('wafAnonIp', 1, 'Signup request labeled as an anonymous IP (VPN, proxy or hosting)');
   if (facts.wafBotSignal) add('wafBotSignal', 1, 'Signup request labeled as bot traffic');
+  const subdomainSignups = facts.emailSubdomainSignups;
+  if (subdomainSignups != null && subdomainSignups >= scoring.emailSubdomainBurstAccounts) {
+    add(
+      'emailSubdomainBurst',
+      1,
+      `${subdomainSignups} accounts signed up on this email subdomain within ${scoring.emailSubdomainWindowHours} hours`
+    );
+  }
+  const bannedSiblings = facts.bannedEmailSubdomainSignups;
+  if (bannedSiblings != null && bannedSiblings > 0) {
+    add('bannedEmailSubdomainSibling', 1, `${bannedSiblings} banned account(s) signed up on this email subdomain`);
+  }
   const minutes = facts.minutesToFirstApiKey;
+  if (minutes != null && minutes >= 0 && minutes * 60 <= scoring.instantApiKeySeconds) {
+    add('instantApiKey', 1, `First API key created ${Math.round(minutes * 60)} seconds after signup`);
+  }
   if (minutes != null && minutes >= 0 && minutes <= scoring.quickApiKeyMinutes) {
     add('quickApiKey', 1, `First API key created ${Math.round(minutes)} minutes after signup`);
   }

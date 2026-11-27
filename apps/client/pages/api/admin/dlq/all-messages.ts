@@ -1,4 +1,4 @@
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, isFullAdmin } from '@bike4mind/common';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError } from '@bike4mind/server-utils/utils/errors';
 import { getDlqRegistry, getDlqUrl, type RegisteredDlqDescriptor } from '@bike4mind/server-utils/utils/dlqRegistry';
@@ -52,7 +52,8 @@ async function mapWithConcurrency<T, R>(
 async function listQueue(
   { entry, dlqUrl, depth }: BrowsableQueue,
   logsLookup: Promise<ConsumerLogs | null>,
-  deadline: number
+  deadline: number,
+  revealRestrictedBody: boolean
 ) {
   const received = await browseDlqMessages(dlqUrl, { limit: PER_QUEUE_LIMIT, maxReceives: MAX_RECEIVES_PER_QUEUE });
   const ids = received.flatMap(message => (message.MessageId ? [message.MessageId] : []));
@@ -72,6 +73,7 @@ async function listQueue(
       replayAttempts: attempts?.get(message.MessageId!),
       schedule: schedules.get(message.MessageId!),
       targetLogs: targetLogs.get(message.MessageId!),
+      revealRestrictedBody,
     })
   );
 }
@@ -131,7 +133,8 @@ const handler = adminApi({
       const messages = await listQueue(
         queue,
         logsLookup.then(logs => logs[index] ?? null),
-        enrichmentDeadline
+        enrichmentDeadline,
+        isFullAdmin(req.user)
       );
       return { label, messages, failed: false };
     } catch (error) {

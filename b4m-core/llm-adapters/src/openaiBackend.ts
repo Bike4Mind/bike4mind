@@ -40,6 +40,7 @@ import type {
 } from 'openai/resources/responses/responses';
 import { Stream } from 'openai/streaming';
 import { Logger } from '@bike4mind/observability';
+import { recordProviderCredentialUse } from './providerCredentialMetrics';
 import { executeToolsBatch, shouldEndTurnAfterTools, toolFailureLogLevel } from './executeToolsBatch';
 import { attachPreToolText } from './replayPreToolText';
 import { logToolRound, summarizeToolOutcomes } from './toolRoundTiming';
@@ -1123,6 +1124,7 @@ export class OpenAIBackend implements ICompletionBackend {
     if (retrySignal && this.usesFederatedCredentials) {
       throw new Error('Abort-aware completion retries do not support federated credentials');
     }
+    recordProviderCredentialUse('openai', this.usesFederatedCredentials ? 'federated' : 'static');
     this.currentModel = model;
     options = {
       temperature: 0.9,

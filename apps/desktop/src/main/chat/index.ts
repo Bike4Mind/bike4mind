@@ -4,6 +4,7 @@ import { createStudioDiagnostics } from './studio/StudioDiagnostics';
 import { registerStudio } from './studio/registerStudio';
 import { homedir } from 'node:os';
 import { registerLibrary } from './library/registerLibrary';
+import { registerProductions } from './productions/registerProductions';
 import { copyFile, readFile, stat, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { PERMISSION_LISTS, type PermissionRuleLists, type PermissionScope } from '@shared/permissions';
@@ -27,8 +28,6 @@ import type {
   ChatAttachmentInput,
   ChatSessionStatusEvent,
   ChatStreamEvent,
-  ProjectInspection,
-  SendMessageRequest,
   StartSpawnSuggestionRequest,
   StartSideChatRequest,
   UpdateProjectRequest,
@@ -48,6 +47,7 @@ import type {
 import type { ShareDirectoryResult } from '@shared/directoryRequest';
 import {
   IPC_CHANNELS,
+  type ArchiveAnswer,
   type BrowserFreezeFrameRequest,
   type BrowserGoAction,
   type BrowserGoRequest,
@@ -81,7 +81,7 @@ import { registerImageMenuIpc } from './imageMenuIpc';
 import { registerFilePathLinkIpc } from './filePathLinks';
 import { registerSessionExportIpc } from './sessionExportIpc';
 import { registerLocalDataExportIpc } from './localDataExportIpc';
-import { archiveAskingFirst } from './sessionArchive';
+import { confirmArchiveFromIpc } from './sessionArchive';
 import { registerSessionCreateIpc } from './sessionCreateIpc';
 import { registerSessionOrchestrateIpc } from './sessionOrchestrateIpc';
 import { placeNewSession, registerSidebarIpc } from './sidebarIpc';
@@ -97,7 +97,7 @@ import { registerModelProtocol } from './model3d/engineProtocol';
 import { ModelLiveViews } from './model3d/ModelLiveViews';
 import { ModelVersionStore } from './model3d/ModelVersionStore';
 import { modelIpcHandlers } from './model3d/modelIpc';
-import { sessionForRenderer, type ChatService, type ChatServiceDeps } from './ChatService';
+import type { ChatService, ChatServiceDeps } from './ChatService';
 import { logDownstream } from './devLogDownstream';
 import { McpManager } from './mcp/McpManager';
 import { McpServerStore } from './mcp/McpServerStore';
@@ -502,8 +502,9 @@ export function registerChat(
     logger.warn(`CHAT: local history is unavailable: ${err instanceof Error ? err.message : err}`);
   }
 
-  const broadcast = (event: ChatStreamEvent) => {
-    send(IPC_CHANNELS.chatStreamEvent, event);
+  // Windows get stream events from the host protocol (HostServer); this is main's own reaction to them.
+  const observeStreamEvent = (event: ChatStreamEvent) => {
+    logDownstream('session/event', event);
     if (event.type === 'tool-end') pullRequests.observeToolEnd(event.sessionId, event.call);
     if (event.type === 'tool-end' && event.call.media?.length) {
       void studioIntegration
@@ -523,7 +524,8 @@ export function registerChat(
         : null;
     },
     emit: (sessionId, job) => {
-      broadcast(runtime.eventLog.append({ type: 'video-job', sessionId, job }));
+      // Through the relay, so windows hear it over the host protocol as well as main reacting.
+      runtimeEvents.streamEvent(runtime.eventLog.append({ type: 'video-job', sessionId, job }));
       if (job.state === 'succeeded' && job.media)
         void studioIntegration
           .indexChatSession(sessionId, true)
@@ -600,25 +602,28 @@ export function registerChat(
   );
 
   const events: HostEventSink = {
-    streamEvent: broadcast,
-    sessionSummary: summary => send(IPC_CHANNELS.chatSessionSummary, summary),
+    streamEvent: observeStreamEvent,
+    sessionSummary: summary => logDownstream('session/summaryChanged', summary),
     sessionStatus: (event, statusChanged) => {
-      send(IPC_CHANNELS.chatSessionStatus, event);
+      logDownstream('session/statusChanged', event);
       hooks.observeSessionStatus?.(event);
       // Only reached once a turn has run, long after pullRequests below exists. A background job
       // starting or ending re-sends 'done' without a new turn, so only a real change settles one.
       if (statusChanged && (event.status === 'done' || event.unreadReply)) pullRequests.turnSettled(event.sessionId);
     },
-    queueChanged: event => send(IPC_CHANNELS.chatQueueChanged, event),
-    taskDecisions: decisions => send(IPC_CHANNELS.chatTaskDecisions, decisions),
+    queueChanged: event => logDownstream('session/queueChanged', event),
+    taskDecisions: decisions => logDownstream('session/taskDecisionsChanged', decisions),
+    // Loops are not on the host protocol yet, so their state still reaches windows over IPC.
     loopChanged: (sessionId, state) => send(IPC_CHANNELS.chatLoopChanged, { sessionId, state }),
   };
 
   // Annotated: the machine tools' callbacks read the runtime's store, so inference would cycle.
   const hostEvents = new HostEventRelay(error => logger.warn(`HOST: a protocol listener failed: ${String(error)}`));
+  // The runtime's own sink, so a change main makes outside the runtime reaches the host protocol too.
+  const runtimeEvents = hostEvents.tee(events);
   const runtime: HostRuntime = new HostRuntime({
     environment,
-    events: hostEvents.tee(events),
+    events: runtimeEvents,
     auth,
     logger,
     protection,
@@ -686,6 +691,7 @@ export function registerChat(
     store,
     logger,
     send,
+    sessionSummary: summary => runtimeEvents.sessionSummary(summary),
   });
 
   const studioIntegration = registerStudio({
@@ -702,13 +708,10 @@ export function registerChat(
     changed: event => send(IPC_CHANNELS.studioChanged, event),
   });
   registerLibrary({ ipc: ipcMain, directory: userData, sessions: store, media, auth });
+  registerProductions({ ipc: ipcMain, sessions: store, media, auth });
   service.studioDisposed = studioIntegration.dispose;
   service.studioWithSessionDeletion = studioIntegration.withSessionDeletion;
 
-  ipcMain.handle(IPC_CHANNELS.chatListModels, (_event, force: unknown) =>
-    runtime.listModels(force === 'local' ? 'local' : force === true)
-  );
-  ipcMain.handle(IPC_CHANNELS.chatDraftDefaults, () => runtime.draftDefaults());
   registerModelServersIpc(ipcMain, modelServers, async () => {
     const probed = await localHardware.probed();
     return probed && machineView(probed);
@@ -728,14 +731,12 @@ export function registerChat(
     broadcast: location => send(IPC_CHANNELS.chatSpawnLocation, location),
   });
   ipcMain.handle(IPC_CHANNELS.chatListCreationTools, (_event, model: string) => service.listCreationTools(model));
-  ipcMain.handle(IPC_CHANNELS.chatSetSessionArchived, (event, sessionId: unknown, archived: unknown) => {
-    if (typeof sessionId !== 'string' || typeof archived !== 'boolean') return null;
-    return archiveAskingFirst(
-      decision => runtime.setSessionArchived(sessionId, archived, decision),
-      options => {
-        const window = BrowserWindow.fromWebContents(event.sender);
-        return window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options);
-      }
+  // Archiving itself goes through session/setArchived; only the question is asked here, where
+  // Electron's dialog lives.
+  ipcMain.handle(IPC_CHANNELS.chatConfirmArchive, async (event, raw: unknown): Promise<ArchiveAnswer | null> => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    return confirmArchiveFromIpc(raw, options =>
+      window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options)
     );
   });
   ipcMain.handle(IPC_CHANNELS.chatListSkills, (_event, raw: unknown) => {
@@ -925,10 +926,8 @@ export function registerChat(
   });
   ipcMain.handle(IPC_CHANNELS.capabilitiesGetState, () => capabilityIpc.getState());
   ipcMain.handle(IPC_CHANNELS.capabilitiesRevoke, (_event, grantId: unknown) => capabilityIpc.revoke(grantId));
-  ipcMain.handle(IPC_CHANNELS.chatGetSessionStatuses, () => runtime.sessionStatuses());
   registerSessionCreateIpc(ipcMain, {
     createSession: mode => runtime.createSession(mode),
-    createCodeSession: request => runtime.createCodeSession(request),
     place: (sessionId, sectionId) =>
       placeNewSession(sidebarSections, sessionId, sectionId, error =>
         logger.warn(`CHAT: could not place new session in its sidebar section: ${String(error)}`)
@@ -942,19 +941,8 @@ export function registerChat(
   });
 
   ipcMain.handle(IPC_CHANNELS.chatPickProjectDirectory, (event): Promise<string | null> => pickDirectory(event.sender));
-  ipcMain.handle(IPC_CHANNELS.chatListRecentFolders, () => runtime.listRecentFolders());
   ipcMain.handle(IPC_CHANNELS.chatLaunchSignals, () =>
     detectLaunchSignals({ home: homedir(), recentFolders: () => runtime.listRecentFolders() })
-  );
-  ipcMain.handle(IPC_CHANNELS.chatRemoveRecentFolder, (_event, directory: unknown) =>
-    typeof directory === 'string' ? runtime.forgetRecentFolder(directory) : runtime.listRecentFolders()
-  );
-
-  // Reading branches is a git call on a path the user just chose in a native dialog, so it is
-  // not gated: nothing here writes, and the alternative is a branch field the user must type
-  // from memory.
-  ipcMain.handle(IPC_CHANNELS.chatInspectProject, (_event, directory: string): Promise<ProjectInspection> =>
-    runtime.inspectProject(directory)
   );
 
   ipcMain.handle(
@@ -970,9 +958,6 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatRemoveContextDirectory, (_event, sessionId: string, directory: string) =>
     service.removeContextDirectory(sessionId, directory)
   );
-  ipcMain.handle(IPC_CHANNELS.chatGetSession, async (_event, sessionId: string, viewed?: boolean) =>
-    sessionForRenderer(await runtime.getSession(sessionId, viewed === true))
-  );
   // Keyed by session rather than by a path from the renderer, so this only ever reads the folder
   // the session's own tools run in. A failure is logged, not shown: the bar is a passive readout,
   // and a repository git cannot read already says so on the branch chip beside it.
@@ -986,9 +971,6 @@ export function registerChat(
       return null;
     }
   });
-  ipcMain.handle(IPC_CHANNELS.chatRenameSession, (_event, sessionId: string, title: string) =>
-    runtime.renameSession(sessionId, title)
-  );
   const isIdList = (value: unknown): value is string[] =>
     Array.isArray(value) && value.every(id => typeof id === 'string');
   ipcMain.handle(IPC_CHANNELS.chatInspectWorktreeRemoval, (_event, sessionId: unknown, alsoDeleting: unknown) => {
@@ -1018,27 +1000,6 @@ export function registerChat(
     await knownRepository(directory);
     return service.revealWorktree(directory, path, listed => shell.showItemInFolder(listed));
   });
-  ipcMain.handle(IPC_CHANNELS.chatDeleteSession, async (_event, sessionId: unknown, removeWorktree: unknown) => {
-    if (typeof sessionId !== 'string' || (removeWorktree !== undefined && typeof removeWorktree !== 'boolean')) {
-      throw new Error('Invalid delete request');
-    }
-    // The Electron dialog lists what cleanup discards before the user confirms.
-    await runtime.deleteSession(sessionId, removeWorktree === true, true);
-  });
-  ipcMain.handle(
-    IPC_CHANNELS.chatDeleteSessionTree,
-    (_event, sessionId: unknown, nestedIds: unknown, removeWorktree: unknown, nestedWorktreeIds: unknown) => {
-      if (
-        typeof sessionId !== 'string' ||
-        !isIdList(nestedIds) ||
-        (removeWorktree !== undefined && typeof removeWorktree !== 'boolean') ||
-        (nestedWorktreeIds !== undefined && !isIdList(nestedWorktreeIds))
-      ) {
-        throw new Error('Invalid delete request');
-      }
-      return runtime.deleteSessionTree(sessionId, nestedIds, removeWorktree === true, nestedWorktreeIds ?? []);
-    }
-  );
   const isKnownSession = (sessionId: string) =>
     store.get(sessionId).then(
       session => session !== null,
@@ -1046,8 +1007,6 @@ export function registerChat(
     );
   registerSidebarIpc(ipcMain, sidebarSections, isKnownSession);
   registerComposerDraftsIpc(ipcMain, composerDrafts, composerDraftsLoaded, isKnownSession);
-  ipcMain.handle(IPC_CHANNELS.chatSendMessage, (_event, request: SendMessageRequest) => runtime.sendMessage(request));
-  ipcMain.handle(IPC_CHANNELS.chatStopReply, (_event, sessionId: string) => runtime.stopReply(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatLoopCommand, (_event, sessionId: string, args: string) =>
     service.loopCommand(sessionId, args)
   );
@@ -1073,16 +1032,9 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatGetRunSpend, (_event, rootSessionId: unknown) =>
     typeof rootSessionId === 'string' ? service.getRunSpend(rootSessionId) : { status: 'unattributed' }
   );
-  ipcMain.handle(IPC_CHANNELS.chatGetQueued, (_event, sessionId: string) => runtime.queuedMessages(sessionId));
-  ipcMain.handle(IPC_CHANNELS.chatCancelQueued, (_event, sessionId: string, queuedId: string) =>
-    runtime.cancelQueued(sessionId, queuedId)
-  );
   ipcMain.handle(IPC_CHANNELS.chatGetHeldRelays, (_event, sessionId: string) => service.heldRelaysFor(sessionId));
   ipcMain.handle(IPC_CHANNELS.chatResolveHeldRelay, (_event, sessionId: string, heldId: string, deliver: boolean) =>
     service.resolveHeldRelay(sessionId, heldId, deliver === true)
-  );
-  ipcMain.handle(IPC_CHANNELS.chatSendQueuedNow, (_event, sessionId: string, queuedId: string) =>
-    runtime.sendQueuedNow(sessionId, queuedId)
   );
   ipcMain.handle(IPC_CHANNELS.chatStartSpawnSuggestion, (_event, request: StartSpawnSuggestionRequest) =>
     service.startSpawnSuggestion(request)
@@ -1093,13 +1045,10 @@ export function registerChat(
   ipcMain.handle(IPC_CHANNELS.chatDismissSpawnSuggestion, (_event, sessionId: string, suggestionId: string) =>
     service.dismissSpawnSuggestion(sessionId, suggestionId)
   );
-  // The one way an approval is answered: the app's cards (this handler) and the menu-bar item and
-  // mini Tavern (main/watch, via the returned `respondToApproval`) both land here.
+  // The menu-bar item and mini Tavern (main/watch) answer approvals through the returned
+  // `respondToApproval`; the app's own cards go through the host server's request/respond.
   const respondToApproval = (approvalId: string, answer: ChatApprovalAnswer) =>
     runtime.respondToApproval(approvalId, answer);
-  ipcMain.handle(IPC_CHANNELS.chatRespondToApproval, (_event, approvalId: string, answer: ChatApprovalAnswer) =>
-    respondToApproval(approvalId, answer)
-  );
 
   // The picker runs in main because that is where Electron's dialog lives, and it is the one
   // entry path that can name a file the renderer never saw.

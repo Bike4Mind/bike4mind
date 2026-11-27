@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PromptCacheTtl } from '@bike4mind/common';
 import type {
+  ActiveContextNotice,
   BranchElsewhere,
   ChatApprovalAnswer,
   ChatApprovalMode,
@@ -23,12 +24,17 @@ import type {
 } from '@shared/chat';
 import { carriedNotes, regenerableReply } from '@shared/threadRewind';
 import { summarizeSession } from '@shared/agentOutcome';
-import { normalizeSessionTitle } from '@shared/chat';
+import { HELD_CONTEXT_NOTICE_KINDS, normalizeSessionTitle } from '@shared/chat';
+import { hostChat } from '../host/hostChat';
 import { isUntouchedImport } from './grouping';
 import type { GenerationSettings } from '@shared/generation';
 import type { CreatedSession } from '@shared/ipc';
 import { LOCAL_HOST_ID } from '@shared/hostBridge';
 import { hostClient } from '../host/HostClient';
+import { sessionEvents } from '../host/sessionEvents';
+import { hostForSession } from '../host/sessionHost';
+import { useHostResync } from '../host/useSessionEvents';
+import { useSettledTurns } from './useSettledTurns';
 import { SESSION_PAGE_MAX_LIMIT, SESSION_PAGE_SIZE, SESSION_SEARCH_LIMIT } from '@shared/sessionPage';
 import { keepRequest, NO_PAGING, sessionsFromPage, withRows, type SessionPaging } from './sessionPages';
 import type { ModelRuntimeStatus } from '@shared/models';
@@ -130,6 +136,15 @@ function addNotice(current: ContextNotice[] | undefined, next: ContextNotice): C
   );
   if (at === -1) return [...list, next];
   return list.map((item, index) => (index === at ? next : item));
+}
+
+/**
+ * The held notices replaced by the ones a session read says are in force, so a warning withdrawn
+ * while this window was not hearing is gone and one set meanwhile shows; the rest are kept.
+ */
+function withHeldNotices(current: ContextNotice[], held: readonly ActiveContextNotice[]): ContextNotice[] {
+  const passing = current.filter(item => !item.kind || !HELD_CONTEXT_NOTICE_KINDS.includes(item.kind));
+  return held.reduce<ContextNotice[]>((list, notice) => addNotice(list, notice), passing);
 }
 
 const noticeText = (notices: ContextNotice[]): string | null =>
@@ -265,11 +280,16 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
   // Failed spawns are deleted without a reply ending or a status push to refresh the list.
   useEffect(
     () =>
-      window.b4m.chat.onStreamEvent(event => {
-        if (event.type === 'spawn-failed') void reload();
+      hostClient.onNotification('session/spawnFailed', (_failure, hostId) => {
+        if (hostId === LOCAL_HOST_ID) void reload();
       }),
     [reload]
   );
+
+  // A resync or a reconnect may have skipped a summary or spawn push, so the list is read again.
+  useHostResync(hostId => {
+    if (hostId === LOCAL_HOST_ID) void reload();
+  });
 
   // Patched in place rather than moved to the front, the way pinning is: a generated title does
   // not touch `updatedAt`, so reordering here would disagree with the next reload. An id this
@@ -310,7 +330,7 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
       setCreatingCode(true);
       setCodeError(null);
       try {
-        const result = await window.b4m.chat.createCodeSession(
+        const result = await hostChat.createCodeSession(
           placement ? { ...request, sectionId: placement.sectionId } : request
         );
         if (!result.ok) {
@@ -343,13 +363,17 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
         editSessions(current => current.filter(session => !gone.has(session.id)));
       };
       if (nestedIds.length === 0) {
-        await window.b4m.chat.deleteSession(sessionId, removeWorktree);
+        await hostChat.deleteSession(sessionId, { removeWorktree, allowDiscard: true });
         forget([sessionId]);
         return [sessionId];
       }
-      const { deleted, error } = await window.b4m.chat.deleteSessionTree(sessionId, [...nestedIds], removeWorktree, [
-        ...nestedWorktreeIds,
-      ]);
+      const { deleted, error } = await hostChat.deleteSessionTree(
+        sessionId,
+        [...nestedIds],
+        removeWorktree,
+        [...nestedWorktreeIds],
+        true
+      );
       forget(deleted);
       if (error) throw Object.assign(new Error(error), { deleted });
       return deleted;
@@ -372,7 +396,7 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
   // Patched in place rather than moved, for the same reason pinning is: archiving does not
   // touch `updatedAt`, and the row is about to change section anyway.
   const toggleArchived = useCallback(async (session: ChatSessionSummary) => {
-    const updated = await window.b4m.chat.setSessionArchived(session.id, !session.archived);
+    const updated = await hostChat.setSessionArchived(session.id, !session.archived);
     if (!updated) return;
     editSessions(current => current.map(entry => (entry.id === updated.id ? updated : entry)));
   }, []);
@@ -389,7 +413,7 @@ export function useSessions(keepIds: readonly string[] = []): SessionsController
       retitle(session.title, next);
       let updated: ChatSessionSummary | null = null;
       try {
-        updated = await window.b4m.chat.renameSession(session.id, next);
+        updated = await hostChat.renameSession(session.id, next);
       } catch {
         updated = null;
       }
@@ -576,7 +600,7 @@ export function useModelCatalog(local = false): ModelCatalogController {
       if (!quiet) setLoading(true);
       try {
         const [catalog, status] = await Promise.all([
-          window.b4m.chat.listModels(force),
+          hostChat.listModels(force),
           local ? window.b4m.models.getStatus().catch(() => null) : null,
         ]);
         // A slower, older response must not overwrite a newer one.
@@ -807,7 +831,7 @@ export function useConversation(
   const [projectError, setProjectError] = useState<ProjectBindingError | null>(null);
   const [queued, setQueued] = useState<ChatQueuedMessage[]>([]);
   const [returned, setReturned] = useState<{ id: number; messages: ChatQueuedMessage[] } | null>(null);
-  const [settledTurns, setSettledTurns] = useState(0);
+  const settledTurns = useSettledTurns();
   const [commandProgress, setCommandProgress] = useState<string | null>(null);
   /**
    * Batch counter for returned text, monotonic for the life of this hook.
@@ -822,6 +846,34 @@ export function useConversation(
   // Read inside the IPC subscription, which must not be torn down and rebuilt per session
   // change: a rebuild between 'start' and the first 'delta' would drop tokens.
   const activeSessionId = useRef<string | null>(sessionId);
+
+  // A reconnect may have missed a held notice being set or withdrawn, and notices are not replayed
+  // with the session's events, so the open session's are read again.
+  useHostResync(hostId => {
+    const id = activeSessionId.current;
+    if (!id || hostId !== hostForSession(id)) return;
+    void hostChat
+      .readSession(id)
+      .then(({ notices: held }) => {
+        if (activeSessionId.current === id) setNotices(list => withHeldNotices(list, held));
+      })
+      .catch((error: unknown) => console.warn(`Could not re-read the notices of ${id}`, error));
+  });
+
+  // Every session's notices, the open one's included: the one path they reach the window by.
+  useEffect(
+    () =>
+      hostClient.onNotification('session/contextNotice', ({ event }, hostId) => {
+        if (hostId !== hostForSession(event.sessionId)) return;
+        const apply = (list: ContextNotice[] | undefined): ContextNotice[] =>
+          event.type === 'context-notice'
+            ? addNotice(list, { message: event.message, kind: event.kind })
+            : (list ?? []).filter(item => item.kind !== event.kind);
+        if (event.sessionId === activeSessionId.current) setNotices(current => apply(current));
+        else backgroundNotices.set(event.sessionId, apply(backgroundNotices.get(event.sessionId)));
+      }),
+    []
+  );
   activeSessionId.current = sessionId;
   const onSharedRef = useRef(onShared);
   onSharedRef.current = onShared;
@@ -832,6 +884,8 @@ export function useConversation(
   const streamGate = useRef(new StreamResumeGate());
   // The subscription's handler, so the session load can apply what the gate held. Set before any read can land.
   const applyStreamEvent = useRef<(event: ChatStreamEvent, reflected?: boolean) => void>(() => {});
+  // What the open chat's subscription hands each event to; set by the effect that owns the live-reply state.
+  const receiveStreamEvent = useRef<(event: ChatStreamEvent) => void>(() => {});
   // The chat the reset below last ran for. A share result that lands before then would be wiped by it.
   const resetFor = useRef<string | null>(null);
 
@@ -898,9 +952,9 @@ export function useConversation(
         setTurn(null);
         setOpenFailedFor(sessionId);
       };
-      void window.b4m.chat
-        .getSession(sessionId)
-        .then(loaded => {
+      void hostChat
+        .readSession(sessionId)
+        .then(({ session: loaded, notices: held }) => {
           if (!current) return;
           if (preparationBeforeRead !== workspaceVersion.current) return load();
           if (historyBeforeRead !== historyVersion.current) return load();
@@ -914,8 +968,10 @@ export function useConversation(
             settledRereads++;
             return load();
           }
-          openRead.current = null;
+          if (openRead.current === read) openRead.current = null;
           setSession(loaded);
+          // The read is the only way back to a held notice this window missed, as after a reconnect.
+          setNotices(list => withHeldNotices(list, held));
           setMessages(loaded?.messages ?? []);
           const { unseen, reflected } = loaded
             ? streamGate.current.resolve(loaded.eventCursor)
@@ -934,14 +990,31 @@ export function useConversation(
         })
         .catch(failed);
     };
-    load();
     // Read rather than derived: main owns the queue, and a window opening onto a session that
     // was queued into from another one has witnessed no push for it.
-    void window.b4m.chat.getQueuedMessages(sessionId).then(pending => {
-      if (current) setQueued(pending);
-    });
+    const readQueue = (): void => {
+      void hostChat.getQueuedMessages(sessionId).then(pending => {
+        if (current) setQueued(pending);
+      });
+    };
+    // Subscribed before the read, so the read's cursor is at or past the subscription's and the
+    // gate can cut between them. A resync means events were lost: the snapshot is read again.
+    const release = sessionEvents.subscribe(
+      { hostId: hostForSession(sessionId), sessionId },
+      {
+        event: event => receiveStreamEvent.current(event),
+        resync: () => {
+          if (!current) return;
+          load();
+          readQueue();
+        },
+      }
+    );
+    load();
+    readQueue();
     return () => {
       current = false;
+      release();
       // Applied rather than dropped: as events of a chat no longer open they still count settled
       // turns and keep background notices, as they would have unheld.
       applyHeld(streamGate.current.release());
@@ -958,7 +1031,7 @@ export function useConversation(
       const ticket = ++latestRead;
       const version = transcriptVersion.current;
       try {
-        const loaded = await window.b4m.chat.getSession(sessionId);
+        const loaded = await hostChat.getSession(sessionId);
         if (!current || ticket !== latestRead || version !== transcriptVersion.current) return;
         if (sendingFor.current === sessionId || !loaded || loaded.replyInFlight || !isUntouchedImport(loaded)) return;
         setMessages(loaded.messages);
@@ -1014,8 +1087,9 @@ export function useConversation(
   }, []);
 
   useEffect(() => {
-    return window.b4m.chat.onQueueChanged(event => {
-      if (event.sessionId !== activeSessionId.current) return;
+    return hostClient.onNotification('session/queueChanged', ({ event }, hostId) => {
+      const open = activeSessionId.current;
+      if (!open || hostId !== hostForSession(open) || event.sessionId !== open) return;
       setQueued(event.queued);
       // Main appended this one to the thread itself, so this window has no copy of it. Guarded
       // against a duplicate because the same push reaches every open window.
@@ -1087,7 +1161,7 @@ export function useConversation(
           parseDirectoryOutcome(event.call.input.outcome)?.status === 'granted'
         ) {
           const granted = event.sessionId;
-          void window.b4m.chat.getSession(granted).then(loaded => {
+          void hostChat.getSession(granted).then(loaded => {
             if (!loaded || activeSessionId.current !== granted) return;
             onSharedRef.current?.(granted);
             setSession(current =>
@@ -1115,25 +1189,12 @@ export function useConversation(
 
       // A resumed reply keeps its id, so its run is live again and must not read as settled.
       if (event.type === 'start') settledReplies.current.delete(event.messageId);
-      if (event.type === 'done' || event.type === 'error') {
-        settledReplies.current.add(event.messageId);
-        // Counted before the session filter below, and deliberately: a reply running in a
-        // background conversation spends from the same balance as this one.
-        setSettledTurns(count => count + 1);
-      }
-      if (event.type === 'context-notice-cleared') {
-        const keep = (list: ContextNotice[] | undefined) => (list ?? []).filter(item => item.kind !== event.kind);
-        if (event.sessionId === activeSessionId.current) setNotices(keep);
-        else backgroundNotices.set(event.sessionId, keep(backgroundNotices.get(event.sessionId)));
-        return;
-      }
-      if (event.type === 'context-notice' && event.sessionId !== activeSessionId.current) {
-        backgroundNotices.set(
-          event.sessionId,
-          addNotice(backgroundNotices.get(event.sessionId), { message: event.message, kind: event.kind })
-        );
-        return;
-      }
+      if (event.type === 'done' || event.type === 'error') settledReplies.current.add(event.messageId);
+      // Notices arrive only through session/contextNotice (the effect above), for the open
+      // session too; the copy a host still sends here for 1.2 clients is ignored, so a notice is
+      // never applied twice. That assumes the bundled host: gate on the negotiated minor before
+      // this window can talk to a 1.2 host.
+      if (event.type === 'context-notice' || event.type === 'context-notice-cleared') return;
       if (event.sessionId !== activeSessionId.current) return;
 
       if (event.type === 'phase') {
@@ -1148,8 +1209,7 @@ export function useConversation(
       // snapshot cannot carry (notices, a compaction's progress) still runs.
       if (reflected) {
         if (event.type === 'start' || event.type === 'done' || event.type === 'error') setPhase(null);
-        if (event.type !== 'auto-compact' && event.type !== 'context-notice' && event.type !== 'context-trimmed')
-          return;
+        if (event.type !== 'auto-compact' && event.type !== 'context-trimmed') return;
       }
 
       if (event.type === 'start') {
@@ -1222,11 +1282,6 @@ export function useConversation(
         return;
       }
 
-      if (event.type === 'context-notice') {
-        setNotices(current => addNotice(current, { message: event.message, kind: event.kind }));
-        return;
-      }
-
       if (event.type === 'context-trimmed') {
         setNotice(
           `This conversation no longer fits the model's context, so ${event.dropped === 1 ? 'its oldest message was' : `its ${event.dropped} oldest messages were`} left out of this reply. Your next message compacts it first, or run /compact now.`
@@ -1263,16 +1318,16 @@ export function useConversation(
     };
     applyStreamEvent.current = apply;
 
-    const unsubscribe = window.b4m.chat.onStreamEvent(event => {
+    receiveStreamEvent.current = event => {
       // Counted on arrival, held or not: an imported refresh must not land over it either way.
       if (event.sessionId === activeSessionId.current) transcriptVersion.current++;
       const admission = streamGate.current.admit(event);
       if (admission === 'hold') return;
       apply(event, admission === 'reflected');
-    });
+    };
 
     return () => {
-      unsubscribe();
+      receiveStreamEvent.current = () => {};
       if (frame !== undefined) cancelAnimationFrame(frame);
       if (fallback !== undefined) clearTimeout(fallback);
     };
@@ -1323,7 +1378,7 @@ export function useConversation(
       };
 
       if (goingOut) sendingFor.current = sessionId;
-      const result = await window.b4m.chat
+      const result = await hostChat
         .sendMessage({
           sessionId,
           text: prompt,
@@ -1377,7 +1432,7 @@ export function useConversation(
         ]);
       }
 
-      const summary = await window.b4m.chat.getSession(sessionId);
+      const summary = await hostChat.getSession(sessionId);
       if (summary) {
         // A late read for the chat we left must not put the selected thread back behind its opening gate.
         if (activeSessionId.current === sessionId) {
@@ -1391,7 +1446,7 @@ export function useConversation(
   );
 
   const stop = useCallback(() => {
-    if (sessionId) void window.b4m.chat.stopReply(sessionId);
+    if (sessionId) void hostChat.stopReply(sessionId);
   }, [sessionId]);
 
   // No optimistic update: the reply's own 'start' event clears the stop-reason chip, and doing
@@ -1434,7 +1489,7 @@ export function useConversation(
         return false;
       }
       if (!result.queued && result.notice) setNotice(result.notice);
-      const updated = await window.b4m.chat.getSession(sessionId);
+      const updated = await hostChat.getSession(sessionId);
       if (updated) {
         if (activeSessionId.current === sessionId)
           setSession(current => (current?.id === sessionId ? updated : current));
@@ -1591,7 +1646,7 @@ export function useConversation(
 
   const cancelQueued = useCallback(
     (queuedId: string) => {
-      if (sessionId) void window.b4m.chat.cancelQueuedMessage(sessionId, queuedId);
+      if (sessionId) void hostChat.cancelQueuedMessage(sessionId, queuedId);
     },
     [sessionId]
   );
@@ -1600,7 +1655,7 @@ export function useConversation(
   // have finished on its own by the time this lands, which makes it a no-op there.
   const sendQueuedNow = useCallback(
     (queuedId: string) => {
-      if (sessionId) void window.b4m.chat.sendQueuedMessageNow(sessionId, queuedId);
+      if (sessionId) void hostChat.sendQueuedMessageNow(sessionId, queuedId);
     },
     [sessionId]
   );
@@ -1637,7 +1692,7 @@ export function useConversation(
     (title: string) =>
       saveSetting(
         'the title',
-        id => window.b4m.chat.renameSession(id, title),
+        id => hostChat.renameSession(id, title),
         updated => ({ title: updated.title })
       ),
     [sessionId, saveSetting]
@@ -1736,7 +1791,7 @@ export function useConversation(
           setNotice(`Could not save this chat's params. ${error instanceof Error ? error.message : String(error)}`);
         }
         // An older save skipped as stale may still have landed, so show what main holds now.
-        const stored = await window.b4m.chat.getSession(sessionId).catch(() => null);
+        const stored = await hostChat.getSession(sessionId).catch(() => null);
         if (stored && latest()) {
           setSession(current => (current?.id === sessionId ? { ...current, generation: stored.generation } : current));
         }
@@ -1786,9 +1841,18 @@ export function useConversation(
     [sessionId, onSummaryChanged, outdateOpenRead]
   );
 
-  const respondToApproval = useCallback((approvalId: string, answer: ChatApprovalAnswer) => {
-    void window.b4m.chat.respondToApproval(approvalId, answer);
-  }, []);
+  const respondToApproval = useCallback(
+    (approvalId: string, answer: ChatApprovalAnswer) => {
+      if (!sessionId) {
+        console.warn('Dropped an approval answer because no session is open');
+        return;
+      }
+      hostChat
+        .respondToApproval(sessionId, approvalId, answer)
+        .catch(cause => console.warn('Could not answer the approval', cause));
+    },
+    [sessionId]
+  );
 
   const dismissNotice = useCallback(() => setNotice(null), []);
 
@@ -1820,7 +1884,7 @@ export function useConversation(
   const chooseDirectory = useCallback(
     async (directory: string) => {
       setProjectError(null);
-      const inspected = await window.b4m.chat.inspectProject(directory);
+      const inspected = await hostChat.inspectProject(directory);
       // A folder nothing could run in is reported instead of being bound. Main refuses it too,
       // so this only spares the user a move that would come back as the same sentence.
       if (inspected.refusal) {

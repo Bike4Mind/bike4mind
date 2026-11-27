@@ -274,7 +274,7 @@ describe('submitShotImages', () => {
         .mockResolvedValueOnce(replayed('dead', 'failed', false))
         .mockResolvedValueOnce(replayed('fresh', 'queued', true));
       const result = await submitShotImages(context, configWith(createJobs), shot('s1'), 1);
-      expect(result).toEqual({ ok: true, jobIds: ['fresh'] });
+      expect(result).toMatchObject({ ok: true, jobIds: ['fresh'] });
       expect(createJobs).toHaveBeenCalledTimes(2);
     });
   });
@@ -291,7 +291,7 @@ describe('submitShotImages', () => {
         .mockResolvedValueOnce(notReady)
         .mockResolvedValueOnce(replayed('fresh', 'queued', true));
       const result = await submitShotImages(context, timed(createJobs, 1_000), checking('s1'), 1);
-      expect(result).toEqual({ ok: true, jobIds: ['fresh'] });
+      expect(result).toMatchObject({ ok: true, jobIds: ['fresh'] });
       expect(createJobs).toHaveBeenCalledTimes(2);
     });
 

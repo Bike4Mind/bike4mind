@@ -36,6 +36,7 @@ import HelpTOC from './HelpTOC';
 import HelpBreadcrumbs from './HelpBreadcrumbs';
 import HelpChat from './HelpChat';
 import RecentlyViewedList from './RecentlyViewedList';
+import { HelpTutorialsEntry } from '../tutorial/core/HelpTutorialsEntry';
 import { useHelpChat } from '@client/app/hooks/useHelpChat';
 import { useHelpAnalytics, useMyRecentlyViewed } from '@client/app/hooks/useHelpAnalytics';
 import { useArticleFeedbackState } from '@client/app/hooks/useArticleFeedbackState';
@@ -425,6 +426,8 @@ const HelpPanel: React.FC = () => {
         <Typography level="body-md" sx={{ mb: 3 }}>
           Welcome to the documentation. Browse by category or use the search above.
         </Typography>
+
+        <HelpTutorialsEntry />
 
         <RecentlyViewedList articles={recentlyViewed} onNavigate={navigateTo} />
 

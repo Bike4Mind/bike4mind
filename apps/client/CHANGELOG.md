@@ -1,5 +1,120 @@
 # @bike4mind/client
 
+## 0.1.115
+
+### Patch Changes
+
+- Updated dependencies [[`36528fc`](https://github.com/Bike4Mind/bike4mind/commit/36528fc1f58b57e3df068623182179f189a544a4)]:
+  - @bike4mind/common@31.4.0
+  - @bike4mind/agents@1.8.12
+  - @bike4mind/auth@1.5.8
+  - @bike4mind/db-core@0.10.3
+  - @bike4mind/fab-pipeline@3.3.5
+  - @bike4mind/llm-adapters@2.10.3
+  - @bike4mind/mcp@2.2.15
+  - @bike4mind/slack@8.0.6
+  - @bike4mind/utils@13.1.5
+  - @bike4mind/voice@0.11.15
+  - @bike4mind/database@0.4.38
+  - @bike4mind/scripts@0.1.114
+  - @bike4mind/server-utils@0.0.28
+
+## 0.1.114
+
+### Patch Changes
+
+- Updated dependencies [[`cce8f4c`](https://github.com/Bike4Mind/bike4mind/commit/cce8f4ce0b2912a23d561d1e12145cf03a1aef4d)]:
+  - @bike4mind/common@31.3.2
+  - @bike4mind/agents@1.8.11
+  - @bike4mind/auth@1.5.7
+  - @bike4mind/db-core@0.10.2
+  - @bike4mind/fab-pipeline@3.3.4
+  - @bike4mind/llm-adapters@2.10.2
+  - @bike4mind/mcp@2.2.14
+  - @bike4mind/slack@8.0.5
+  - @bike4mind/utils@13.1.4
+  - @bike4mind/voice@0.11.14
+  - @bike4mind/database@0.4.37
+  - @bike4mind/scripts@0.1.113
+  - @bike4mind/server-utils@0.0.27
+
+## 0.1.113
+
+### Patch Changes
+
+- Updated dependencies [[`4dcc1f9`](https://github.com/Bike4Mind/bike4mind/commit/4dcc1f9cee9fdddb842c844617152106f11cd001)]:
+  - @bike4mind/common@31.3.1
+  - @bike4mind/agents@1.8.10
+  - @bike4mind/auth@1.5.6
+  - @bike4mind/db-core@0.10.1
+  - @bike4mind/fab-pipeline@3.3.3
+  - @bike4mind/llm-adapters@2.10.1
+  - @bike4mind/mcp@2.2.13
+  - @bike4mind/slack@8.0.4
+  - @bike4mind/utils@13.1.3
+  - @bike4mind/voice@0.11.13
+  - @bike4mind/database@0.4.36
+  - @bike4mind/scripts@0.1.112
+  - @bike4mind/server-utils@0.0.26
+
+## 0.1.112
+
+### Patch Changes
+
+- Updated dependencies [[`25d3b82`](https://github.com/Bike4Mind/bike4mind/commit/25d3b82431087b7e5b393bc049ce6c53804d7a48), [`cf0972e`](https://github.com/Bike4Mind/bike4mind/commit/cf0972ebfac550839150f9a0773fa27ed103c9bc), [`2461e22`](https://github.com/Bike4Mind/bike4mind/commit/2461e2267ee7583121e554393aba27126cdccd70), [`1338927`](https://github.com/Bike4Mind/bike4mind/commit/1338927868a5f77b806633effcc8a86da7841927), [`8792f27`](https://github.com/Bike4Mind/bike4mind/commit/8792f27429dc3a9913edcb78e9b9b65ce167c880), [`56e6187`](https://github.com/Bike4Mind/bike4mind/commit/56e61877fc1120b0f7300eb3735ff282be194844), [`e1dee9d`](https://github.com/Bike4Mind/bike4mind/commit/e1dee9da4be4aef95f2efacd97cc022c0b5c7273), [`a86ed73`](https://github.com/Bike4Mind/bike4mind/commit/a86ed73ee8fd025c32849b4fcf9b605633688a80), [`5b285a2`](https://github.com/Bike4Mind/bike4mind/commit/5b285a2304fd865fba39fd15130a69339424d99a), [`b25356b`](https://github.com/Bike4Mind/bike4mind/commit/b25356bef91f562d363749d1174246e0d51dd186), [`2244e8c`](https://github.com/Bike4Mind/bike4mind/commit/2244e8cfa4a77790f8db454748f48c2bdd3a12e0), [`8e8cbf2`](https://github.com/Bike4Mind/bike4mind/commit/8e8cbf2285aef973abf3b72c055c48e80f55963b)]:
+  - @bike4mind/common@31.3.0
+  - @bike4mind/llm-adapters@2.10.0
+  - @bike4mind/slack@8.0.3
+  - @bike4mind/db-core@0.10.0
+  - @bike4mind/agents@1.8.9
+  - @bike4mind/auth@1.5.5
+  - @bike4mind/fab-pipeline@3.3.2
+  - @bike4mind/mcp@2.2.12
+  - @bike4mind/utils@13.1.2
+  - @bike4mind/voice@0.11.12
+  - @bike4mind/database@0.4.35
+  - @bike4mind/scripts@0.1.111
+  - @bike4mind/server-utils@0.0.25
+
+## 0.1.111
+
+### Patch Changes
+
+- Updated dependencies [[`1f3511b`](https://github.com/Bike4Mind/bike4mind/commit/1f3511bbf98ae6bba50295f687462199c0744273), [`0c77e8a`](https://github.com/Bike4Mind/bike4mind/commit/0c77e8a5d935de1f4625c230b6cad45283922ec5), [`515eea3`](https://github.com/Bike4Mind/bike4mind/commit/515eea3b9edb3304ef88282cfd40d73ccc295410), [`bc52a90`](https://github.com/Bike4Mind/bike4mind/commit/bc52a9071c39c82dad846a7c167c442035b34dd4), [`dd11de0`](https://github.com/Bike4Mind/bike4mind/commit/dd11de0152114690f0056afadab899ec83c4bc4c), [`fee111c`](https://github.com/Bike4Mind/bike4mind/commit/fee111c3f3b31cab78eac80fab7d63589c72627f)]:
+  - @bike4mind/common@31.2.0
+  - @bike4mind/llm-adapters@2.9.1
+  - @bike4mind/utils@13.1.1
+  - @bike4mind/agents@1.8.8
+  - @bike4mind/auth@1.5.4
+  - @bike4mind/db-core@0.9.7
+  - @bike4mind/fab-pipeline@3.3.1
+  - @bike4mind/mcp@2.2.11
+  - @bike4mind/slack@8.0.2
+  - @bike4mind/voice@0.11.11
+  - @bike4mind/database@0.4.34
+  - @bike4mind/scripts@0.1.110
+  - @bike4mind/server-utils@0.0.24
+
+## 0.1.110
+
+### Patch Changes
+
+- Updated dependencies [[`6afd4ea`](https://github.com/Bike4Mind/bike4mind/commit/6afd4eab8bb90acbfeec78b4eed9058a60198bc2), [`8623a01`](https://github.com/Bike4Mind/bike4mind/commit/8623a0113b7909e3ce148e9396bf6d97c09ab7b4), [`a11c0cf`](https://github.com/Bike4Mind/bike4mind/commit/a11c0cf401247443a6376e5b79d6900a0f86a213), [`3f00e93`](https://github.com/Bike4Mind/bike4mind/commit/3f00e934992a3492dbb8f47505bd8b067a5bfe27), [`1ce2b37`](https://github.com/Bike4Mind/bike4mind/commit/1ce2b37223ba6af00dfa5de308984cf559947045), [`12b358b`](https://github.com/Bike4Mind/bike4mind/commit/12b358bacecc2013f9e2bd1374ed58168b36c658), [`17ce359`](https://github.com/Bike4Mind/bike4mind/commit/17ce35993635ab936e44104c60a6a91d1ba2f76a), [`3e0c195`](https://github.com/Bike4Mind/bike4mind/commit/3e0c195286f2ec591f5c33721019a9d424cc25bb), [`ba9375c`](https://github.com/Bike4Mind/bike4mind/commit/ba9375cba036cb49875994f90f48015561036d55), [`8c8733d`](https://github.com/Bike4Mind/bike4mind/commit/8c8733d96c49ee975bc6ae8a9c180315823300a5), [`2c94804`](https://github.com/Bike4Mind/bike4mind/commit/2c9480498cd3d2a6b24d23540b628815196f92ab), [`4d0b544`](https://github.com/Bike4Mind/bike4mind/commit/4d0b544ae129a8a9a822f5e66b40686ad6196983), [`5e541b9`](https://github.com/Bike4Mind/bike4mind/commit/5e541b9abc6595f00af26afc8af83a7a633ba44e)]:
+  - @bike4mind/common@31.1.0
+  - @bike4mind/fab-pipeline@3.3.0
+  - @bike4mind/infra@7.4.0
+  - @bike4mind/llm-adapters@2.9.0
+  - @bike4mind/utils@13.1.0
+  - @bike4mind/agents@1.8.7
+  - @bike4mind/auth@1.5.3
+  - @bike4mind/db-core@0.9.6
+  - @bike4mind/mcp@2.2.10
+  - @bike4mind/slack@8.0.1
+  - @bike4mind/voice@0.11.10
+  - @bike4mind/database@0.4.33
+  - @bike4mind/scripts@0.1.109
+  - @bike4mind/server-utils@0.0.23
+
 ## 0.1.109
 
 ### Patch Changes

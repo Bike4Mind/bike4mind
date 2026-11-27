@@ -3,13 +3,14 @@ import { extname, join, relative, resolve, sep } from 'node:path';
 import type { z } from 'zod';
 import {
   MOD_ID_PATTERN,
-  SKIN_CONTRACT,
+  SKIN_CONTRACTS_READ,
   SOUND_PACK_CONTRACT,
   SKIN_FILE_TYPES,
   SKIN_MAX_FILES,
   SKIN_MAX_TOTAL_BYTES,
   modManifestSchema,
-  skinTokensSchema,
+  sceneSkinAssetPaths,
+  skinTokensSchemaFor,
   type ModManifest,
   type SkinFileType,
   type SkinTokens,
@@ -43,7 +44,7 @@ export type SoundPackLoadResult =
 /** The mod kinds this loader reads; any other kind belongs to a later tier's loader. */
 type DataModKind = 'skin' | 'sounds';
 
-const CONTRACT: Record<DataModKind, number> = { skin: SKIN_CONTRACT, sounds: SOUND_PACK_CONTRACT };
+const CONTRACTS: Record<DataModKind, readonly number[]> = { skin: SKIN_CONTRACTS_READ, sounds: [SOUND_PACK_CONTRACT] };
 const KIND_LABEL: Record<DataModKind, string> = { skin: 'skin', sounds: 'sound pack' };
 
 const MAX_DEPTH = 3;
@@ -131,9 +132,9 @@ async function openMod<K extends DataModKind>(
   onName(manifest.name);
   const files = await walk(root);
   if (manifest.id !== id) throw new SkinRejected(`mod.json id "${manifest.id}" does not match the folder name`);
-  if (manifest.contract !== CONTRACT[kind]) {
+  if (!CONTRACTS[kind].includes(manifest.contract)) {
     throw new SkinRejected(
-      `written for ${label} contract ${manifest.contract}; this app reads contract ${CONTRACT[kind]}`
+      `written for ${label} contract ${manifest.contract}; this app reads contract ${CONTRACTS[kind].join(' or ')}`
     );
   }
   return { manifest, root, files };
@@ -175,7 +176,12 @@ export async function loadSkin(modsRoot: string, id: string): Promise<SkinLoadRe
     if (opened === 'other') return 'not-a-skin';
     const tokensFile = opened.files.get('tokens.json');
     if (!tokensFile) throw new SkinRejected('tokens.json is missing');
-    const tokens = parse(skinTokensSchema, await readJson(tokensFile, 'tokens.json'), 'tokens.json');
+    const tokens = parse(
+      // A skin's manifest kind is an enum, not a literal, so Extract leaves `never` here.
+      skinTokensSchemaFor((opened.manifest as ModManifest).contract),
+      await readJson(tokensFile, 'tokens.json'),
+      'tokens.json'
+    );
     const assets = await collectAssets(opened, referencedPaths(tokens));
     return { ok: true, skin: { manifest: opened.manifest, tokens, assets } };
   } catch (error) {
@@ -321,9 +327,8 @@ function parse<T>(schema: z.ZodType<T>, value: unknown, label: string): T {
 // The needs-you sound stays the built-in chime, so it is neither checked nor served.
 function referencedPaths(tokens: SkinTokens): string[] {
   const { 'needs-you': _locked, ...sounds } = tokens.sounds ?? {};
-  return [...Object.values(tokens.sprites ?? {}), ...Object.values(sounds)].filter(
-    (path): path is string => typeof path === 'string'
-  );
+  const images = Object.values(tokens.scenes ?? {}).flatMap(sceneSkinAssetPaths);
+  return [...new Set([...images, ...Object.values(sounds)])].filter((path): path is string => typeof path === 'string');
 }
 
 const isObject = (value: unknown): value is Record<string, unknown> =>

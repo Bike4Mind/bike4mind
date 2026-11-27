@@ -7,7 +7,7 @@ import { readJobCondition, readJobs, readNeeds } from './ciWorkflowText';
 /**
  * Guard on ci.yml's `docs-scan-gate` job, the only thing that turns the private pre-merge
  * `docs/sensitive-scan` status into a merge block. `ci-complete` is the only required check and it
- * only reddens on a literal `failure`, so dropping the job from its `needs`, env mapping or result
+ * only reddens on the legs it reads, so dropping the job from its `needs`, env mapping or result
  * loop lets a flagged docs PR merge (and auto-deploy) with nothing turning red.
  *
  * Text-matched like checkPublishedDtsJobWired.test.ts; the last describe runs the helpers over a

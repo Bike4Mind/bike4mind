@@ -1,5 +1,11 @@
 import { IMAGE_JOB_INPUT_MIME_TYPES } from '../schemas/imageJobs';
-import { STUDIO_COMPOSITION_LIMITS, type StudioBrandKit, type StudioCompositionBrief } from './composition';
+import {
+  STUDIO_COMPOSITION_LIMITS,
+  type StudioBrandKit,
+  type StudioCharacter,
+  type StudioCompositionBrief,
+  type StudioShot,
+} from './composition';
 
 /**
  * Every product file of a production, most authoritative first: the brief's product photo, then the brand kit's
@@ -71,4 +77,46 @@ export const withDirectorProduct = (productFileIds: readonly string[], fileId: s
   if (productFileIds.includes(fileId)) return [...productFileIds];
   if (productFileIds.length === 0) return withProductLook(productFileIds, fileId);
   return withProductLook(withProductLook(productFileIds, fileId), productFileIds[0]);
+};
+
+/** The kit characters a shot features, in the shot's order. An id no longer in the kit is skipped. */
+export const shotCharacters = (
+  shot: Pick<StudioShot, 'characterIds'>,
+  characters: readonly StudioCharacter[]
+): StudioCharacter[] => {
+  const ids = [...new Set(shot.characterIds ?? [])];
+  return ids.flatMap(id => characters.filter(character => character.id === id));
+};
+
+export type ShotReferenceSelection = {
+  fileIds: string[];
+  characters: StudioCharacter[];
+  droppedCharacters: StudioCharacter[];
+};
+
+/**
+ * One shot's reference images cut to a model's cap: the product look, then the shot's characters in order, then the
+ * other product images. A single-reference model keeps the product; a second slot goes to a character before another
+ * product angle. A character sharing a file already taken is kept without spending a slot.
+ */
+export const selectShotReferences = (
+  references: { productFileIds: readonly string[]; characters: readonly StudioCharacter[] },
+  maxReferences: number
+): ShotReferenceSelection => {
+  const [look, ...otherProducts] = references.productFileIds;
+  const fileIds: string[] = [];
+  const take = (fileId: string): boolean => {
+    if (fileIds.includes(fileId)) return true;
+    if (fileIds.length >= maxReferences) return false;
+    fileIds.push(fileId);
+    return true;
+  };
+  if (look) take(look);
+  const characters: StudioCharacter[] = [];
+  const droppedCharacters: StudioCharacter[] = [];
+  for (const character of references.characters) {
+    (take(character.fileId) ? characters : droppedCharacters).push(character);
+  }
+  for (const fileId of otherProducts) take(fileId);
+  return { fileIds, characters, droppedCharacters };
 };

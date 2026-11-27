@@ -6,6 +6,7 @@ import {
   hostNotification,
   hostResult,
   isHostMethod,
+  type HostErrorData,
   type HostMethod,
   type HostNotification,
   type HostNotificationName,
@@ -15,6 +16,7 @@ import {
   type HostResponse,
   type HostResult,
 } from '@shared/hostProtocol';
+import { taskDecisionReplySchema } from '@shared/orchestration';
 import { sessionForRenderer } from '../../main/chat/ChatService';
 import type { HostRuntime } from '../HostRuntime';
 import type { HostEventSink } from '../ports';
@@ -27,14 +29,7 @@ import { hostControlHandlers, watchHostAccount } from './hostMethods';
  * Methods the protocol defines that this host does not serve yet, each answered with "method not
  * found". Each one leaves this list in the change that gives HostRuntime a method to back it.
  */
-export const pendingHostMethods = [
-  'session/create',
-  'session/setArchived',
-  'request/respond',
-  'background/stop',
-  'fs/browse',
-  'project/recent',
-] as const satisfies readonly HostMethod[];
+export const pendingHostMethods = [] as const satisfies readonly HostMethod[];
 
 type PendingHostMethod = (typeof pendingHostMethods)[number];
 export type ServedHostMethod = Exclude<HostMethod, PendingHostMethod>;
@@ -44,8 +39,19 @@ export type HostServerRuntime = Pick<
   | 'listSessions'
   | 'listSessionPage'
   | 'getSession'
+  | 'contextNotices'
+  | 'createSession'
+  | 'createCodeSession'
   | 'renameSession'
+  | 'setSessionArchived'
   | 'deleteSession'
+  | 'deleteSessionTree'
+  | 'respondToApproval'
+  | 'answerTaskDecision'
+  | 'listTaskDecisions'
+  | 'stopBackgroundProcess'
+  | 'browseDirectory'
+  | 'listRecentFolders'
   | 'sendMessage'
   | 'stopReply'
   | 'sessionStatuses'
@@ -176,18 +182,32 @@ export class HostServer {
       'session/page': request => runtime.listSessionPage(request),
       'session/get': async ({ sessionId, viewed }) => {
         const session = await runtime.getSession(sessionId, viewed === true);
+        const notices = runtime.contextNotices(sessionId);
         return {
           session: sessionForRenderer(session),
           cursor: session?.eventCursor ?? runtime.eventLog.cursor(sessionId),
+          ...(notices.length > 0 ? { notices } : {}),
         };
       },
       'session/rename': async ({ sessionId, title }) => ({
         summary: await runtime.renameSession(sessionId, title),
       }),
-      'session/delete': async ({ sessionId, removeWorktree }) => {
-        await runtime.deleteSession(sessionId, removeWorktree === true);
+      'session/create': async request =>
+        request ? runtime.createCodeSession(request) : { ok: true, session: await runtime.createSession() },
+      'session/setArchived': ({ sessionId, archived, confirmed, archiveChildIds }) =>
+        runtime.setSessionArchived(sessionId, archived, { confirmed, archiveChildIds }),
+      'session/delete': async ({ sessionId, removeWorktree, allowDiscard }) => {
+        await runtime.deleteSession(sessionId, removeWorktree === true, allowDiscard === true);
         return {};
       },
+      'session/deleteTree': ({ sessionId, nestedIds, removeWorktree, nestedWorktreeIds, allowDiscard }) =>
+        runtime.deleteSessionTree(
+          sessionId,
+          nestedIds,
+          removeWorktree === true,
+          nestedWorktreeIds ?? [],
+          allowDiscard === true
+        ),
       'session/subscribe': ({ sessionId, after }, connection) => this.subscribe(connection, sessionId, after),
       'session/unsubscribe': ({ sessionId }, connection) => {
         connection.subscriptions.delete(sessionId);
@@ -199,6 +219,39 @@ export class HostServer {
         runtime.stopReply(sessionId);
         return {};
       },
+      'request/respond': async request => {
+        if (request.kind === 'approval') {
+          await runtime.respondToApproval(request.requestId, request.answer);
+          return {};
+        }
+        const reply = taskDecisionReplySchema.safeParse(request);
+        if (!reply.success) {
+          throw new HostMethodError(HOST_ERROR_CODES.invalidParams, 'Invalid task decision answer', reply.error.issues);
+        }
+        await runtime.answerTaskDecision(reply.data.sessionId, reply.data.decisionId, reply.data.answer);
+        return {};
+      },
+      'background/stop': async ({ sessionId, processId }) => {
+        const stopped = await runtime.stopBackgroundProcess(sessionId, processId);
+        if (!stopped.ok) {
+          throw new HostMethodError(HOST_ERROR_CODES.processNotFound, `No background process ${processId}`, {
+            sessionId,
+            processId,
+          } satisfies HostErrorData<'processNotFound'>);
+        }
+        return { process: stopped.process };
+      },
+      'fs/browse': async params => {
+        const browsed = await runtime.browseDirectory(params?.path);
+        if (!browsed.ok) {
+          throw new HostMethodError(HOST_ERROR_CODES.pathUnavailable, `Cannot browse ${browsed.path}`, {
+            path: browsed.path,
+            reason: browsed.reason,
+          } satisfies HostErrorData<'pathUnavailable'>);
+        }
+        return browsed.listing;
+      },
+      'project/recent': async () => ({ folders: await runtime.listRecentFolders() }),
       'queue/list': async ({ sessionId }) => ({ queued: await runtime.queuedMessages(sessionId) }),
       'queue/cancel': ({ sessionId, queuedId }) => {
         runtime.cancelQueued(sessionId, queuedId);
@@ -212,6 +265,7 @@ export class HostServer {
       'project/inspect': async ({ directory }) => ({ inspection: await runtime.inspectProject(directory) }),
       'model/list': async ({ force }) => ({ models: await runtime.listModels(force ?? false) }),
       'draft/defaults': async () => ({ defaults: await runtime.draftDefaults() }),
+      'taskDecision/list': async () => ({ decisions: await runtime.listTaskDecisions() }),
     };
   }
 
@@ -240,7 +294,14 @@ export class HostServer {
       this.logger.warn(`HOST: dropped an unsequenced ${event.type} event for ${event.sessionId}`);
       return;
     }
-    connection.notify(notification('session/event', { sessionId: event.sessionId, seq: event.seq, event }));
+    connection.notify(
+      notification('session/event', {
+        sessionId: event.sessionId,
+        seq: event.seq,
+        epoch: this.runtime.eventLog.cursor(event.sessionId).epoch,
+        event,
+      })
+    );
   }
 
   private broadcast(message: HostNotification): void {
@@ -252,6 +313,20 @@ export class HostServer {
       streamEvent: event => {
         for (const connection of this.connections) {
           if (connection.subscriptions.has(event.sessionId)) this.sendEvent(connection, event);
+        }
+        if (event.type === 'spawn-failed') {
+          const { sessionId, title, message } = event;
+          this.broadcast(notification('session/spawnFailed', { sessionId, title, message }));
+        }
+        if (event.type === 'context-notice') {
+          const { type, sessionId, message, kind } = event;
+          this.broadcast(
+            notification('session/contextNotice', { event: { type, sessionId, message, ...(kind ? { kind } : {}) } })
+          );
+        }
+        if (event.type === 'context-notice-cleared') {
+          const { type, sessionId, kind } = event;
+          this.broadcast(notification('session/contextNotice', { event: { type, sessionId, kind } }));
         }
       },
       sessionSummary: summary => this.broadcast(notification('session/summaryChanged', { summary })),
