@@ -1,6 +1,6 @@
 services:
   db:
-    image: mongo
+    image: mongo:8.0
     container_name: mongo1
     volumes:
       - ./data/db:/data/db

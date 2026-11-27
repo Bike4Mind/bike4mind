@@ -104,6 +104,11 @@
       "prettier --write --ignore-unknown"
     ]
   },
+  "config": {
+    "mongodbMemoryServer": {
+      "version": "8.0.38"
+    }
+  },
   "packageManager": "pnpm@10.34.1",
   "engines": {
     "node": ">=24.0.0",
