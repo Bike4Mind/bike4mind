@@ -51,6 +51,7 @@ describe('Desktop as the local host', () => {
     const dataDirectory = await mkdtemp(join(tmpdir(), 'b4m-local-host-'));
     directories.push(dataDirectory);
     let current = state('u1');
+    const log = vi.fn();
     const listeners = new Set<(next: AuthState) => void>();
     const control = localHostControl({
       auth: { getState: () => current },
@@ -61,12 +62,13 @@ describe('Desktop as the local host', () => {
       dataDirectory,
       homeDirectory: '/Users/dev',
       version: '9.9.9',
+      log,
     });
     const set = (next: AuthState) => {
       current = next;
       for (const listener of listeners) listener(next);
     };
-    return { ...serve(control), set, dataDirectory };
+    return { ...serve(control), set, dataDirectory, log };
   }
 
   it('reports its account and every known capability, and keeps the same host id', async () => {
@@ -96,13 +98,18 @@ describe('Desktop as the local host', () => {
     expect(received).toEqual([expect.objectContaining({ method: 'host/stateChanged', params: { account: null } })]);
   });
 
-  it('recovers the host id once a bad host-id file is fixed', async () => {
-    const { call, dataDirectory } = await desktopServer();
+  it('serves under an id for this launch, and warns, when the host-id file is unreadable', async () => {
+    const { call, dataDirectory, log } = await desktopServer();
     await writeFile(join(dataDirectory, 'host-id'), 'not-an-id');
 
-    expect(errorOf(await call('host/info'))).toBeDefined();
+    const first = resultOf(await call('host/info')) as { hostId: string };
     await writeFile(join(dataDirectory, 'host-id'), '0b9d2a46-6a53-4e07-8a43-2a1f7f0f8f11\n');
+    const second = resultOf(await call('host/info')) as { hostId: string };
 
-    expect(resultOf(await call('host/info'))).toMatchObject({ hostId: '0b9d2a46-6a53-4e07-8a43-2a1f7f0f8f11' });
+    expect(first.hostId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(first.hostId).not.toBe('0b9d2a46-6a53-4e07-8a43-2a1f7f0f8f11');
+    expect(second.hostId).toBe(first.hostId);
+    expect(log).toHaveBeenCalledOnce();
+    expect(log.mock.calls[0]?.[0]).toContain('does not hold a host id');
   });
 });
