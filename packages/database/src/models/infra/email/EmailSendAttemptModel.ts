@@ -42,6 +42,12 @@ const EmailSendAttemptSchema = new Schema<IEmailSendAttemptDocument, IEmailSendA
     // Error handling
     errorMessage: { type: String },
     retryCount: { type: Number, default: 0 },
+    // Batch send lease and sent marker: see claimForSend / markSendAccepted
+    claimedAt: { type: Date },
+    sendAccepted: {
+      at: { type: Date },
+      queued: { type: Boolean },
+    },
   },
   {
     timestamps: true,
@@ -208,6 +214,46 @@ export class EmailSendAttemptRepository
     const result = await this.model.updateOne(
       { _id: id, status: { $in: [EmailSendStatus.PENDING, EmailSendStatus.PROCESSING] } },
       { $set: { status: EmailSendStatus.FAILED, ...updates } },
+      { runValidators: true }
+    );
+    return result.modifiedCount > 0;
+  }
+
+  /**
+   * Claims an attempt for sending: PENDING, or PROCESSING whose lease (claimedAt) predates staleBefore
+   * and whose mail was never accepted. A PROCESSING attempt written before leases existed has no
+   * claimedAt and is judged by updatedAt. Returns false when another invocation holds a fresh lease
+   * or the attempt already moved on.
+   */
+  async claimForSend(
+    id: string,
+    options: { now: Date; staleBefore: Date; renderedSubject: string; renderedHtml: string }
+  ): Promise<boolean> {
+    const { now, staleBefore, renderedSubject, renderedHtml } = options;
+    const result = await this.model.updateOne(
+      {
+        _id: id,
+        'sendAccepted.at': { $exists: false },
+        $or: [
+          { status: EmailSendStatus.PENDING },
+          { status: EmailSendStatus.PROCESSING, claimedAt: { $lt: staleBefore } },
+          { status: EmailSendStatus.PROCESSING, claimedAt: { $exists: false }, updatedAt: { $lt: staleBefore } },
+        ],
+      },
+      { $set: { status: EmailSendStatus.PROCESSING, claimedAt: now, renderedSubject, renderedHtml } },
+      { runValidators: true }
+    );
+    return result.modifiedCount > 0;
+  }
+
+  /**
+   * Records that the mailer accepted the mail while the attempt is still PROCESSING, so a later batch
+   * finishes the status write instead of sending again.
+   */
+  async markSendAccepted(id: string, accepted: { at: Date; queued: boolean }): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, status: EmailSendStatus.PROCESSING },
+      { $set: { sendAccepted: accepted } },
       { runValidators: true }
     );
     return result.modifiedCount > 0;
