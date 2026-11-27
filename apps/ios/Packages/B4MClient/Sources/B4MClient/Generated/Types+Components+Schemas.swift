@@ -337,6 +337,267 @@ extension Components {
                 case lastUpdated
             }
         }
+        /// - Remark: Generated from `#/components/schemas/updateSessionResponse200`.
+        public struct UpdateSessionResponse200: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/id`.
+            public var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/_id`.
+            public var _id: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/name`.
+            public var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/userId`.
+            public var userId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/organizationId`.
+            public var organizationId: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/knowledgeIds`.
+            public var knowledgeIds: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/artifactIds`.
+            public var artifactIds: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/TagsPayload`.
+            public struct TagsPayloadPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/TagsPayload/name`.
+                public var name: Swift.String
+                /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/TagsPayload/strength`.
+                public var strength: Swift.Double
+                /// Creates a new `TagsPayloadPayload`.
+                ///
+                /// - Parameters:
+                ///   - name:
+                ///   - strength:
+                public init(
+                    name: Swift.String,
+                    strength: Swift.Double
+                ) {
+                    self.name = name
+                    self.strength = strength
+                }
+                public enum CodingKeys: String, CodingKey {
+                    case name
+                    case strength
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/tags`.
+            public typealias TagsPayload = [Components.Schemas.UpdateSessionResponse200.TagsPayloadPayload]
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/tags`.
+            public var tags: Components.Schemas.UpdateSessionResponse200.TagsPayload?
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/forceKnowledgeRetrieval`.
+            public var forceKnowledgeRetrieval: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/retrievalTags`.
+            public var retrievalTags: [Swift.String]?
+            /// True when `retrievalTags` is a deliberate choice, so an empty list means "no lake" rather than "any".
+            ///
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/lakeScopeExplicit`.
+            public var lakeScopeExplicit: Swift.Bool?
+            /// Whether the session grounds on your own library alongside its lakes. Absent when never set.
+            ///
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/includeLibraryFiles`.
+            public var includeLibraryFiles: Swift.Bool?
+            /// The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+            ///
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/promptCacheTtl`.
+            public var promptCacheTtl: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/lastUsedModel`.
+            public var lastUsedModel: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/firstCreated`.
+            public var firstCreated: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/updateSessionResponse200/lastUpdated`.
+            public var lastUpdated: Foundation.Date
+            /// Creates a new `UpdateSessionResponse200`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - _id:
+            ///   - name:
+            ///   - userId:
+            ///   - organizationId:
+            ///   - knowledgeIds:
+            ///   - artifactIds:
+            ///   - tags:
+            ///   - forceKnowledgeRetrieval:
+            ///   - retrievalTags:
+            ///   - lakeScopeExplicit: True when `retrievalTags` is a deliberate choice, so an empty list means "no lake" rather than "any".
+            ///   - includeLibraryFiles: Whether the session grounds on your own library alongside its lakes. Absent when never set.
+            ///   - promptCacheTtl: The chat's prompt-cache lifetime. Absent when never set, which follows your default.
+            ///   - lastUsedModel:
+            ///   - firstCreated:
+            ///   - lastUpdated:
+            public init(
+                id: Swift.String,
+                _id: Swift.String? = nil,
+                name: Swift.String,
+                userId: Swift.String,
+                organizationId: Swift.String? = nil,
+                knowledgeIds: [Swift.String]? = nil,
+                artifactIds: [Swift.String]? = nil,
+                tags: Components.Schemas.UpdateSessionResponse200.TagsPayload? = nil,
+                forceKnowledgeRetrieval: Swift.Bool? = nil,
+                retrievalTags: [Swift.String]? = nil,
+                lakeScopeExplicit: Swift.Bool? = nil,
+                includeLibraryFiles: Swift.Bool? = nil,
+                promptCacheTtl: Swift.String? = nil,
+                lastUsedModel: Swift.String? = nil,
+                firstCreated: Foundation.Date,
+                lastUpdated: Foundation.Date
+            ) {
+                self.id = id
+                self._id = _id
+                self.name = name
+                self.userId = userId
+                self.organizationId = organizationId
+                self.knowledgeIds = knowledgeIds
+                self.artifactIds = artifactIds
+                self.tags = tags
+                self.forceKnowledgeRetrieval = forceKnowledgeRetrieval
+                self.retrievalTags = retrievalTags
+                self.lakeScopeExplicit = lakeScopeExplicit
+                self.includeLibraryFiles = includeLibraryFiles
+                self.promptCacheTtl = promptCacheTtl
+                self.lastUsedModel = lastUsedModel
+                self.firstCreated = firstCreated
+                self.lastUpdated = lastUpdated
+            }
+            public enum CodingKeys: String, CodingKey {
+                case id
+                case _id
+                case name
+                case userId
+                case organizationId
+                case knowledgeIds
+                case artifactIds
+                case tags
+                case forceKnowledgeRetrieval
+                case retrievalTags
+                case lakeScopeExplicit
+                case includeLibraryFiles
+                case promptCacheTtl
+                case lastUsedModel
+                case firstCreated
+                case lastUpdated
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/updateSessionRequest`.
+        public struct UpdateSessionRequest: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/name`.
+            public var name: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/knowledgeIds`.
+            public var knowledgeIds: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/artifactIds`.
+            public var artifactIds: [Swift.String]?
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/TagsPayload`.
+            public struct TagsPayloadPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/updateSessionRequest/TagsPayload/name`.
+                public var name: Swift.String
+                /// - Remark: Generated from `#/components/schemas/updateSessionRequest/TagsPayload/strength`.
+                public var strength: Swift.Double
+                /// Creates a new `TagsPayloadPayload`.
+                ///
+                /// - Parameters:
+                ///   - name:
+                ///   - strength:
+                public init(
+                    name: Swift.String,
+                    strength: Swift.Double
+                ) {
+                    self.name = name
+                    self.strength = strength
+                }
+                public enum CodingKeys: String, CodingKey {
+                    case name
+                    case strength
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/tags`.
+            public typealias TagsPayload = [Components.Schemas.UpdateSessionRequest.TagsPayloadPayload]
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/tags`.
+            public var tags: Components.Schemas.UpdateSessionRequest.TagsPayload?
+            /// Pin a specific model id, or omit/send null to leave the current pin unchanged. Sending null does NOT clear it.
+            ///
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/lastUsedModel`.
+            public var lastUsedModel: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/forceKnowledgeRetrieval`.
+            public var forceKnowledgeRetrieval: Swift.Bool?
+            /// The data lakes this session searches, as lake tags (the `datalake_tag` of each lake from GET /api/v1/data-lakes). Send a list to search only those lakes, `[]` to search no lake at all, or `null` to clear the choice so retrieval falls back to every lake you can reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach are ignored at retrieval time rather than rejected here. A non-empty list also turns forced retrieval on for a session that has never set it, unless `forceKnowledgeRetrieval` is sent in the same request; a value the session already stores is left as it is. Conversely `[]` leaves a session with forced retrieval nothing to retrieve from, so its forced retrieval is skipped rather than run against every lake.
+            ///
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/lakeScope`.
+            public var lakeScope: [Swift.String]?
+            /// Whether the session grounds on your own library (files you own, or that are shared with you or your groups) alongside its lakes. `false` confines retrieval to lake content, including when every lake is in scope; the session's attached files still reach the model and stay searchable by its knowledge-base tools. Omit to leave it unchanged; while never set, the library is excluded only when a lake was picked for the session (Data Lakes mode or an explicit lake scope), not when lake tags were derived from an attached file. While `forceKnowledgeRetrieval` is `false` the library is included regardless; the stored value applies again once it is turned back on.
+            ///
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/includeLibraryFiles`.
+            public var includeLibraryFiles: Swift.Bool?
+            /// How long the prompt cache of this chat lives between messages: `5m` (the default) or `1h`. A 1-hour cache costs more to write and the same to read; it applies only on models that support it, and other models keep the 5-minute cache. Omit to leave it unchanged.
+            ///
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/promptCacheTtl`.
+            public var promptCacheTtl: Swift.String?
+            /// Defaults to true when omitted. When knowledgeIds grows, the newly-added file ids are also appended to every project that contains this session, granting every member of that project access to those files. This propagation is append-only and cannot be undone through the UI - pass false if newly-attached files should not be shared with the project.
+            ///
+            /// - Remark: Generated from `#/components/schemas/updateSessionRequest/propagateToProjects`.
+            public var propagateToProjects: Swift.Bool?
+            /// Creates a new `UpdateSessionRequest`.
+            ///
+            /// - Parameters:
+            ///   - name:
+            ///   - knowledgeIds:
+            ///   - artifactIds:
+            ///   - tags:
+            ///   - lastUsedModel: Pin a specific model id, or omit/send null to leave the current pin unchanged. Sending null does NOT clear it.
+            ///   - forceKnowledgeRetrieval:
+            ///   - lakeScope: The data lakes this session searches, as lake tags (the `datalake_tag` of each lake from GET /api/v1/data-lakes). Send a list to search only those lakes, `[]` to search no lake at all, or `null` to clear the choice so retrieval falls back to every lake you can reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach are ignored at retrieval time rather than rejected here. A non-empty list also turns forced retrieval on for a session that has never set it, unless `forceKnowledgeRetrieval` is sent in the same request; a value the session already stores is left as it is. Conversely `[]` leaves a session with forced retrieval nothing to retrieve from, so its forced retrieval is skipped rather than run against every lake.
+            ///   - includeLibraryFiles: Whether the session grounds on your own library (files you own, or that are shared with you or your groups) alongside its lakes. `false` confines retrieval to lake content, including when every lake is in scope; the session's attached files still reach the model and stay searchable by its knowledge-base tools. Omit to leave it unchanged; while never set, the library is excluded only when a lake was picked for the session (Data Lakes mode or an explicit lake scope), not when lake tags were derived from an attached file. While `forceKnowledgeRetrieval` is `false` the library is included regardless; the stored value applies again once it is turned back on.
+            ///   - promptCacheTtl: How long the prompt cache of this chat lives between messages: `5m` (the default) or `1h`. A 1-hour cache costs more to write and the same to read; it applies only on models that support it, and other models keep the 5-minute cache. Omit to leave it unchanged.
+            ///   - propagateToProjects: Defaults to true when omitted. When knowledgeIds grows, the newly-added file ids are also appended to every project that contains this session, granting every member of that project access to those files. This propagation is append-only and cannot be undone through the UI - pass false if newly-attached files should not be shared with the project.
+            public init(
+                name: Swift.String? = nil,
+                knowledgeIds: [Swift.String]? = nil,
+                artifactIds: [Swift.String]? = nil,
+                tags: Components.Schemas.UpdateSessionRequest.TagsPayload? = nil,
+                lastUsedModel: Swift.String? = nil,
+                forceKnowledgeRetrieval: Swift.Bool? = nil,
+                lakeScope: [Swift.String]? = nil,
+                includeLibraryFiles: Swift.Bool? = nil,
+                promptCacheTtl: Swift.String? = nil,
+                propagateToProjects: Swift.Bool? = nil
+            ) {
+                self.name = name
+                self.knowledgeIds = knowledgeIds
+                self.artifactIds = artifactIds
+                self.tags = tags
+                self.lastUsedModel = lastUsedModel
+                self.forceKnowledgeRetrieval = forceKnowledgeRetrieval
+                self.lakeScope = lakeScope
+                self.includeLibraryFiles = includeLibraryFiles
+                self.promptCacheTtl = promptCacheTtl
+                self.propagateToProjects = propagateToProjects
+            }
+            public enum CodingKeys: String, CodingKey {
+                case name
+                case knowledgeIds
+                case artifactIds
+                case tags
+                case lastUsedModel
+                case forceKnowledgeRetrieval
+                case lakeScope
+                case includeLibraryFiles
+                case promptCacheTtl
+                case propagateToProjects
+            }
+        }
+        /// - Remark: Generated from `#/components/schemas/deleteSessionResponse200`.
+        public struct DeleteSessionResponse200: Codable, Hashable, Sendable {
+            /// The caller's most recently updated remaining session, which the product UI opens next; null when none remains.
+            ///
+            /// - Remark: Generated from `#/components/schemas/deleteSessionResponse200/newLastNotebookId`.
+            public var newLastNotebookId: Swift.String?
+            /// Creates a new `DeleteSessionResponse200`.
+            ///
+            /// - Parameters:
+            ///   - newLastNotebookId: The caller's most recently updated remaining session, which the product UI opens next; null when none remains.
+            public init(newLastNotebookId: Swift.String? = nil) {
+                self.newLastNotebookId = newLastNotebookId
+            }
+            public enum CodingKeys: String, CodingKey {
+                case newLastNotebookId
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/getMeResponse200`.
         public struct GetMeResponse200: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/getMeResponse200/id`.

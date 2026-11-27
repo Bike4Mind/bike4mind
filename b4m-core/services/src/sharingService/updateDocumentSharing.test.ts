@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
-import { NotFoundError } from '@bike4mind/utils';
+import { ForbiddenError, NotFoundError } from '@bike4mind/utils';
 import { updateDocumentSharing } from './updateDocumentSharing';
 
 type Adapters = Parameters<typeof updateDocumentSharing>[2];
@@ -47,7 +47,7 @@ describe('sharingService - updateDocumentSharing', () => {
   it('falls back to the pre-write doc but still returns the written flags when the re-read races to null', async () => {
     // pre-write read (auth) returns the stale doc; the post-write re-read returns null
     db.sessions.shareable.findShareAccessById
-      .mockResolvedValueOnce({ id: 's1', isGlobalRead: false, isGlobalWrite: false })
+      .mockResolvedValueOnce({ id: 's1', userId: 'user-1', isGlobalRead: false, isGlobalWrite: false })
       .mockResolvedValueOnce(null);
 
     const result: any = await updateDocumentSharing(
@@ -64,6 +64,7 @@ describe('sharingService - updateDocumentSharing', () => {
   it('returns a freshly signed fileUrl for an image-serveable file', async () => {
     db.fabFiles.shareable.findShareAccessById.mockResolvedValue({
       id: 'f1',
+      userId: 'user-1',
       filePath: 'owned/f1.png',
       mimeType: 'image/png',
       moderationStatus: 'clean',
@@ -88,6 +89,7 @@ describe('sharingService - updateDocumentSharing', () => {
   it('strips fileUrl from the response for a non-serveable file (targeted write never touches it)', async () => {
     db.fabFiles.shareable.findShareAccessById.mockResolvedValue({
       id: 'f1',
+      userId: 'user-1',
       mimeType: 'image/png',
       moderationStatus: 'pending',
       fileUrl: 'https://signed',
@@ -136,6 +138,86 @@ describe('sharingService - updateDocumentSharing', () => {
     expect(result.fileUrlExpireAt).toBeUndefined();
   });
 
+  describe('global write needs edit access', () => {
+    const shareOnly = { id: 's1', userId: 'owner-1', users: [{ userId: 'user-1', permissions: ['read', 'share'] }] };
+
+    it('refuses a share-only sharee turning on global write', async () => {
+      db.sessions.shareable.findShareAccessById.mockResolvedValue(shareOnly);
+
+      await expect(
+        updateDocumentSharing(user, { id: 's1', type: 'sessions', isGlobalRead: true, isGlobalWrite: true }, {
+          db,
+          storage,
+        } as unknown as Adapters)
+      ).rejects.toBeInstanceOf(ForbiddenError);
+      expect(db.sessions.update).not.toHaveBeenCalled();
+    });
+
+    it('lets a share-only sharee turn on global read', async () => {
+      db.sessions.shareable.findShareAccessById.mockResolvedValue(shareOnly);
+
+      await updateDocumentSharing(user, { id: 's1', type: 'sessions', isGlobalRead: true, isGlobalWrite: false }, {
+        db,
+        storage,
+      } as unknown as Adapters);
+
+      expect(db.sessions.update).toHaveBeenCalledWith({ id: 's1', isGlobalRead: true, isGlobalWrite: false });
+    });
+
+    it('lets a share-only sharee keep global write that is already on', async () => {
+      db.sessions.shareable.findShareAccessById.mockResolvedValue({ ...shareOnly, isGlobalWrite: true });
+
+      await updateDocumentSharing(user, { id: 's1', type: 'sessions', isGlobalRead: true, isGlobalWrite: true }, {
+        db,
+        storage,
+      } as unknown as Adapters);
+
+      expect(db.sessions.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a share-only sharee turning off global write that the owner turned on', async () => {
+      db.sessions.shareable.findShareAccessById.mockResolvedValue({ ...shareOnly, isGlobalWrite: true });
+
+      await expect(
+        updateDocumentSharing(user, { id: 's1', type: 'sessions', isGlobalRead: true, isGlobalWrite: false }, {
+          db,
+          storage,
+        } as unknown as Adapters)
+      ).rejects.toBeInstanceOf(ForbiddenError);
+      expect(db.sessions.update).not.toHaveBeenCalled();
+    });
+
+    it('lets a sharee with update and share, through a group, turn on global write', async () => {
+      db.fabFiles.shareable.findShareAccessById.mockResolvedValue({
+        id: 'f1',
+        userId: 'owner-1',
+        groups: [{ groupId: 'grp-1', permissions: ['read', 'update', 'share'] }],
+      });
+
+      await updateDocumentSharing(
+        { id: 'user-1', groups: ['grp-1'] } as never,
+        { id: 'f1', type: 'files', isGlobalRead: true, isGlobalWrite: true },
+        { db, storage } as unknown as Adapters
+      );
+
+      expect(db.fabFiles.update).toHaveBeenCalledWith({ id: 'f1', isGlobalRead: true, isGlobalWrite: true });
+    });
+
+    // The share gate has no admin arm, so an admin who is neither owner nor sharee never reaches the update check.
+    it('gives an admin who is not owner or sharee a 404 from the share gate', async () => {
+      db.sessions.shareable.findShareAccessById.mockResolvedValue(null);
+
+      await expect(
+        updateDocumentSharing(
+          { id: 'admin-1', isAdmin: true } as never,
+          { id: 's1', type: 'sessions', isGlobalRead: true, isGlobalWrite: true },
+          { db, storage } as unknown as Adapters
+        )
+      ).rejects.toBeInstanceOf(NotFoundError);
+      expect(db.sessions.update).not.toHaveBeenCalled();
+    });
+  });
+
   it('throws NotFoundError when the caller lacks share access', async () => {
     db.sessions.shareable.findShareAccessById.mockResolvedValue(null);
     await expect(
@@ -154,7 +236,11 @@ describe('sharingService - updateDocumentSharing', () => {
     };
 
     it('refuses making an org-bound file global when the org disallows public links', async () => {
-      db.fabFiles.shareable.findShareAccessById.mockResolvedValue({ id: 'f1', organizationId: 'org-1' });
+      db.fabFiles.shareable.findShareAccessById.mockResolvedValue({
+        id: 'f1',
+        userId: 'user-1',
+        organizationId: 'org-1',
+      });
       db.organizations.findById.mockResolvedValue(lockedOrg);
 
       await expect(
@@ -188,7 +274,7 @@ describe('sharingService - updateDocumentSharing', () => {
     });
 
     it('makes a personal file global without consulting any organization', async () => {
-      db.fabFiles.shareable.findShareAccessById.mockResolvedValue({ id: 'f1' });
+      db.fabFiles.shareable.findShareAccessById.mockResolvedValue({ id: 'f1', userId: 'user-1' });
 
       await updateDocumentSharing(user, { id: 'f1', type: 'files', isGlobalRead: true, isGlobalWrite: true }, {
         db,

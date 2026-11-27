@@ -1,4 +1,4 @@
-import { dataLakeRepository, fabFileRepository } from '@bike4mind/database';
+import { dataLakeRepository, fabFileRepository, organizationRepository } from '@bike4mind/database';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { resolveEffectiveEmbeddingModel } from '../embeddings/effectiveEmbeddingModel';
 import { recallLakeMemory, type AccessibleLake, type LakeBeliefRecall } from './recallLakeMemory';
@@ -24,10 +24,19 @@ export async function recallLakeMemoryForSession(input: {
   query: string;
   dataLakeTags: string[];
   retrievalFilter?: RetrievalExclusionOptions;
+  /** See `trustedLakesOnly` on `IChatCompletionServiceOptions['recallLakeMemory']`. */
+  trustedLakesOnly: boolean;
   /** Belief budget for the turn (`lakeMemoryRecallK`), resolved by the caller. */
   k: number;
 }): Promise<LakeBeliefRecall[]> {
   if (input.dataLakeTags.length === 0 || !input.query.trim()) return [];
+
+  const memberOrgIds = input.trustedLakesOnly
+    ? new Set(await organizationRepository.findMembershipOrgIds(input.userId))
+    : undefined;
+  const isTrusted = (lake: { createdByUserId?: unknown; organizationId?: unknown }) =>
+    String(lake.createdByUserId) === input.userId ||
+    (lake.organizationId != null && !!memberOrgIds?.has(String(lake.organizationId)));
 
   const lakes = (
     await Promise.all(
@@ -43,6 +52,7 @@ export async function recallLakeMemoryForSession(input: {
         // otherwise fail this check CLOSED for every lake and silently disable the feature outright.
         const lake = await dataLakeRepository.findByDatalakeTag(datalakeTag);
         if (!lake?.createdByUserId || lake.status !== 'active' || lake.lakeMemoryEnabled !== true) return null;
+        if (memberOrgIds && !isTrusted(lake)) return null;
         return { datalakeTag, ownerUserId: lake.createdByUserId };
       })
     )

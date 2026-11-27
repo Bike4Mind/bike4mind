@@ -122,6 +122,16 @@ describe('organizationService - leave', () => {
     expect(memberWithSelectedOrg.organizationId?.toString()).toBe('org1');
   });
 
+  it('clears organizationId when the route id is spelled differently from the stored id', async () => {
+    const member = { ...mockMemberUser, organizationId: orgPointer('org1') } as IUserDocument;
+
+    await leave(member, { id: 'ORG1' }, mockAdapters);
+
+    expect(mockAdapters.db.users.update).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user1', organizationId: null })
+    );
+  });
+
   it("does NOT clear organizationId when the user's selected org is a different org", async () => {
     const memberWithOtherOrg = { ...mockMemberUser, organizationId: orgPointer('other-org') } as IUserDocument;
 

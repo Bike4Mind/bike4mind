@@ -21,7 +21,9 @@ const emailBatchQueueDLQ = new sst.aws.Queue('emailBatchQueueDLQ', {});
 
 // Main batch processing queue
 export const emailBatchQueue = new sst.aws.Queue('emailBatchQueue', {
-  visibilityTimeout: '3 minutes', // Time to process 16 emails
+  // At least the Lambda timeout plus SEND_LEASE_MS (apps/workers/src/queueHandlers/emailBatch.ts), so a
+  // redelivery after a timed-out invocation finds every lease it took already stale.
+  visibilityTimeout: '5 minutes',
   dlq: {
     queue: emailBatchQueueDLQ.arn,
     retry: 3,

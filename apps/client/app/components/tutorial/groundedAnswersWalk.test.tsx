@@ -104,7 +104,7 @@ describe('grounded-answers tutorial walk', () => {
     rerenderWith([]);
     await waitFor(() => expect(activeStepId()).toBe(ASK));
 
-    fireEvent.click(screen.getByTestId('tutorial-step-paste'));
+    // Prefilled on arrival, as every prompt step is: no "Paste the message" press first.
     expect(mockInput.setChatInputValue).toHaveBeenCalledWith(transcript[0].prompt);
     rerenderWith([{ id: 'u0', prompt: transcript[0].prompt, status: 'running' }]);
     expect(activeStepId()).toBe(ASK);
@@ -114,6 +114,9 @@ describe('grounded-answers tutorial walk', () => {
     fireEvent.click(screen.getByTestId('tutorial-step-next'));
     expect(activeStepId()).toBe(DONE);
     expect(t.position).toHaveBeenLastCalledWith({ moduleId: MODULE_ID, stepId: DONE, status: 'in_progress' });
+    // The finale offers only Done.
+    expect(screen.queryByTestId('tutorial-coach-leave')).toBeNull();
+    expect(screen.queryByTestId('tutorial-coach-skip')).toBeNull();
 
     fireEvent.click(screen.getByTestId('tutorial-step-next'));
     await waitFor(() => expect(store().active).toBeNull());

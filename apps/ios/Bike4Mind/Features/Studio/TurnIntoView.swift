@@ -163,6 +163,7 @@ private struct FrameGrabView: View {
     NavigationStack {
       VStack(spacing: Tokens.Spacing.m) {
         ZStack {
+          // Media canvas: black in both appearances so the frame is shown as captured.
           Color.black
           if let frame {
             Image(uiImage: frame).resizable().scaledToFit()

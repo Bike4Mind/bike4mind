@@ -15,6 +15,10 @@ const exportUsersCsv = vi.hoisted(() => vi.fn());
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn() }));
 vi.mock('sonner', () => ({ toast }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { get: apiGet } }));
+vi.mock('@client/app/utils/oauthClientAPICalls', () => ({
+  OAUTH_CLIENTS_QUERY_KEY: 'admin-oauth-clients',
+  fetchOAuthClients: async () => [],
+}));
 vi.mock('@client/app/hooks/data/user', () => ({ useGetUserTags: () => ({ data: [] }) }));
 vi.mock('@client/app/utils/organizationAPICalls', () => ({ useGetAllOrganizations: () => ({ data: [] }) }));
 vi.mock('./exportUsersCsv', () => ({ exportUsersCsv }));

@@ -1,5 +1,6 @@
 import { IBaseRepository, IMongoDocument, SettingKey } from '@bike4mind/common';
 import Stripe from 'stripe';
+import { toCustomerFacingSubscription } from '../subscriptions/customerFacing';
 import type { ISubscription, SubscriptionSource } from '../subscriptions/types';
 
 export enum SubscriptionPlanInterval {
@@ -127,15 +128,14 @@ export function subscriptionToUserSubscription(sub: ISubscription & IMongoDocume
     throw new Error(`Cannot convert non-user subscription (ownerType=${sub.ownerType}) to UserSubscription`);
   }
 
-  // Destructure to remove polymorphic fields (ownerId, ownerType) from the unified Subscription model
-  // This prevents the resulting object from having both `userId` and `ownerId` fields
-  // Map ownerId -> userId to maintain backward compatibility with IUserSubscription interface
-  const { ownerId, ownerType, ...rest } = sub;
+  // Map ownerId -> userId to maintain backward compatibility with IUserSubscription interface; the
+  // polymorphic ownerId/ownerType stay off the result, and only customer-facing fields are carried.
+  const { ownerId, ownerType, ...rest } = toCustomerFacingSubscription(sub);
 
   return {
     ...rest,
-    userId: ownerId, // Map polymorphic ownerId to UserSubscription's userId field
-  };
+    userId: ownerId,
+  } as IUserSubscription;
 }
 
 /**

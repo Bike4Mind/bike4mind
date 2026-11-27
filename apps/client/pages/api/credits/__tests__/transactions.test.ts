@@ -86,3 +86,28 @@ describe('GET /api/credits/transactions - days bound', () => {
     expect(mockFindByOwner.mock.calls[0][2].days).toBe(30);
   });
 });
+
+describe('GET /api/credits/transactions - response shape', () => {
+  it('returns owner-facing fields and withholds referral reward metadata ids', async () => {
+    mockFindByOwner.mockResolvedValueOnce([
+      {
+        id: 'tx1',
+        ownerId: 'u1',
+        ownerType: 'User',
+        type: 'generic_add',
+        reason: 'referral_reward',
+        credits: 500,
+        createdAt: new Date('2026-01-01'),
+        updatedAt: new Date('2026-01-01'),
+        metadata: { step: 'subscription', referredUserId: 'friend-1', invoiceId: 'in_1' },
+      },
+    ]);
+    const { res, promise } = run();
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const [row] = res._getJSONData();
+    expect(row).toMatchObject({ id: 'tx1', type: 'generic_add', reason: 'referral_reward', credits: 500 });
+    expect(JSON.stringify(row)).not.toMatch(/friend-1|in_1|ownerId/);
+  });
+});

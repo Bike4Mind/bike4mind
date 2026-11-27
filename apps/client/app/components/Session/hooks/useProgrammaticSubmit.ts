@@ -97,7 +97,8 @@ export function useProgrammaticSubmit({
       return;
     }
     useChatInput.getState().setProgrammaticLaunch(null);
-    const toolsOverride = dispatch.requiredTools ?? undefined;
+    // Stored names are open strings (contributed tools); the send signatures still type them as the enum.
+    const toolsOverride = (dispatch.requiredTools ?? undefined) as B4MLLMTools[] | undefined;
     const content = dispatch.promptContent;
     // Rides the send options, never the prompt text, so it reaches the model without
     // appearing in the user's bubble. Spread only when set, so a launch without it

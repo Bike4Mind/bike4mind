@@ -207,6 +207,7 @@ vi.mock('../apiKeyService', () => ({
   getEffectiveApiKey: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
   sharedAdminKeyProviders: vi.fn(),
+  userKeyProviders: vi.fn(() => new Set()),
   // Consumed by resolveToolAvailability (toolAvailability.ts), threaded through
   // ChatCompletionProcess into ToolBuilder.buildTools - default to "not configured" so
   // resolveToolAvailability computes real (all-false) values instead of hitting its
@@ -230,6 +231,16 @@ const mockedUsdToCredits = vi.mocked(usdToCredits);
 const mockedUsdToCreditsStochastic = vi.mocked(usdToCreditsStochastic);
 const mockedGetSettingsValue = vi.mocked(getSettingsValue);
 const mockedGetSettingsMap = vi.mocked(getSettingsMap);
+// Sets string admin settings read through getSettingsValue, keeping other keys' wiring; restored after the test.
+const setAdminSettingValues = (values: Record<string, string>) => {
+  const prev = mockedGetSettingsValue.getMockImplementation();
+  mockedGetSettingsValue.mockImplementation(((key: string, settings: Record<string, string>) =>
+    key in values ? values[key] : prev?.(key as never, settings)) as typeof getSettingsValue);
+  onTestFinished(() => {
+    if (prev) mockedGetSettingsValue.mockImplementation(prev);
+    else mockedGetSettingsValue.mockReset();
+  });
+};
 // Turns on boolean admin flags that ChatCompletionProcess reads through getSettingsValue, keeping
 // whatever the test already wired for other keys; restored when the test finishes.
 const enableAdminFlags = (...keys: string[]) => {
@@ -12414,7 +12425,13 @@ describe('ChatCompletionProcess', () => {
 
     it('leaves the session untouched with an empty table', async () => {
       const turn = await runTurn(
-        { surface: 'settings-surface', systemPromptText: 'SESSION PROMPT', temperature: 0.4, maxToolCalls: 5 },
+        {
+          userId: 'user1',
+          surface: 'settings-surface',
+          systemPromptText: 'SESSION PROMPT',
+          temperature: 0.4,
+          maxToolCalls: 5,
+        },
         {}
       );
 
@@ -12422,6 +12439,33 @@ describe('ChatCompletionProcess', () => {
       expect(turn.sessionPrompt).toBe('SESSION PROMPT');
       expect(turn.temperature).toBe(0.4);
       expect(turn.maxToolCalls).toBe(5);
+    });
+
+    it("withholds the owner's own prompt and forced tools from a collaborator's turn", async () => {
+      const turn = await runTurn(
+        {
+          userId: 'owner-2',
+          systemPromptText: 'OWNER PROMPT',
+          enabledTools: ['current_datetime'],
+          temperature: 0.4,
+        },
+        {}
+      );
+
+      expect(turn.sessionPrompt).toBeUndefined();
+      expect(turn.enabledTools).not.toContain('current_datetime');
+      expect(turn.temperature).toBe(0.4);
+    });
+
+    it('keeps the workspace-resolved prompt and tools on a collaborator turn', async () => {
+      resolve.mockResolvedValue({ systemPromptText: 'RESOLVED WORKSPACE PROMPT', enabledTools: ['current_datetime'] });
+      const turn = await runTurn(
+        { userId: 'owner-2', surface: 'settings-surface', systemPromptText: 'OWNER PROMPT' },
+        table
+      );
+
+      expect(turn.sessionPrompt).toBe('RESOLVED WORKSPACE PROMPT');
+      expect(turn.enabledTools).toContain('current_datetime');
     });
 
     describe('with a turn responder', () => {
@@ -13323,6 +13367,21 @@ describe('ChatCompletionProcess', () => {
 
       expect(systemText).toContain('The X-200 pump has a 5-year warranty.');
       expect(retrieval).toMatchObject({ outcome: 'ok', dataLakeTags: ['datalake:corpus'] });
+    });
+
+    it('recalls only trusted lakes unless the session names its lakes', async () => {
+      const recall = vi.fn().mockResolvedValue([]);
+      await runAndCaptureSystemText({ message: 'What is the warranty?', recallLakeMemory: recall, retrievalTags: [] });
+      expect(recall).toHaveBeenCalledWith(expect.objectContaining({ trustedLakesOnly: true }));
+
+      recall.mockClear();
+      mockedBuildAndSortMessages.mockClear();
+      await runAndCaptureSystemText({
+        message: 'What is the warranty?',
+        recallLakeMemory: recall,
+        retrievalTags: ['datalake:corpus'],
+      });
+      expect(recall).toHaveBeenCalledWith(expect.objectContaining({ trustedLakesOnly: false }));
     });
   });
 
@@ -16070,6 +16129,7 @@ describe('prompt moderation', () => {
     mockedGetEffectiveLLMApiKeys.mockResolvedValue(effectiveKeys);
     vi.mocked(sharedAdminKeyProviders).mockReturnValue({ openai: true, anthropic: false });
     vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
+    setAdminSettingValues({ openaiCredentialMode: 'federated' });
     enableAdminFlags('ModerationEnabled');
 
     await service.process({ body: startParams, logger: mockLogger });
@@ -16082,12 +16142,45 @@ describe('prompt moderation', () => {
     expect(federatedSharedKeyProviders(chatKeys!)).toEqual({ openai: true, anthropic: false });
   });
 
+  it('keeps chat on the static key while openaiCredentialMode is static, even with the capability deployed', async () => {
+    wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+    const effectiveKeys = { openai: 'demo-key' };
+    mockedGetEffectiveLLMApiKeys.mockResolvedValue(effectiveKeys);
+    vi.mocked(sharedAdminKeyProviders).mockReturnValue({ openai: true, anthropic: false });
+    vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
+    setAdminSettingValues({ openaiCredentialMode: 'static' });
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    const chatKeys = mockedGetLlmByModel.mock.calls.at(-1)?.[0];
+    expect(chatKeys).toEqual(effectiveKeys);
+    expect(federatedSharedKeyProviders(chatKeys!)).toEqual({ openai: false, anthropic: false });
+  });
+
+  it.each([
+    ['federated', { openai: false, anthropic: true }],
+    ['static', { openai: false, anthropic: false }],
+  ] as const)('wires anthropicCredentialMode=%s to the anthropic key only', async (mode, expected) => {
+    wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
+    const effectiveKeys = { openai: 'demo-key', anthropic: 'demo-anthropic-key' };
+    mockedGetEffectiveLLMApiKeys.mockResolvedValue(effectiveKeys);
+    vi.mocked(sharedAdminKeyProviders).mockReturnValue({ openai: true, anthropic: true });
+    vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
+    setAdminSettingValues({ anthropicCredentialMode: mode, openaiCredentialMode: 'static' });
+
+    await service.process({ body: startParams, logger: mockLogger });
+
+    const chatKeys = mockedGetLlmByModel.mock.calls.at(-1)?.[0];
+    expect(federatedSharedKeyProviders(chatKeys!)).toEqual(expected);
+  });
+
   it('retains the primary chat federation provenance when attempting a fallback', async () => {
     wireModMocks({ openaiKey: 'demo-key', guardrailId: null });
     const effectiveKeys = { openai: 'demo-key' };
     mockedGetEffectiveLLMApiKeys.mockResolvedValue(effectiveKeys);
     vi.mocked(sharedAdminKeyProviders).mockReturnValue({ openai: true, anthropic: false });
     vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
+    setAdminSettingValues({ openaiCredentialMode: 'federated' });
     mockedShouldTriggerFallback.mockReturnValue(true);
     mockedIsOverloadedError.mockReturnValue(false);
     const backend = mockedGetLlmByModel.getMockImplementation()?.(effectiveKeys, { logger: mockLogger });
