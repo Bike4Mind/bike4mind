@@ -86,6 +86,39 @@ describe('E2E Turnstile request bypass', () => {
     expect(await harness.request(url)).not.toHaveProperty('x-e2e-cleanup-secret');
   });
 
+  it.each([
+    'https://api.example.com/',
+    'https://api.example.com/_next/static/chunks/app.js',
+    'https://api.example.com/_next/image?url=%2Flogo.png&w=64&q=75',
+    'https://api.example.com/api/anything?x=1',
+  ])('attaches the WAF bypass to every same-origin request: %s', async url => {
+    const harness = createRoutingHarness();
+    await installWafBypass(harness.page);
+    expect(await harness.request(url)).toEqual({
+      'x-existing-header': 'preserved',
+      'x-e2e-waf-bypass': 'waf-token',
+    });
+  });
+
+  it.each([
+    'https://third-party.example/api/otc/send',
+    'https://api.example.com.evil.example/',
+    'http://api.example.com/_next/static/chunks/app.js',
+    'https://api.example.com:8443/api/anything',
+  ])('never attaches the WAF bypass to %s', async url => {
+    const harness = createRoutingHarness();
+    await installWafBypass(harness.page);
+    await bypassTurnstile(harness.page);
+    expect(await harness.request(url)).not.toHaveProperty('x-e2e-waf-bypass');
+  });
+
+  it.each(['', undefined])('registers no route when the WAF token is %j', async token => {
+    vi.stubEnv('E2E_WAF_BYPASS_TOKEN', token);
+    const route = vi.fn();
+    await installWafBypass({ route } as unknown as Page);
+    expect(route).not.toHaveBeenCalled();
+  });
+
   it('uses the localhost API origin when API_URL is unset', async () => {
     vi.stubEnv('API_URL', undefined);
     const harness = createRoutingHarness();
