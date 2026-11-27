@@ -858,6 +858,12 @@ interface WordScope {
   toplevel: string | null;
   /** Variables a plain top-level `NAME=literal` set earlier in the script, which bash expands to that text. */
   assigned?: ReadonlyMap<string, string>;
+  /**
+   * Whether `$NAME` holds a value that cannot start with `-`: the script sets it only to such literals, or not at all
+   * so it comes from the environment Desktop starts bash with. Absent when the script may rebind names the walk
+   * cannot see (eval, sourcing, IFS).
+   */
+  inertVariable?: (name: string) => boolean;
   homeUsed(): void;
 }
 
@@ -1432,6 +1438,30 @@ function operandWords(raw: string, scope: WordScope): OperandWord[] | null {
 }
 
 const OPEN_GIT_WORD: GitWord = { text: '', whole: false, splits: true };
+
+/**
+ * A substitution of a read-only git query that prints one ref name or object name. Branch names cannot start with
+ * `-` or hold a space or glob, so even unquoted it stays one word git reads as an operand.
+ */
+const INERT_GIT_PRINT =
+  /^\$\(\s*git\s+(?:branch\s+--show-current|symbolic-ref\s+--short\s+HEAD|rev-parse\s+(?:--abbrev-ref\s+|--short\s+)?(?:HEAD|@)|merge-base\s+(?!-)[\w./@^~-]+\s+(?!-)[\w./@^~-]+)\s*\)$/;
+/** Names bash or one of its builtins sets on its own (`$_` is the last word of the previous command). */
+const SHELL_SET_NAMES = /^(_|REPLY|MAPFILE|OPTARG|OPTIND|COPROC\w*|READLINE_\w+|PIPESTATUS|PS\d)$/;
+
+/** Whether the word opens with an expansion git reads as an operand whatever it holds (see `GitWord.inert`). */
+function inertStart(pieces: readonly WordPiece[], scope: WordScope): boolean {
+  const [first, ...after] = pieces;
+  if (first === undefined || !('expansion' in first) || scope.inertVariable === undefined) return false;
+  // The expansion may be empty, so whatever follows it must not be able to open with `-` either.
+  const [next] = after;
+  if (after.some(piece => !('char' in piece)) || (next !== undefined && 'char' in next && next.char === '-'))
+    return false;
+  if (INERT_GIT_PRINT.test(first.expansion)) return true;
+  if (first.unquoted) return false;
+  const named = ASSIGNED_VARIABLE.exec(first.expansion);
+  const name = named?.[1] ?? named?.[2];
+  return name !== undefined && !UNBOUND_NAMES.test(name) && !SHELL_SET_NAMES.test(name) && scope.inertVariable(name);
+}
 // `"$@"`, `"${a[@]}"` and the like expand to several words even inside double quotes.
 const QUOTED_SPLIT = /^\$\{?[@*]|\[[@*]\]/;
 
@@ -1458,10 +1488,20 @@ function gitWords(raw: string, scope: WordScope, fill?: GitFill): GitWord[] {
     const globAt = glob.indexOf(true);
     if (expandAt === null && globAt === -1) return { text, whole: true, splits: false };
     const end = Math.min(expandAt ?? text.length, globAt === -1 ? text.length : globAt);
+    const inert = globAt === -1 && expandAt === 0 && inertStart(pieces, plain);
     const splits = pieces.some(
-      piece => 'expansion' in piece && (piece.unquoted === true || QUOTED_SPLIT.test(piece.expansion))
+      (piece, index) =>
+        'expansion' in piece &&
+        !(inert && index === 0) &&
+        (piece.unquoted === true || QUOTED_SPLIT.test(piece.expansion))
     );
-    return { text: text.slice(0, end), whole: false, splits, ...(globAt === -1 ? {} : { glob: true }) };
+    return {
+      text: text.slice(0, end),
+      whole: false,
+      splits,
+      ...(globAt === -1 ? {} : { glob: true }),
+      ...(inert && !splits ? { inert } : {}),
+    };
   });
 }
 
@@ -1743,6 +1783,69 @@ const RSYNC_VALUED_LONG = new Set([
   'outbuf',
   'remote-option',
 ]);
+
+/** The word a cp, mv, ln or install call writes: its target folder option's value or its last operand; null if none. */
+function copyDestination(program: string, args: readonly string[]): number | null {
+  const letters = COPY_VALUE_LETTERS.get(program);
+  if (letters === undefined) return null;
+  const target = copyTarget(program, args);
+  if (target !== null) return target.glued ? null : target.index;
+  const operands: number[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = unquote(args[index] as string);
+    if (arg === '--') {
+      for (let rest = index + 1; rest < args.length; rest++) operands.push(rest);
+      break;
+    }
+    if (!arg.startsWith('-') || arg === '-') operands.push(index);
+    else if (arg.startsWith('--')) {
+      if (!arg.includes('=') && arg.length > 2 && 'suffix'.startsWith(arg.slice(2))) index++;
+    } else {
+      for (let at = 1; at < arg.length; at++) {
+        if (!letters.includes(arg[at] as string)) continue;
+        if (at === arg.length - 1) index++;
+        break;
+      }
+    }
+  }
+  return operands.length >= 2 ? (operands.at(-1) as number) : null;
+}
+
+/** The words of `args` holding code an interpreter runs inline: the value of `node -e`, `python -c` and the like. */
+function inlineCodeWords(program: string, args: readonly string[]): Set<number> {
+  const option = INLINE_CODE_OPTIONS.get(program.replace(/[\d.]+$/, ''));
+  const code = new Set<number>();
+  if (option === undefined) return code;
+  // Past `--` or the first operand (a script path, or the code itself) every word belongs to the program run.
+  for (const [index, raw] of args.entries()) {
+    const arg = wordValue(raw);
+    const matched = option.exec(arg)?.[0];
+    if (matched === undefined) {
+      if (!arg.startsWith('-') || arg === '--') break;
+      continue;
+    }
+    // `--eval=code` and `-ccode` carry the code in the same word.
+    code.add(matched.endsWith('=') || matched.length < arg.length ? index : index + 1);
+    break;
+  }
+  return code;
+}
+
+/** The string literals in inline code, the only places in it that name a file. */
+const CODE_STRING = /'([^'\n]*)'|"([^"\n]*)"|`([^`\n]*)`/g;
+const CODE_TOKEN_BREAK = /[\s'"`()[\]{},;=<>|&!*+?:\\]+/;
+/** A property chain such as `process.env.API_KEY`, which reads a variable rather than naming a file. */
+const PROPERTY_CHAIN = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)+$/;
+
+/**
+ * The words in inline code that may name a file: its string literals, and any other token that is not a property
+ * chain, since a quote the code escapes or a literal like Perl's `q()` can hide where a string starts.
+ */
+function codePathWords(code: string): string[] {
+  const literals = [...code.matchAll(CODE_STRING)].map(match => match[1] ?? match[2] ?? match[3] ?? '');
+  const tokens = code.split(CODE_TOKEN_BREAK).filter(token => token !== '' && !PROPERTY_CHAIN.test(token));
+  return [...new Set([...literals, ...tokens])];
+}
 
 /** The operands of a cp or rsync call, without the words that are an option's value. */
 function copyOperands(program: string, args: readonly string[]): string[] {
@@ -6990,6 +7093,15 @@ export async function scanShell(
       claimedUnread += unreadOperands - before;
     };
 
+    // A name the script never sets holds what bash inherits from this process.
+    const inertVariable = (name: string): boolean =>
+      (variables.set.some(set => set.name === name) || !(process.env[name] ?? '').startsWith('-')) &&
+      variables.set.every(
+        set =>
+          set.name !== name ||
+          (typeof set.value === 'string' && !set.appends && !set.nameref && LITERAL_VALUE.test(set.value))
+      );
+
     const scope = (): WordScope => {
       const shellPath = (path: string): string => wslLocation(path)?.linuxPath ?? path;
       return {
@@ -7001,6 +7113,7 @@ export async function scanShell(
         user,
         bindings: loopBindings,
         assigned: literalBindings,
+        ...(anyName || sourced || MAY_UNBIND.test(gateText) ? {} : { inertVariable }),
         toplevel: state.lost ? null : (toplevels.get(state.cwd) ?? null),
         homeUsed: () => {
           if (!homeKnown) homeGuessed = true;
@@ -8852,9 +8965,18 @@ export async function scanShell(
       } else if (part && onlyReads(tokens, false)) {
         part.reads = true;
       }
-      for (const arg of rest) {
-        const envFile = arg.startsWith('-') ? null : noteEnvFile(arg);
-        if (envFile) (entry.envFiles ??= []).push(envFile);
+      // Only a file the call reads counts: not the file a copy writes, and in inline code only a string naming one,
+      // so `process.env.X` is no file.
+      const unwrapped = rest.length - wrappedRest.length;
+      const aligned = unwrapped >= 0 && wrappedRest.every((word, index) => rest[unwrapped + index] === word);
+      const destination = aligned ? copyDestination(inner, wrappedRest) : null;
+      const code = aligned ? inlineCodeWords(inner, wrappedRest) : new Set<number>();
+      for (const [index, arg] of rest.entries()) {
+        const at = index - unwrapped;
+        const inCode = at >= 0 && code.has(at);
+        if (!inCode && (arg.startsWith('-') || (at >= 0 && at === destination))) continue;
+        const named = inCode ? codePathWords(wordValue(arg)).map(noteEnvFile) : [noteEnvFile(arg)];
+        for (const envFile of named) if (envFile) (entry.envFiles ??= []).push(envFile);
       }
       if (deletesFiles(tokens)) entry.deletes = true;
       for (const directory of directoryOptionValues(tokens)) await check(directory, state.cwd);
