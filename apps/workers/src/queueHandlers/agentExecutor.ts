@@ -4103,11 +4103,15 @@ async function runExecution(
     logger.error('[Error] Agent execution failed', { error: errorMessage, stack: errorStack });
 
     try {
-      await markFailedWithRetry(
+      const markedFailed = await markFailedWithRetry(
         () => agentExecutionRepository.markFailedIfActive(executionId, { message: errorMessage, stack: errorStack }),
         logger,
         { getRemainingMs: () => context.getRemainingTimeInMillis() }
       );
+      if (!markedFailed) {
+        logger.info('[Error] Execution already terminal, skipping failure notification');
+        return;
+      }
       // Don't leak internal error details to client. Recognized, non-sensitive failure
       // categories (billing/rate-limit/timeout/auth) get a specific message; everything else stays
       // generic. Full details remain in the logs above.
@@ -5523,23 +5527,28 @@ async function processSubagentDispatch(
     const errorMessage = err instanceof Error ? err.message : String(err);
     logger.error('[SubagentDispatch] Fatal error', { error: errorMessage });
     try {
-      await markFailedWithRetry(
+      const markedFailed = await markFailedWithRetry(
         () => agentExecutionRepository.markFailedIfActive(childExecutionId, { message: errorMessage, timedOut: false }),
         logger,
         { getRemainingMs: () => context.getRemainingTimeInMillis() }
       );
-      // `parentId` is set inside the try block; if we threw before resolving
-      // it (e.g., child doc missing), we don't know the real parent. Omit the
-      // `executionId` field entirely rather than aliasing it to the child id -
-      // clients can detect "no parent linkage" and route to a top-level error
-      // handler instead of mistakenly threading this through subagent-event UI.
-      await sendWs('subagent_failed', {
-        ...(parentId ? { executionId: parentId } : {}),
-        childExecutionId,
-        agentName,
-        error: 'Subagent dispatch failed',
-        isTimeout: false,
-      });
+      if (markedFailed) {
+        // `parentId` is set inside the try block; if we threw before resolving
+        // it (e.g., child doc missing), we don't know the real parent. Omit the
+        // `executionId` field entirely rather than aliasing it to the child id -
+        // clients can detect "no parent linkage" and route to a top-level error
+        // handler instead of mistakenly threading this through subagent-event UI.
+        await sendWs('subagent_failed', {
+          ...(parentId ? { executionId: parentId } : {}),
+          childExecutionId,
+          agentName,
+          error: 'Subagent dispatch failed',
+          isTimeout: false,
+        });
+      } else {
+        logger.info('[SubagentDispatch] Child already terminal, skipping failure notification');
+      }
+      // Idempotent: re-reads sibling state, so it runs even when the child was already terminal.
       await fireDagNodeTerminalOnRefusal({
         dagNodeId,
         parentExecutionId: dagParentExecutionId,

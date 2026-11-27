@@ -1318,6 +1318,31 @@ describe('processExecution tool deps', () => {
       );
     });
 
+    it.each([
+      { markedFailed: true, notified: true },
+      { markedFailed: false, notified: false },
+    ])(
+      'notifies the client of the failure only when the guarded write marked it failed ($markedFailed)',
+      async ({ markedFailed, notified }) => {
+        resolveWorkspaceSettings.mockRejectedValue(new Error('workspace lookup failed'));
+        const { sessionRepository, agentExecutionRepository } = await import('@bike4mind/database');
+        const { persistRunAsQuest } = await import('@bike4mind/server-utils/utils/persistRunAsQuest');
+        vi.mocked(persistRunAsQuest).mockClear();
+        vi.mocked(agentExecutionRepository.markFailedIfActive).mockResolvedValueOnce(markedFailed);
+        vi.mocked(sessionRepository.findById).mockResolvedValue({
+          ...baseSession,
+          surface: 'settings-workspace',
+          disableUserIntegrations: false,
+        } as never);
+        const { handler } = await import('./agentExecutor');
+
+        await expect(handler(continuationEvent(), lambdaContext)).resolves.toEqual({ batchItemFailures: [] });
+
+        expect(ws.frames.some(frame => frame.action === 'failed')).toBe(notified);
+        expect(vi.mocked(persistRunAsQuest).mock.calls.length > 0).toBe(notified);
+      }
+    );
+
     it('refuses a run on a workspace that answers its own turns, before any tool or model work', async () => {
       const { sessionRepository, agentExecutionRepository } = await import('@bike4mind/database');
       vi.mocked(sessionRepository.findById).mockResolvedValue({
