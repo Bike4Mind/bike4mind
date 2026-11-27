@@ -258,3 +258,4 @@ export * from './preferenceArena';
 export * from './ipBlock';
 export { regionalPersonalEmailProviders } from './organizationUtils';
 export * from './tutorials';
+export * from './secretsAtRest';

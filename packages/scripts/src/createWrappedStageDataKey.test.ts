@@ -1,10 +1,8 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createSstSecretStore,
   createWrappedStageDataKey,
   parseSecretListing,
-  SECRETS_AT_REST_PURPOSE,
   type WrappedKeyDeps,
   type WrappedKeyOptions,
 } from './createWrappedStageDataKey';
@@ -24,7 +22,6 @@ function setup(current: string | undefined, overrides: Partial<WrappedKeyOptions
     stage: 'production',
     appName: 'app',
     dryRun: false,
-    force: false,
     isPreview: false,
     ...overrides,
   };
@@ -66,16 +63,9 @@ describe('createWrappedStageDataKey', () => {
     const stored = Buffer.from(BLOB).toString('base64');
     expect(deps.setSecret).toHaveBeenCalledWith('production', stored);
     const hex = Buffer.from(BLOB).toString('hex');
-    expect(lines).toEqual([`Set SECRET_ENCRYPTION_KEY_WRAPPED for stage production (wrapped under arn:key)`]);
+    expect(lines).toEqual([`Set SECRET_DATA_KEY_WRAPPED for stage production (wrapped under arn:key)`]);
     expect(lines.join('\n')).not.toContain(stored);
     expect(lines.join('\n')).not.toContain(hex);
-  });
-
-  it('--force replaces an existing blob', async () => {
-    const { deps, run } = setup('old', { force: true });
-    expect(await run()).toBe('created');
-    expect(deps.setSecret).toHaveBeenCalledTimes(1);
-    expect(deps.setSecret).toHaveBeenCalledWith('production', Buffer.from(BLOB).toString('base64'));
   });
 
   it('requires --key on a preview and fails on a disabled key', async () => {
@@ -85,15 +75,10 @@ describe('createWrappedStageDataKey', () => {
     await expect(run()).rejects.toThrow('not enabled');
     expect(deps.setSecret).not.toHaveBeenCalled();
   });
-
-  it('uses the same purpose as infra/secretsAtRestKey.ts', () => {
-    const infra = readFileSync(resolve(__dirname, '../../../infra/secretsAtRestKey.ts'), 'utf8');
-    expect(infra).toContain(`SECRETS_AT_REST_PURPOSE = '${SECRETS_AT_REST_PURPOSE}'`);
-  });
 });
 
 describe('parseSecretListing', () => {
-  const NAME = 'SECRET_ENCRYPTION_KEY_WRAPPED';
+  const NAME = 'SECRET_DATA_KEY_WRAPPED';
   const fallback = ['# fallback', 'OTHER=a', `${NAME}=inherited`, 'PEM=-----BEGIN', 'MIIE=', '-----END'];
 
   it('reads the stage value from its own section, after the fallback section', () => {
@@ -113,5 +98,23 @@ describe('parseSecretListing', () => {
 
   it('reads a listing that has no section headers', () => {
     expect(parseSecretListing(`A=1\n${NAME}=own`, NAME)).toBe('own');
+  });
+});
+
+describe('createSstSecretStore', () => {
+  it('passes the app name to sst as SEED_APP_NAME on read and write', async () => {
+    const exec = vi.fn(() => '# app/dev\nSECRET_DATA_KEY_WRAPPED=blob\n');
+    const store = createSstSecretStore('other-app', exec);
+    expect(await store.readSecret('dev')).toBe('blob');
+    await store.setSecret('dev', 'AQID');
+    expect(exec).toHaveBeenCalledTimes(2);
+    for (const call of exec.mock.calls as unknown as [string, string[], { env: NodeJS.ProcessEnv }][]) {
+      expect(call[2].env.SEED_APP_NAME).toBe('other-app');
+    }
+    expect(exec.mock.calls[1]).toMatchObject([
+      'npx',
+      ['sst', 'secret', 'set', 'SECRET_DATA_KEY_WRAPPED', '--stage', 'dev'],
+      { input: 'AQID' },
+    ]);
   });
 });

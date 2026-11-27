@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { SECRETS_AT_REST_PURPOSE } from '@bike4mind/common';
 import type { KeyProvider } from '../keyring';
 
 export interface KmsDecryptArgs {
@@ -50,7 +51,7 @@ export function createAwsKmsKeyProvider(opts: AwsKmsKeyProviderOptions): KeyProv
         const plaintext = await Promise.race([
           decrypt({
             ciphertext: Buffer.from(wrappedKey, 'base64'),
-            encryptionContext: { purpose: 'secrets-at-rest', stage },
+            encryptionContext: { purpose: SECRETS_AT_REST_PURPOSE, stage },
             signal: controller.signal,
           }),
           timeout,

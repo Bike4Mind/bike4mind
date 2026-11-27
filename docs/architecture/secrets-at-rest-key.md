@@ -1,6 +1,6 @@
 # Secrets-at-rest KMS key
 
-A KMS key wraps a per-stage data key (`SECRET_ENCRYPTION_KEY_WRAPPED`). The keyring that consumes it is separate work; until it lands, only the reachability probe unwraps the blob.
+A KMS key wraps a per-stage data key (`SECRET_DATA_KEY_WRAPPED`). The keyring selects the `aws-kms` provider when this secret is set and stays on the static key otherwise, so minting a stage switches its active key. The name and the encryption-context purpose are exported from `@bike4mind/common` and used by infra, the mint script, the probe and the keyring.
 
 ## Where the key lives
 
@@ -28,7 +28,7 @@ pnpm --filter @bike4mind/scripts create-wrapped-stage-data-key --stage <stage> [
 pnpm --filter @bike4mind/scripts create-wrapped-stage-data-key --stage <stage> [--key <alias|arn>]
 ```
 
-Re-running says "already set" and changes nothing; `--force` replaces the blob. Previews require `--key`.
+Re-running says "already set" and changes nothing. The script never replaces a set blob: it is the only copy of the data key, and a new one makes everything encrypted under the old one unreadable. Rotating it needs a keyring that reads two wrapped keys; until then, do not rotate. `--app` is passed to sst as `SEED_APP_NAME`. Previews require `--key`.
 
 ## Checking reachability
 

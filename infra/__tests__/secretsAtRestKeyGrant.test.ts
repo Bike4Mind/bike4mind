@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { WRAPPED_DATA_KEY_SECRET_NAME } from '../../b4m-core/common/src/secretsAtRest';
 import { stripComments } from './helpers/infraSource';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -65,7 +66,13 @@ describe('secrets-at-rest Decrypt grant', () => {
   });
 
   it('declares the wrapped blob secret and moves it to ChatCompletion task secrets', () => {
-    expect(read('infra/secrets.ts')).toContain("new sst.Secret('SECRET_ENCRYPTION_KEY_WRAPPED', 'not-configured')");
-    expect(read('infra/chatCompletion.ts')).toContain("'SECRET_ENCRYPTION_KEY_WRAPPED'");
+    expect(read('infra/secrets.ts')).toContain(`new sst.Secret('${WRAPPED_DATA_KEY_SECRET_NAME}', 'not-configured')`);
+    expect(read('infra/chatCompletion.ts')).toContain(`'${WRAPPED_DATA_KEY_SECRET_NAME}'`);
+  });
+
+  it('is the secret the keyring reads, so a minted stage switches to the KMS key', () => {
+    expect(read('packages/database/src/security/loadKeyringFromResource.ts')).toContain(
+      'read(WRAPPED_DATA_KEY_SECRET_NAME)'
+    );
   });
 });

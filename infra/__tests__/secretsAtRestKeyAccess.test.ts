@@ -12,7 +12,7 @@ const created = vi.hoisted(() => ({
   kind: 'dedicated' as 'dedicated' | 'shared',
 }));
 
-vi.mock('../secrets', () => ({ secrets: { SECRET_ENCRYPTION_KEY_WRAPPED: 'wrapped-secret' } }));
+vi.mock('../secrets', () => ({ secrets: { SECRET_DATA_KEY_WRAPPED: 'wrapped-secret' } }));
 vi.mock('../vpc', () => ({ lambdaVpc: 'the-vpc' }));
 vi.mock('../dlqAlarms', () => ({ dlqAlarmTopic: undefined, oobAlarmTopic: undefined }));
 vi.mock('../secretsAtRestKey', async importOriginal => ({

@@ -4,10 +4,9 @@
  * The plaintext is discarded at once; only { ok, decryptMs, coldStart } is returned.
  */
 import { DecryptCommand, KMSClient } from '@aws-sdk/client-kms';
+import { SECRETS_AT_REST_PURPOSE } from '@bike4mind/common';
 import { Resource } from 'sst';
 
-/** Must match SECRETS_AT_REST_PURPOSE in infra/secretsAtRestKey.ts (secretsAtRestKey.test.ts checks it). */
-const PURPOSE = 'secrets-at-rest';
 /** A missing route or a stalled response must fail fast, well inside the 10 s function timeout. */
 const TIMEOUT_MS = 3000;
 
@@ -40,7 +39,10 @@ export async function runUnwrapProbe(input: {
   warm = true;
   const started = now();
   try {
-    await input.decrypt(Buffer.from(input.blobBase64, 'base64'), { purpose: PURPOSE, stage: input.stage });
+    await input.decrypt(Buffer.from(input.blobBase64, 'base64'), {
+      purpose: SECRETS_AT_REST_PURPOSE,
+      stage: input.stage,
+    });
     return { ok: true, decryptMs: Math.round(now() - started), coldStart };
   } catch (error) {
     // Name only: an SDK error message can carry request detail.
@@ -51,7 +53,7 @@ export async function runUnwrapProbe(input: {
 
 export const handler = async (): Promise<UnwrapProbeResult> => {
   return runUnwrapProbe({
-    blobBase64: Resource.SECRET_ENCRYPTION_KEY_WRAPPED.value,
+    blobBase64: Resource.SECRET_DATA_KEY_WRAPPED.value,
     stage: Resource.App.stage,
     decrypt: async (blob, context) => {
       // The response, which holds the plaintext data key, is dropped without being read.

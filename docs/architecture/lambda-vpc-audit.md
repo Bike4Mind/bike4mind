@@ -223,4 +223,4 @@ The four handlers declared in `infra/queues.ts` whose source is generated outsid
 | `apps/workers/src/security/alertProcessor.handler` | `infra/securityAlerts.ts` | MongoDB; linked: `eventBus`, `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/security/attackSimulation/runner.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
 | `apps/workers/src/security/cloudScan.handler` | `infra/cron.ts` | MongoDB; linked: `allSecrets` | Yes | Connects to MongoDB. |
-| `apps/workers/src/security/secretsAtRestUnwrapProbe.handler` | `infra/secretsAtRestKeyAccess.ts` | KMS `Decrypt` through the NAT; linked: `SECRET_ENCRYPTION_KEY_WRAPPED` | Yes | Proves a VPC-attached function reaches KMS and records `Decrypt` latency; kept in the VPC because that is the path under test. Manual invoke only. |
+| `apps/workers/src/security/secretsAtRestUnwrapProbe.handler` | `infra/secretsAtRestKeyAccess.ts` | KMS `Decrypt` through the NAT; linked: `SECRET_DATA_KEY_WRAPPED` | Yes | Proves a VPC-attached function reaches KMS and records `Decrypt` latency; kept in the VPC because that is the path under test. Manual invoke only. |

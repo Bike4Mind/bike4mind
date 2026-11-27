@@ -332,7 +332,7 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
-    "SECRET_ENCRYPTION_KEY_WRAPPED": {
+    "SECRET_DATA_KEY_WRAPPED": {
       "type": "sst.sst.Secret"
       "value": string
     }

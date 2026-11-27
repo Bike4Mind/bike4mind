@@ -1,15 +1,13 @@
-import { isPlaceholderValue } from '@bike4mind/common';
+import { execFileSync } from 'node:child_process';
+import { isPlaceholderValue, SECRETS_AT_REST_PURPOSE, WRAPPED_DATA_KEY_SECRET_NAME } from '@bike4mind/common';
 
 /**
  * Mints the per-stage wrapped data key: asks KMS for an AES-256 data key under the stage's secrets-at-rest
- * key, keeps only the wrapped blob and stores it as the SECRET_ENCRYPTION_KEY_WRAPPED SST secret.
+ * key, keeps only the wrapped blob and stores it as the SECRET_DATA_KEY_WRAPPED SST secret.
  * The plaintext key is never returned (GenerateDataKeyWithoutPlaintext), and the blob is never printed.
  */
 
-/** Must stay in sync with SECRETS_AT_REST_PURPOSE in infra/secretsAtRestKey.ts (a test reads both files). */
-export const SECRETS_AT_REST_PURPOSE = 'secrets-at-rest';
-
-export const WRAPPED_SECRET_NAME = 'SECRET_ENCRYPTION_KEY_WRAPPED';
+export const WRAPPED_SECRET_NAME = WRAPPED_DATA_KEY_SECRET_NAME;
 
 /**
  * Reads a secret's own value from `sst secret list` output. The listing is sectioned: a `# fallback`
@@ -27,6 +25,31 @@ export function parseSecretListing(listing: string, name: string): string | unde
 
 export const defaultKeyAlias = (appName: string, stage: string) => `alias/${appName}-${stage}-secrets-at-rest`;
 
+type Exec = (
+  cmd: string,
+  args: string[],
+  options: { encoding?: 'utf8'; input?: string; env: NodeJS.ProcessEnv }
+) => unknown;
+
+/**
+ * Reads and writes the wrapped-key SST secret. sst takes the app name from SEED_APP_NAME, so it is passed
+ * on every call to keep the secret on the same app as the key alias derived from --app.
+ */
+export function createSstSecretStore(appName: string, exec: Exec = execFileSync as Exec) {
+  const env = { ...process.env, SEED_APP_NAME: appName };
+  return {
+    readSecret: async (stage: string) =>
+      parseSecretListing(
+        String(exec('npx', ['sst', 'secret', 'list', '--stage', stage], { encoding: 'utf8', env })),
+        WRAPPED_SECRET_NAME
+      ),
+    // The value goes on stdin so the blob stays out of the process list and shell history.
+    setSecret: async (stage: string, value: string) => {
+      exec('npx', ['sst', 'secret', 'set', WRAPPED_SECRET_NAME, '--stage', stage], { input: value, env });
+    },
+  };
+}
+
 export interface WrappedKeyDeps {
   /** Current value of the stage secret, or undefined when it is not listed. */
   readSecret: (stage: string) => Promise<string | undefined>;
@@ -43,7 +66,6 @@ export interface WrappedKeyOptions {
   key?: string;
   appName: string;
   dryRun: boolean;
-  force: boolean;
   isPreview: boolean;
 }
 
@@ -53,7 +75,7 @@ export async function createWrappedStageDataKey(
   options: WrappedKeyOptions,
   deps: WrappedKeyDeps
 ): Promise<WrappedKeyResult> {
-  const { stage, dryRun, force } = options;
+  const { stage, dryRun } = options;
   if (options.isPreview && !options.key) {
     throw new Error('--key is required on a preview stage: previews share one key, so there is no default alias');
   }
@@ -61,8 +83,10 @@ export async function createWrappedStageDataKey(
   const context = { purpose: SECRETS_AT_REST_PURPOSE, stage };
 
   const current = await deps.readSecret(stage);
-  if (!isPlaceholderValue(current) && !force) {
-    deps.log(`${WRAPPED_SECRET_NAME} is already set for stage ${stage}; nothing to do (use --force to replace it)`);
+  if (!isPlaceholderValue(current)) {
+    deps.log(
+      `${WRAPPED_SECRET_NAME} is already set for stage ${stage}; nothing to do (the wrapped key is never replaced in place; see docs/architecture/secrets-at-rest-key.md)`
+    );
     return 'already-set';
   }
 

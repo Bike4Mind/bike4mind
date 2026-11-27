@@ -1,11 +1,9 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 const kms = vi.hoisted(() => ({ send: vi.fn(async (_command: unknown) => ({})) }));
 
 vi.mock('sst', () => ({
-  Resource: { App: { stage: 'pr7' }, SECRET_ENCRYPTION_KEY_WRAPPED: { value: 'AQID' } },
+  Resource: { App: { stage: 'pr7' }, SECRET_DATA_KEY_WRAPPED: { value: 'AQID' } },
 }));
 vi.mock('@aws-sdk/client-kms', () => ({
   KMSClient: vi.fn(function () {
@@ -73,12 +71,4 @@ describe('handler', () => {
       },
     });
   });
-});
-
-it('uses the same purpose as infra/secretsAtRestKey.ts', () => {
-  const infra = readFileSync(resolve(__dirname, '../../../../infra/secretsAtRestKey.ts'), 'utf8');
-  expect(infra).toContain("SECRETS_AT_REST_PURPOSE = 'secrets-at-rest'");
-  expect(readFileSync(resolve(__dirname, 'secretsAtRestUnwrapProbe.ts'), 'utf8')).toContain(
-    "PURPOSE = 'secrets-at-rest'"
-  );
 });

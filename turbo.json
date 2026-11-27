@@ -100,8 +100,7 @@
         "!../server-utils/.turbo/**",
         "$TURBO_ROOT$/b4m-core/*/package.json",
         "$TURBO_ROOT$/packages/*/package.json",
-        "$TURBO_ROOT$/catalog/model-hub/**",
-        "$TURBO_ROOT$/infra/secretsAtRestKey.ts"
+        "$TURBO_ROOT$/catalog/model-hub/**"
       ]
     },
     // The curated v3 schema and v2 converter tests read the lists in catalog/model-hub; the chunking
@@ -242,7 +241,6 @@
         "../client/**/*.ts",
         "../client/tsconfig.json",
         "$TURBO_ROOT$/infra/queues.ts",
-        "$TURBO_ROOT$/infra/secretsAtRestKey.ts",
         "$TURBO_ROOT$/infra/analyticsRollup.ts",
         "$TURBO_ROOT$/infra/cliToolHandler.ts",
         "$TURBO_ROOT$/infra/database.ts",
@@ -274,7 +272,6 @@
         "../client/**/*.ts",
         "../client/tsconfig.json",
         "$TURBO_ROOT$/infra/queues.ts",
-        "$TURBO_ROOT$/infra/secretsAtRestKey.ts",
         "$TURBO_ROOT$/infra/analyticsRollup.ts",
         "$TURBO_ROOT$/infra/cliToolHandler.ts",
         "$TURBO_ROOT$/infra/database.ts",

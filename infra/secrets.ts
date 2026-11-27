@@ -108,7 +108,7 @@ export const secrets = {
   // Generate with: openssl rand -hex 32
   SECRET_ENCRYPTION_KEY: new sst.Secret('SECRET_ENCRYPTION_KEY', 'my-secret-placeholder-value'),
   // KMS-wrapped per-stage data key (base64). Minted by packages/scripts/src/create-wrapped-stage-data-key.ts
-  SECRET_ENCRYPTION_KEY_WRAPPED: new sst.Secret('SECRET_ENCRYPTION_KEY_WRAPPED', 'not-configured'),
+  SECRET_DATA_KEY_WRAPPED: new sst.Secret('SECRET_DATA_KEY_WRAPPED', 'not-configured'),
   // Wraps memory principal keys; generate once (openssl rand -hex 32) and never rotate in place
   MEMORY_KEY_SECRET: new sst.Secret('MEMORY_KEY_SECRET', 'not-configured'),
   // Previous encryption key for key rotation - set this to the old key when rotating

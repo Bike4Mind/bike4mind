@@ -12,11 +12,11 @@
  * tag) and the same alarms. Changing it means the owner re-applies the shared key's policy.
  */
 
+import { SECRETS_AT_REST_PURPOSE } from '../b4m-core/common/src/secretsAtRest';
 import { isPreviewStage, runsScheduledJobs } from './constants';
 
-export const SECRETS_AT_REST_PURPOSE = 'secrets-at-rest';
+export { SECRETS_AT_REST_PURPOSE };
 
-/** Must match the KMS encryption context packages/scripts/src/createWrappedStageDataKey.ts mints with. */
 export const secretsAtRestEncryptionContext = (stage: string) => ({ purpose: SECRETS_AT_REST_PURPOSE, stage });
 
 export type SecretsAtRestKeyKind = 'dedicated' | 'shared' | 'none';

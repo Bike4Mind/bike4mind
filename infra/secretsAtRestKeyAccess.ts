@@ -86,7 +86,7 @@ function createAccess() {
     runtime: 'nodejs24.x',
     vpc: lambdaVpc,
     timeout: '10 seconds',
-    link: [secrets.SECRET_ENCRYPTION_KEY_WRAPPED],
+    link: [secrets.SECRET_DATA_KEY_WRAPPED],
   });
 }
 
