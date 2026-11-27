@@ -7,6 +7,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { usePromptSuggestion, type PromptSuggestionController } from './usePromptSuggestion';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -95,7 +96,10 @@ describe('SuggestionModelPicker catalog', () => {
   beforeEach(() => {
     list.mockReset();
     setPromptSuggestionModel('qwen3:8b');
-    (window as unknown as { b4m: unknown }).b4m = { chat: { listSuggestionModels: list } };
+    (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
+      chat: { listSuggestionModels: list },
+    };
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -213,6 +217,7 @@ describe('usePromptSuggestion', () => {
       asked = [];
       answer = async () => 'Add a test';
       (window as unknown as { b4m: unknown }).b4m = {
+        host: chatBackedHostBridge(),
         chat: {
           suggestNextPrompt: async (_sessionId: string, model?: string | null) => {
             asked.push(model);

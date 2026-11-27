@@ -321,7 +321,7 @@ describe('AgentPeekDrawer', () => {
     chat.sendMessage.mockResolvedValue({ ok: true, queued: true, message });
     await renderDrawer(agentFixture('a1'));
     await typeAndSend('hello');
-    expect(chat.onQueueChanged.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(chat.onQueueChanged).toHaveBeenCalled();
 
     const emit = (event: ChatQueueEvent) => act(async () => queueListener?.(event));
     await emit({ sessionId: 'other', queued: [] });

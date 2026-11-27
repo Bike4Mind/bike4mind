@@ -102,6 +102,24 @@ describe('FunctionDataSection', () => {
     expect(screen.getByTestId('python-function-data-chosen').textContent).toBe('upload.csv');
   });
 
+  it('renames to each new pick until the person edits the name, and keeps the typed name after that', () => {
+    renderSection(toolWith(0));
+    const nameInput = () => screen.getByTestId('python-function-data-name');
+    pick(fileOf('file1', 'first.csv'));
+    expect(nameInput()).toHaveValue('first.csv');
+    pick(fileOf('file2', 'second run.csv'));
+    expect(nameInput()).toHaveValue('second_run.csv');
+
+    fireEvent.change(nameInput(), { target: { value: 'rates.csv' } });
+    pick(fileOf('file3', 'third.csv'));
+    expect(screen.getByTestId('python-function-data-chosen').textContent).toBe('third.csv');
+    expect(nameInput()).toHaveValue('rates.csv');
+
+    fireEvent.change(nameInput(), { target: { value: '' } });
+    pick(fileOf('file4', 'fourth.csv'));
+    expect(nameInput()).toHaveValue('fourth.csv');
+  });
+
   it('pins the picked file under the trimmed name and clears the form once it succeeds', () => {
     h.pin.mutate.mockImplementation((_vars: unknown, callbacks: Callbacks) => callbacks.onSuccess?.());
     renderSection(toolWith(0));

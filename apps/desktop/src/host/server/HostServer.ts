@@ -39,6 +39,7 @@ export type HostServerRuntime = Pick<
   | 'listSessions'
   | 'listSessionPage'
   | 'getSession'
+  | 'contextNotices'
   | 'createSession'
   | 'createCodeSession'
   | 'renameSession'
@@ -47,6 +48,7 @@ export type HostServerRuntime = Pick<
   | 'deleteSessionTree'
   | 'respondToApproval'
   | 'answerTaskDecision'
+  | 'listTaskDecisions'
   | 'stopBackgroundProcess'
   | 'browseDirectory'
   | 'listRecentFolders'
@@ -180,9 +182,11 @@ export class HostServer {
       'session/page': request => runtime.listSessionPage(request),
       'session/get': async ({ sessionId, viewed }) => {
         const session = await runtime.getSession(sessionId, viewed === true);
+        const notices = runtime.contextNotices(sessionId);
         return {
           session: sessionForRenderer(session),
           cursor: session?.eventCursor ?? runtime.eventLog.cursor(sessionId),
+          ...(notices.length > 0 ? { notices } : {}),
         };
       },
       'session/rename': async ({ sessionId, title }) => ({
@@ -261,6 +265,7 @@ export class HostServer {
       'project/inspect': async ({ directory }) => ({ inspection: await runtime.inspectProject(directory) }),
       'model/list': async ({ force }) => ({ models: await runtime.listModels(force ?? false) }),
       'draft/defaults': async () => ({ defaults: await runtime.draftDefaults() }),
+      'taskDecision/list': async () => ({ decisions: await runtime.listTaskDecisions() }),
     };
   }
 
@@ -289,7 +294,14 @@ export class HostServer {
       this.logger.warn(`HOST: dropped an unsequenced ${event.type} event for ${event.sessionId}`);
       return;
     }
-    connection.notify(notification('session/event', { sessionId: event.sessionId, seq: event.seq, event }));
+    connection.notify(
+      notification('session/event', {
+        sessionId: event.sessionId,
+        seq: event.seq,
+        epoch: this.runtime.eventLog.cursor(event.sessionId).epoch,
+        event,
+      })
+    );
   }
 
   private broadcast(message: HostNotification): void {
@@ -301,6 +313,20 @@ export class HostServer {
       streamEvent: event => {
         for (const connection of this.connections) {
           if (connection.subscriptions.has(event.sessionId)) this.sendEvent(connection, event);
+        }
+        if (event.type === 'spawn-failed') {
+          const { sessionId, title, message } = event;
+          this.broadcast(notification('session/spawnFailed', { sessionId, title, message }));
+        }
+        if (event.type === 'context-notice') {
+          const { type, sessionId, message, kind } = event;
+          this.broadcast(
+            notification('session/contextNotice', { event: { type, sessionId, message, ...(kind ? { kind } : {}) } })
+          );
+        }
+        if (event.type === 'context-notice-cleared') {
+          const { type, sessionId, kind } = event;
+          this.broadcast(notification('session/contextNotice', { event: { type, sessionId, kind } }));
         }
       },
       sessionSummary: summary => this.broadcast(notification('session/summaryChanged', { summary })),

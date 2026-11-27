@@ -5,7 +5,7 @@ import { apiCreateThrowawayUser } from './helpers/api';
 import { isProductionEnv, isStagingEnv } from './helpers/env';
 import { expectNoHorizontalOverflow, expectReachable, openShortScreenPageAs } from './helpers/launch-readiness';
 import { payButton } from './helpers/stripe-pay-button';
-import { wafBypassHeaders } from './helpers/waf-bypass';
+import { fetchWithWafBypass } from './helpers/waf-bypass';
 import { BasePage } from './pages/BasePage';
 
 // A6.1: the money paths (signup, first purchase, plan upgrade) work on a short screen over a slow
@@ -147,7 +147,7 @@ test.describe('A6.1 money paths on a short screen and a slow link', { tag: ['@la
       let body = '';
       await page.route('**/api/subscriptions/subscribe', async route => {
         if (route.request().method() !== 'POST') return route.fallback();
-        const fetched = await route.fetch({ headers: { ...route.request().headers(), ...wafBypassHeaders() } });
+        const fetched = await fetchWithWafBypass(route);
         body = await fetched.text();
         await route.fulfill({ response: fetched, body });
       });
