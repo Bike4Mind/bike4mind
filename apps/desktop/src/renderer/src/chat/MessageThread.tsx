@@ -1047,7 +1047,8 @@ export function MessageThread({
   onRespond: RespondToApproval;
   /** Moves a command still running in the foreground into the background task panel. */
   onMove?: MoveCallToBackground;
-  onContinue: () => void;
+  /** Ask a stopped reply to go on; absent, a stopped reply has no Continue. */
+  onContinue?: () => void;
   /**
    * The live turn line, drawn at the foot of the reply in flight. Null when no turn is running,
    * which is the same condition `streaming` reports - so the two can never say different things.

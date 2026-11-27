@@ -87,6 +87,8 @@ import { SessionBadge } from './SessionBadge';
 import { WORKING_COLOR_VAR } from './sessionStatus';
 import { PREPARING_WORKTREE } from './chipState';
 import { SESSION_DRAG_TYPE } from './sessionDrag';
+import { summaryHostId } from '../host/sessionDirectory';
+import { useHostSessionCapabilities } from '../host/sessionCapabilities';
 import {
   clampSidebarWidth,
   readSidebarWidth,
@@ -600,6 +602,8 @@ const SessionRow = memo(function SessionRow({
   const { ref: titleRef, clipped } = useTitleClipped(session.title, editing);
   // The open conversation's draft is in the composer in front of the user; only others are marked.
   const showDraft = useHasComposerDraft(session.id) && !selected && !editing;
+  // Pin and Download are Desktop's own calls, so a session on another host offers neither.
+  const { desktopChat } = useHostSessionCapabilities(summaryHostId(session));
 
   const onRenameDone = (next: string | null) => {
     setEditing(false);
@@ -672,15 +676,17 @@ const SessionRow = memo(function SessionRow({
                   />
                 ) : (
                   <>
-                    <MenuItem
-                      onClick={() => actions.togglePin(session)}
-                      data-testid="chat-pin-session-btn"
-                      data-shortcut="P"
-                      aria-keyshortcuts="P"
-                    >
-                      <Box sx={{ flex: 1 }}>{session.pinned ? 'Unpin' : 'Pin'}</Box>
-                      <MenuShortcut letter="P" />
-                    </MenuItem>
+                    {desktopChat && (
+                      <MenuItem
+                        onClick={() => actions.togglePin(session)}
+                        data-testid="chat-pin-session-btn"
+                        data-shortcut="P"
+                        aria-keyshortcuts="P"
+                      >
+                        <Box sx={{ flex: 1 }}>{session.pinned ? 'Unpin' : 'Pin'}</Box>
+                        <MenuShortcut letter="P" />
+                      </MenuItem>
+                    )}
                     <MenuItem
                       onClick={() => {
                         // Shut by hand: the Dropdown unmounts before it can report closing, and would
@@ -705,15 +711,17 @@ const SessionRow = memo(function SessionRow({
                       <Box sx={{ flex: 1 }}>Message session...</Box>
                       <MenuShortcut letter="M" />
                     </MenuItem>
-                    <MenuItem
-                      onClick={() => actions.download(session)}
-                      data-testid="chat-download-session-btn"
-                      data-shortcut="L"
-                      aria-keyshortcuts="L"
-                    >
-                      <Box sx={{ flex: 1 }}>Download</Box>
-                      <MenuShortcut letter="L" />
-                    </MenuItem>
+                    {desktopChat && (
+                      <MenuItem
+                        onClick={() => actions.download(session)}
+                        data-testid="chat-download-session-btn"
+                        data-shortcut="L"
+                        aria-keyshortcuts="L"
+                      >
+                        <Box sx={{ flex: 1 }}>Download</Box>
+                        <MenuShortcut letter="L" />
+                      </MenuItem>
+                    )}
                     {!session.pinned && !session.archived && (
                       <>
                         <ListDivider />
@@ -1183,7 +1191,8 @@ export function SessionList({
   onOpenArtifacts: () => void;
   /** Every orchestration at a glance (missionControl/MissionControl.tsx). */
   onOpenMissionControl?: () => void;
-  onCreateInProject: (directory: string) => void;
+  /** New session in the project at `directory` on `hostId`; see ProjectGroup. */
+  onCreateInProject: (hostId: string, directory: string) => void;
   /** New session that starts inside the user section with this id. */
   onCreateInSection: (sectionId: string) => void;
   onDelete: (sessionId: string) => void;
@@ -1846,10 +1855,13 @@ export function SessionList({
             {sections.custom.map(customGroup)}
 
             {sections.projects.map(group => (
-              <Box key={group.directory} data-testid="project-group">
-                <ProjectHeader group={group} onCreateInProject={target => onCreateInProject(target.directory)} />
+              <Box key={group.key} data-testid="project-group">
+                <ProjectHeader
+                  group={group}
+                  onCreateInProject={target => onCreateInProject(target.hostId, target.directory)}
+                />
                 <CappedSessionRows
-                  groupKey={`project:${group.directory}`}
+                  groupKey={`project:${group.key}`}
                   testIdPrefix="sidebar-project"
                   sessions={group.sessions}
                   uncapped={searching}

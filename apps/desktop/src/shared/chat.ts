@@ -1564,6 +1564,11 @@ export function normalizeSessionTitle(text: string): string {
 }
 
 export interface ChatSessionSummary extends ChatSessionMeta {
+  /**
+   * The host the renderer listed this session from. Stamped by the client when a row arrives
+   * (renderer/src/host/sessionDirectory.ts); a host never sends it. Absent means the local host.
+   */
+  hostId?: string;
   studioWorkspaceId?: string;
   studioRootSessionId?: string;
   messageCount: number;
