@@ -27,9 +27,12 @@ function importsRuntimeTest(source: string): boolean {
 }
 
 // A page's or context's own .request and route.fetch() skip the routes; route.fetch() goes through
-// fetchWithWafBypass. A node fetch() must spread wafBypassHeaders().
+// fetchWithWafBypass. route.continue() in a page route skips the context route too; use
+// route.fallback(). A node fetch() must spread wafBypassHeaders().
 function unscopedRequestCalls(source: string): string[] {
-  const raw = [...source.matchAll(/\b\w+\.request\.(?:fetch|get|post|put|patch|delete|head)\(|\broute\.fetch\(/g)];
+  const raw = [
+    ...source.matchAll(/\b\w+\.request\.(?:fetch|get|post|put|patch|delete|head)\(|\broute\.(?:fetch|continue)\(/g),
+  ];
   const nodeFetch = [...source.matchAll(/(?<![\w.])fetch\([^;]*/g)].filter(
     ([call]) => !call.includes('wafBypassHeaders()')
   );
@@ -90,7 +93,7 @@ describe('e2e WAF bypass coverage', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('scopes request, route.fetch and node fetch calls, which skip the routes', () => {
+  it('scopes request, route.fetch, route.continue and node fetch calls, which skip the routes', () => {
     const offenders = files
       .filter(f => ![HELPER, OFF_STAGE_FETCH].includes(f.rel) && !path.basename(f.rel).startsWith('selfhost-'))
       .flatMap(f => unscopedRequestCalls(f.source).map(call => `${f.rel}: ${call.slice(0, 60)}`));
@@ -107,6 +110,8 @@ describe('e2e WAF bypass coverage', () => {
     expect(unscopedRequestCalls("await scopeWafBypass(this.page.request).get('/api/x');")).toHaveLength(0);
     expect(unscopedRequestCalls('await route.fetch({ headers: { ...wafBypassHeaders() } });')).toHaveLength(1);
     expect(unscopedRequestCalls('await fetchWithWafBypass(route);')).toHaveLength(0);
+    expect(unscopedRequestCalls('await route.continue();')).toHaveLength(1);
+    expect(unscopedRequestCalls('await route.fallback();')).toHaveLength(0);
     expect(unscopedRequestCalls("await fetch(url, { method: 'DELETE' });")).toHaveLength(1);
     expect(unscopedRequestCalls('await fetch(url, { headers: { ...wafBypassHeaders() } });')).toHaveLength(0);
     expect(unscopedRequestCalls('await ctx.fetch(url);')).toHaveLength(0);
