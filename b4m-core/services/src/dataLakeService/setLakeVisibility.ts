@@ -1,5 +1,6 @@
 import {
   ConflictError,
+  isRegistryLakeKey,
   isSameLakeConnectionOwner,
   lakeConnectionOwnerForLake,
   lakeConnectionOwnerOf,
@@ -156,6 +157,14 @@ export const setLakeVisibility = async (
     if (strandsConnection(await db.orgGitHubLakeConnections.findByDataLakeIdAny(existing.id))) {
       throw new ConflictError(
         "Disconnect this data lake's GitHub repository before changing whether it belongs to an organization, then reconnect it afterwards."
+      );
+    }
+
+    // Only lakes predating the createDataLake reservation can hold a registry key; one stays
+    // org-scoped, where it resolves for that org's members alone.
+    if (!targetOrg && isRegistryLakeKey(existing.slug)) {
+      throw new BadRequestError(
+        `The slug "${existing.slug}" is reserved by a built-in knowledge base, so this data lake must stay in its organization.`
       );
     }
 

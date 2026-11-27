@@ -1,7 +1,7 @@
 import { S3Client, CopyObjectCommand } from '@aws-sdk/client-s3';
 import { Resource } from 'sst';
 import { FabFile } from '@bike4mind/database';
-import { BadRequestError, isImageServeable } from '@bike4mind/common';
+import { BadRequestError, MODAL_MEDIA_PREFIX, isImageServeable } from '@bike4mind/common';
 import { MODAL_IMAGE_PREFIX, extractModalImageKey } from './modalImageUrls';
 import { Logger } from '@bike4mind/observability';
 
@@ -9,8 +9,20 @@ const logger = new Logger({ metadata: { service: 'modalImageHandler' } });
 
 const s3Client = new S3Client();
 
-// A held/blocked uploaded image must be refused, not swallowed by the copy-failure fallback below.
+// A refused source must surface as a 400, not be swallowed by the copy-failure fallback below.
 class ModalImageModerationError extends BadRequestError {}
+
+type SourceFile = { userId?: unknown; mimeType?: unknown };
+
+/**
+ * An upload made for banner use, or the caller's own image upload, may be copied into a modal.
+ * Banner use is read from the key: FabFile does not store `purpose`, and only the server picks the
+ * `modals/` prefix, for an admin banner upload (pages/api/files/createFabFile.ts).
+ */
+const mayUseAsModalImage = (file: SourceFile, sourceKey: string, actorUserId: string) =>
+  typeof file.mimeType === 'string' &&
+  file.mimeType.startsWith('image/') &&
+  (sourceKey.startsWith(`${MODAL_MEDIA_PREFIX}/`) || String(file.userId) === actorUserId);
 
 /**
  * The full object key when `imageUrl` addresses `bucket`, in either S3 URL style
@@ -53,8 +65,9 @@ export class ModalImageHandler {
   /**
    * An object URL (signed or not) in the fab-file bucket is copied under `modal-images/` and its key
    * returned, signed at serve time. Any other URL is returned unchanged, minus any S3 signature.
+   * The source must be an image upload record that `actorUserId` may use (see mayUseAsModalImage).
    */
-  static async processModalImageUrl(imageUrl: string): Promise<string> {
+  static async processModalImageUrl(imageUrl: string, actorUserId: string): Promise<string> {
     const existingKey = extractModalImageKey(imageUrl);
     if (existingKey) return existingKey;
 
@@ -62,10 +75,9 @@ export class ModalImageHandler {
     const sourceKey = bucketObjectKey(imageUrl, bucket);
     if (!sourceKey) return withoutSignature(imageUrl);
 
-    // Refuse to promote a held/blocked uploaded image into a permanent, platform-wide banner. No
-    // FabFile match (e.g. a generated image with no upload record) falls through unaffected.
+    // Also refuses a held/blocked image: a banner is permanent and platform-wide.
     const fabFile = await FabFile.findOne({ filePath: sourceKey });
-    if (fabFile && !isImageServeable(fabFile)) {
+    if (!fabFile || !mayUseAsModalImage(fabFile, sourceKey, actorUserId) || !isImageServeable(fabFile)) {
       throw new ModalImageModerationError('This image is not available to use as a banner.');
     }
 

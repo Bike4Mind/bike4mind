@@ -137,7 +137,7 @@ vi.mock('@bike4mind/llm-adapters', async () => {
   };
 });
 
-import { getLlmByModel, getAvailableModels, withFederatedSharedKeys } from '@bike4mind/llm-adapters';
+import { getLlmByModel, getAvailableModels, withProviderCredentialPlan } from '@bike4mind/llm-adapters';
 
 describe('SreAgentService — budget enforcement', () => {
   let service: SreAgentService;
@@ -4141,7 +4141,14 @@ describe('SreAgentService provider capability boundary', () => {
     vi.stubEnv('B4M_PROVIDER_AUTH', 'federated');
     try {
       const accounting = makeAccounting();
-      const keys = withFederatedSharedKeys({ anthropic: 'test-key' }, { anthropic: true, openai: false });
+      const keys = withProviderCredentialPlan(
+        { anthropic: 'test-key' },
+        {
+          platformKeys: { anthropic: true, openai: false },
+          userKeys: new Set(),
+          modes: { anthropic: 'federated', openai: 'static' },
+        }
+      );
       const service = new SreAgentService(
         makeLogger() as unknown as import('@bike4mind/observability').Logger,
         accounting

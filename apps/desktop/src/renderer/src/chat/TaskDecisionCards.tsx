@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Sheet from '@mui/joy/Sheet';
@@ -7,45 +7,82 @@ import Typography from '@mui/joy/Typography';
 import type { PendingDecision, PendingTaskDecision, TaskDecisionAnswer } from '@shared/orchestration';
 import { hostChat } from '../host/hostChat';
 import { hostClient } from '../host/HostClient';
-import { hostForSession } from '../host/sessionHost';
+import { useServingHostIds } from '../host/hostRegistry';
 import { useHostResync } from '../host/useSessionEvents';
 import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { QuestionCard } from './QuestionCard';
 import { SessionLink } from './SessionLink';
 
+function nextTicket(tickets: Map<string, number>, hostId: string): number {
+  const ticket = (tickets.get(hostId) ?? 0) + 1;
+  tickets.set(hostId, ticket);
+  return ticket;
+}
+
 /**
- * Every decision workers wait on the user for, per host: read on mount and after each resync of
- * that host, and replaced by each push of the whole list in between. taskDecision/list needs a
+ * Every decision workers wait on the user for, per connected host: read on mount, when a host
+ * connects and after each resync, and replaced by each push of the whole list in between. A host
+ * that disconnects takes its decisions with it, since they cannot be answered meanwhile. taskDecision/list needs a
  * 1.3 host, which the bundled one is; gate on the negotiated minor before a 1.2 host can be a peer.
  */
 export function useTaskDecisions(): PendingTaskDecision[] {
+  const servingHosts = useServingHostIds();
+  const serving = useRef(servingHosts);
+  serving.current = servingHosts;
   const [byHost, setByHost] = useState<ReadonlyMap<string, PendingTaskDecision[]>>(() => new Map());
-  // Bumped by a resync, which may have skipped a push: the list is read again.
-  const [reads, setReads] = useState(0);
-  useHostResync(() => setReads(count => count + 1));
+  const set = useCallback(
+    (hostId: string, list: PendingTaskDecision[]) => setByHost(current => new Map(current).set(hostId, list)),
+    []
+  );
+
+  // Per host, the ticket of its latest read; a push bumps it too, since it is newer than any read
+  // already on its way.
+  const reads = useRef(new Map<string, number>());
+
+  useEffect(
+    () =>
+      hostClient.onNotification('session/taskDecisionsChanged', ({ decisions }, hostId) => {
+        if (!serving.current.includes(hostId)) return;
+        nextTicket(reads.current, hostId);
+        set(hostId, decisions);
+      }),
+    [set]
+  );
+
+  // Each host's list is read when it joins and after its own resync, never because another host
+  // joined or left.
+  const readHost = useCallback(
+    (hostId: string) => {
+      const ticket = nextTicket(reads.current, hostId);
+      hostClient
+        .request(hostId, 'taskDecision/list')
+        .then(({ decisions }) => {
+          if (reads.current.get(hostId) === ticket) set(hostId, decisions);
+        })
+        .catch(() => undefined);
+    },
+    [set]
+  );
 
   useEffect(() => {
-    const pushed = new Set<string>();
-    let unmounted = false;
-    const set = (hostId: string, list: PendingTaskDecision[]) =>
-      setByHost(current => new Map(current).set(hostId, list));
-    const off = hostClient.onNotification('session/taskDecisionsChanged', ({ decisions }, hostId) => {
-      pushed.add(hostId);
-      set(hostId, decisions);
+    const wanted = new Set(servingHosts);
+    const gone = [...reads.current.keys()].filter(hostId => !wanted.has(hostId));
+    for (const hostId of gone) reads.current.delete(hostId);
+    setByHost(current => {
+      const leaving = [...current.keys()].filter(hostId => !wanted.has(hostId));
+      if (leaving.length === 0) return current;
+      const next = new Map(current);
+      for (const hostId of leaving) next.delete(hostId);
+      return next;
     });
-    const hostId = hostForSession();
-    hostClient
-      .request(hostId, 'taskDecision/list')
-      .then(({ decisions }) => {
-        // A push that landed first is newer than this read.
-        if (!pushed.has(hostId) && !unmounted) set(hostId, decisions);
-      })
-      .catch(() => undefined);
-    return () => {
-      unmounted = true;
-      off();
-    };
-  }, [reads]);
+    for (const hostId of servingHosts) if (!reads.current.has(hostId)) readHost(hostId);
+  }, [servingHosts, readHost]);
+
+  useHostResync(hostId => {
+    if (reads.current.has(hostId)) readHost(hostId);
+  });
+
+  useEffect(() => () => reads.current.clear(), []);
 
   return useMemo(() => [...byHost.values()].flat(), [byHost]);
 }

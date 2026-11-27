@@ -48,15 +48,15 @@ const noteModalChange = (
 };
 
 /** Normalizes a client-supplied image URL for storage: S3 images become a bare key, external URLs are cached. */
-export async function storableModalImageUrl(imageUrl: string): Promise<string> {
+export async function storableModalImageUrl(imageUrl: string, actorUserId: string): Promise<string> {
   const key = extractModalImageKey(imageUrl);
   if (key) return key;
   if (!imageUrl.includes('amazonaws.com')) return cacheExternalImage(imageUrl);
-  return ModalImageHandler.processModalImageUrl(imageUrl);
+  return ModalImageHandler.processModalImageUrl(imageUrl, actorUserId);
 }
 
 // Modal operation functions that can be shared between server and API
-export async function createModal(params: any) {
+export async function createModal(params: any, actorUserId: string) {
   try {
     const isBanner = params.type === 'banner';
 
@@ -88,7 +88,7 @@ export async function createModal(params: any) {
     };
 
     if (modalData.imageUrl) {
-      modalData.imageUrl = await storableModalImageUrl(modalData.imageUrl);
+      modalData.imageUrl = await storableModalImageUrl(modalData.imageUrl, actorUserId);
     }
 
     const modal = await ModalModel.create(modalData);
@@ -195,7 +195,7 @@ export async function listModals(filter?: any) {
   }
 }
 
-export async function updateModal(modalId: string | undefined, params: any) {
+export async function updateModal(modalId: string | undefined, params: any, actorUserId: string) {
   try {
     let modal;
 
@@ -249,9 +249,10 @@ export async function updateModal(modalId: string | undefined, params: any) {
     if (params.tags !== undefined) updates.tags = params.tags;
     if (params.startDate !== undefined) updates.startDate = params.startDate;
     if (params.endDate !== undefined) updates.endDate = params.endDate;
-    if (params.imageUrl !== undefined) {
+    // An unchanged image is not re-checked, so re-saving another admin's modal keeps working.
+    if (params.imageUrl !== undefined && params.imageUrl !== modal.imageUrl) {
       if (params.imageUrl) {
-        updates.imageUrl = await storableModalImageUrl(params.imageUrl);
+        updates.imageUrl = await storableModalImageUrl(params.imageUrl, actorUserId);
       } else {
         updates.imageUrl = null;
       }
