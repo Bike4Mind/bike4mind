@@ -248,6 +248,38 @@ describe('reconcileLakeTags', () => {
     expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
   });
 
+  it("drops a non-manager's resent miscased meta-tag so an unrelated edit still saves", async () => {
+    const adapters = makeAdapters([tag('DataLake:Lake', 1)], lake({ createdByUserId: 'someone-else' }));
+
+    const result = await run(adapters, ['DataLake:Lake', 'note'], [tag('DataLake:Lake', 1), tag('renamed')]);
+
+    expect(result.tagsToPersist).toEqual([tag('renamed')]);
+  });
+
+  it('drops only the miscased resend when the same write also joins another lake', async () => {
+    const otherLake = lake({ id: 'lake2', slug: 'other', fileTagPrefix: 'ot:', datalakeTag: 'datalake:other' });
+    const adapters = makeAdapters([tag('DataLake:Lake', 1)]);
+    adapters.db.dataLakes.findByDatalakeTag = vi
+      .fn()
+      .mockImplementation(async (key: string) =>
+        key === 'datalake:lake'
+          ? lake({ createdByUserId: 'someone-else' })
+          : key === 'datalake:other'
+            ? otherLake
+            : null
+      );
+
+    const result = await run(
+      adapters,
+      ['DataLake:Lake', 'note'],
+      [tag('note'), tag('datalake:other', 1), tag('DataLake:Lake', 1)]
+    );
+
+    const names = result.tagsToPersist.map(t => t.name);
+    expect(names).toEqual(expect.arrayContaining(['note', 'datalake:other']));
+    expect(names.filter(n => n.toLowerCase() === 'datalake:lake')).toEqual([]);
+  });
+
   it("normalizes the file owner's resent miscased meta-tag into membership", async () => {
     const adapters = makeAdapters([tag('DataLake:Lake', 1)]);
 

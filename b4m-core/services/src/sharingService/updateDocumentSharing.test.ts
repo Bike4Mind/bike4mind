@@ -202,6 +202,20 @@ describe('sharingService - updateDocumentSharing', () => {
 
       expect(db.fabFiles.update).toHaveBeenCalledWith({ id: 'f1', isGlobalRead: true, isGlobalWrite: true });
     });
+
+    // The share gate has no admin arm, so an admin who is neither owner nor sharee never reaches the update check.
+    it('gives an admin who is not owner or sharee a 404 from the share gate', async () => {
+      db.sessions.shareable.findShareAccessById.mockResolvedValue(null);
+
+      await expect(
+        updateDocumentSharing(
+          { id: 'admin-1', isAdmin: true } as never,
+          { id: 's1', type: 'sessions', isGlobalRead: true, isGlobalWrite: true },
+          { db, storage } as unknown as Adapters
+        )
+      ).rejects.toBeInstanceOf(NotFoundError);
+      expect(db.sessions.update).not.toHaveBeenCalled();
+    });
   });
 
   it('throws NotFoundError when the caller lacks share access', async () => {
