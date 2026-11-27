@@ -29,7 +29,7 @@ const handler = baseApi().put(
       throw new NotFoundError(`Unrecognized type ${type}`);
     }
 
-    // Write-access authorization lives in the service (shareable.findUpdateAccessById).
+    // Authorization lives in the service: share access, plus update access to turn on isGlobalWrite.
     const updatedDocument = await sharingService.updateDocumentSharing(
       req.user,
       { id, type, isGlobalRead, isGlobalWrite },

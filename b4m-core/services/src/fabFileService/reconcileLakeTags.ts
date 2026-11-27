@@ -16,6 +16,7 @@ import {
   isStaticRegistryDatalakeTag,
 } from '../dataLakeService/authorizeLakeWrite';
 import { makeLakeGrantResolver } from '../dataLakeService/authorizeLakeManage';
+import { isEffectiveOwner, resolveEffectiveOwnerIds } from '../dataLakeService/manageRule';
 import { reconcileDataLakeFallbackTags } from '../dataLakeService/fallbackLakeTags';
 import type { MembershipActor, MembershipLake } from '../dataLakeService/lakeMembership';
 import { findPrefixArmChanges, loadPrefixArmCandidateLakes } from '../dataLakeService/prefixArmMembership';
@@ -220,8 +221,29 @@ export const reconcileLakeTags = async (
   await grantResolver.prime([...preservedMemberLakes, ...joins]);
   const unmanagedPreservedLakes: MembershipLake[] = preservedMemberLakes.filter(lake => !canManage(lake));
 
+  const cachedFile = fileOwnerUserId === undefined ? await db.fabFiles.findById(fabFileId) : undefined;
+  const owner = fileOwnerUserId ?? cachedFile?.userId;
+  if (owner === undefined) {
+    // Not reachable from updateFabFile (resolves the file first) or the PUT route (authorizes it
+    // first) - both always supply one of the two owner signals. Logged, not thrown: a
+    // hypothetical future caller missing both should degrade to skipping prefix-arm
+    // preservation, not fail the whole write.
+    logger?.warn?.('reconcileLakeTags: could not resolve file owner; prefix-arm preservation skipped', fabFileId);
+  }
+
   for (const lake of joins) {
     if (!canManage(lake)) {
+      throw new BadRequestError('You do not have permission to add files to this data lake');
+    }
+    // Same cold-add ownership conjunct as toggleTags and addFileToDataLake: membership is read
+    // access, so managing the lake is not enough to stamp its meta-tag on a file the actor does not own.
+    const grants = grantResolver.get(lake.id);
+    const isOwner =
+      owner !== undefined &&
+      (owner === actor.userId ||
+        ((actor.isAdmin || isEffectiveOwner(lake, actor, grants)) &&
+          resolveEffectiveOwnerIds(lake, grants).includes(owner)));
+    if (!isOwner) {
       throw new BadRequestError('You do not have permission to add files to this data lake');
     }
     assertLakeWritable(lake);
@@ -246,15 +268,6 @@ export const reconcileLakeTags = async (
   // Evaluated against `reconciledTags` (post-tagger), not the raw array: the fallback tagger can
   // mint a nested stamp that re-satisfies a would-be-departing lake's prefix, and judging against
   // the pre-tagger array could force-carry a tag the persisted array already keeps.
-  const cachedFile = fileOwnerUserId === undefined ? await db.fabFiles.findById(fabFileId) : undefined;
-  const owner = fileOwnerUserId ?? cachedFile?.userId;
-  if (owner === undefined) {
-    // Not reachable from updateFabFile (resolves the file first) or the PUT route (authorizes it
-    // first) - both always supply one of the two owner signals. Logged, not thrown: a
-    // hypothetical future caller missing both should degrade to skipping prefix-arm
-    // preservation, not fail the whole write.
-    logger?.warn?.('reconcileLakeTags: could not resolve file owner; prefix-arm preservation skipped', fabFileId);
-  }
   const resultingTagNames = reconciledTags.map(t => t.name);
   // Resolved once and reused for the unmanaged-prefix-drop check below - both need the same
   // owner-scoped candidate set, and querying it twice per write was pure I/O waste (a dropped,

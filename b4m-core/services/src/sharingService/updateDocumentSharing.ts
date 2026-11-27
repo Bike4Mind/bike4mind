@@ -1,11 +1,12 @@
 import {
+  canUpdateShareable,
   IFabFileDocument,
   IFabFileRepository,
   IOrganizationRepository,
   ISessionRepository,
   IUserDocument,
 } from '@bike4mind/common';
-import { NotFoundError, secureParameters } from '@bike4mind/utils';
+import { ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 import { generateSignedUrl, type GetFabFileAdapter } from '../fabFileService/get';
 import { assertContentPublicLinkPolicy } from './organizationPolicy';
@@ -32,8 +33,9 @@ interface UpdateDocumentSharingAdapters {
  * Updates the sharing flags on a shareable document (currently FabFile or Session).
  * Authorized at share level (`shareable.findShareAccessById`): these two flags publish the
  * document to every user on the instance, which is a re-share rather than an edit, so an
- * update-only sharee must not reach them. A file response carries a URL signed on read, withheld for a
- * file that is not image-serveable (held/blocked image).
+ * update-only sharee must not reach them. Turning isGlobalWrite on also needs update, so a
+ * share-only sharee cannot hand out edit rights it does not hold. A file response carries a URL
+ * signed on read, withheld for a file that is not image-serveable (held/blocked image).
  */
 export const updateDocumentSharing = async (
   user: IUserDocument,
@@ -46,6 +48,11 @@ export const updateDocumentSharing = async (
 
   const document = await dbModel.shareable.findShareAccessById(user, id);
   if (!document) throw new NotFoundError(`${type} not found for ${id}`);
+
+  // isGlobalWrite gives every user update rights, so only a caller who holds update may turn it on.
+  if (isGlobalWrite && !document.isGlobalWrite && !canUpdateShareable(document, user.id, user.groups ?? [])) {
+    throw new ForbiddenError('You need edit access to let everyone edit this');
+  }
 
   // FabFile carries no model-level policy hook (sessions do), so the org's public-link rule is applied here.
   if ((isGlobalRead && !document.isGlobalRead) || (isGlobalWrite && !document.isGlobalWrite)) {
