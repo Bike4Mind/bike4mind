@@ -119,7 +119,7 @@ const ENC = 'enc:';
 const RAW = 'raw:';
 
 /** Envelope-wrap a DEK under the master key: base64(iv|tag|ciphertext), prefixed. */
-function wrapDek(masterKey: Buffer, dek: Buffer): string {
+export function wrapDekUnder(masterKey: Buffer, dek: Buffer): string {
   const iv = randomBytes(12);
   const c = createCipheriv('aes-256-gcm', masterKey, iv);
   const ct = Buffer.concat([c.update(dek), c.final()]);
@@ -131,32 +131,52 @@ export function rewrapLegacyDek(stored: string, masterKey: Buffer): string {
   if (stored.startsWith(ENC)) return stored;
   const dek = Buffer.from(stored.startsWith(RAW) ? stored.slice(RAW.length) : stored, 'base64');
   if (dek.length !== 32) throw new Error('Invalid memory data key');
-  return wrapDek(masterKey, dek);
+  return wrapDekUnder(masterKey, dek);
 }
 
-function unwrapDek(masterKey: Buffer | undefined, stored: string): Buffer {
+function openEnc(masterKey: Buffer, stored: string): Buffer | null {
+  const buf = Buffer.from(stored.slice(ENC.length), 'base64');
+  try {
+    const d = createDecipheriv('aes-256-gcm', masterKey, buf.subarray(0, 12));
+    d.setAuthTag(buf.subarray(12, 28));
+    return Buffer.concat([d.update(buf.subarray(28)), d.final()]);
+  } catch {
+    return null; // GCM tag mismatch: the value was wrapped under a different key
+  }
+}
+
+/**
+ * Opens an `enc:` value with the first of `keys` that authenticates it. Null when the value is not
+ * `enc:` or no key opens it. `keyIndex` says which key did, so a rewrap can tell current from previous.
+ */
+export function openWrappedDek(stored: string, keys: Buffer[]): { dek: Buffer; keyIndex: number } | null {
+  if (!stored.startsWith(ENC)) return null;
+  for (const [keyIndex, key] of keys.entries()) {
+    const dek = openEnc(key, stored);
+    if (dek) return { dek, keyIndex };
+  }
+  return null;
+}
+
+function unwrapDek(keys: Buffer[], stored: string): Buffer {
   if (stored.startsWith(RAW)) return Buffer.from(stored.slice(RAW.length), 'base64');
   if (stored.startsWith(ENC)) {
-    if (!masterKey) throw new Error('memory keyring: envelope-wrapped DEK but no master key configured');
-    const buf = Buffer.from(stored.slice(ENC.length), 'base64');
-    const iv = buf.subarray(0, 12);
-    const tag = buf.subarray(12, 28);
-    const ct = buf.subarray(28);
-    const d = createDecipheriv('aes-256-gcm', masterKey, iv);
-    d.setAuthTag(tag);
-    return Buffer.concat([d.update(ct), d.final()]);
+    if (keys.length === 0) throw new Error('memory keyring: envelope-wrapped DEK but no master key configured');
+    const opened = openWrappedDek(stored, keys);
+    // Fail closed: an unopenable `enc:` value is never read as raw key bytes.
+    if (!opened) throw new Error('memory keyring: wrapped DEK opens with no configured master key');
+    return opened.dek;
   }
   // Legacy/unprefixed: treat as raw base64.
   return Buffer.from(stored, 'base64');
 }
 
-/** Resolve the optional master key (envelope encryption) from the environment, or undefined. */
-export function resolveMasterKey(secret?: string): Buffer | undefined {
+function deriveMasterKey(secret: string | undefined, name: string): Buffer | undefined {
   if (secret === undefined) {
-    secret = process.env.MEMORY_KEY_SECRET;
+    secret = process.env[name];
     if (!secret) {
       try {
-        secret = Resource.MEMORY_KEY_SECRET.value;
+        secret = (Resource as unknown as Record<string, { value?: string } | undefined>)[name]?.value;
       } catch {
         /* Unlinked in local development. */
       }
@@ -165,6 +185,13 @@ export function resolveMasterKey(secret?: string): Buffer | undefined {
   if (!secret || secret === 'not-configured') return undefined;
   return createHash('sha256').update(secret).digest();
 }
+
+/** Resolve the optional master key (envelope encryption) from the environment, or undefined. */
+export const resolveMasterKey = (secret?: string): Buffer | undefined => deriveMasterKey(secret, 'MEMORY_KEY_SECRET');
+
+/** The outgoing master key while MEMORY_KEY_SECRET is being rotated; undefined in steady state. */
+export const resolvePreviousMasterKey = (secret?: string): Buffer | undefined =>
+  deriveMasterKey(secret, 'MEMORY_KEY_SECRET_PREVIOUS');
 
 /**
  * True outside local dev - a raw DEK here is a real backup-confidentiality hole, not a dev
@@ -180,13 +207,23 @@ const isDeployedEnv = (): boolean => {
  * envelope-wrapped at rest so a DB dump alone cannot read facts; without it (dev), DEKs are stored raw
  * - still SHRED-safe (deletion destroys the key), but NOT confidential against a full DB/backup read.
  *
+ * `previousMasterKey` (MEMORY_KEY_SECRET_PREVIOUS) is read-only: it opens DEKs not yet rewrapped during a
+ * rotation, and new DEKs are always wrapped under `masterKey`. Omit both key arguments to resolve
+ * configuration; explicit key arguments are independent of the environment. See docs/security/credential-storage.md.
+ *
  * Running a deployed stage without the secret voids the "unreadable even in backups" promise -
  * the raw DEK would sit next to the ciphertext - so MINTING a key refuses there. Reads refuse on
  * their own (`unwrapDek` cannot open a wrapped DEK without the key), and shredding never needs the
  * key at all: "delete my memory" must work even on a stage whose key is missing.
  */
-export function createKeyProvider(keyring: Keyring, masterKey = resolveMasterKey()): KeyProvider {
-  const store = (dek: Buffer): string => (masterKey ? wrapDek(masterKey, dek) : RAW + dek.toString('base64'));
+export function createKeyProvider(
+  keyring: Keyring,
+  ...configuredKeys: [] | [masterKey: Buffer | undefined, previousMasterKey?: Buffer]
+): KeyProvider {
+  const masterKey = configuredKeys.length === 0 ? resolveMasterKey() : configuredKeys[0];
+  const previousMasterKey = configuredKeys.length === 0 ? resolvePreviousMasterKey() : configuredKeys[1];
+  const readKeys = [masterKey, previousMasterKey].filter((key): key is Buffer => key !== undefined);
+  const store = (dek: Buffer): string => (masterKey ? wrapDekUnder(masterKey, dek) : RAW + dek.toString('base64'));
   return {
     async getOrCreateDek(principal, ownerUserId, startedAt) {
       if (!masterKey && isDeployedEnv()) {
@@ -199,11 +236,11 @@ export function createKeyProvider(keyring: Keyring, masterKey = resolveMasterKey
         store(randomBytes(32)),
         startedAt
       );
-      return stored ? unwrapDek(masterKey, stored) : null;
+      return stored ? unwrapDek(readKeys, stored) : null;
     },
     async getDek(principal) {
       const stored = await keyring.findDek(principal.kind, principal.id);
-      return stored ? unwrapDek(masterKey, stored) : null;
+      return stored ? unwrapDek(readKeys, stored) : null;
     },
     async destroyDek(principal) {
       await keyring.destroy(principal.kind, principal.id);

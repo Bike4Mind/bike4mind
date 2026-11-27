@@ -10,6 +10,8 @@ export type OrgModelPolicyView = {
   policy: StoredOrgModelPolicy;
   /** The stored row failed validation, so enforcement treats the org as allowing nothing. */
   invalidStored: boolean;
+  /** Contributed tool names the policy governs beyond the built-in enum. */
+  contributedTools?: string[];
 };
 
 export const orgModelPolicyQueryKey = (orgId: string) => ['org-model-policy', orgId] as const;

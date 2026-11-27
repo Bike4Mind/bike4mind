@@ -50,6 +50,7 @@ describe('downloadRelevantLinks', () => {
       },
       researchDatas: {
         create: vi.fn(),
+        update: vi.fn(),
         existsByUrlAndResearchTaskId: vi.fn().mockResolvedValue(false),
       },
       users: {
@@ -444,6 +445,31 @@ describe('downloadRelevantLinks', () => {
       url: 'https://example.com/document1.pdf',
       userId: 'test-user-id',
     });
+  });
+
+  it('creates a fresh file and relinks the research data when the linked file has another owner', async () => {
+    const freshFile = { id: 'fresh-file-id', fileName: 'fresh.pdf', mimeType: 'application/pdf' };
+    const legacyResearchData = { id: 'legacy-rd-id', researchTaskId: 'test-task-id', fabFileId: 'foreign-file-id' };
+
+    mockDb.researchTasks.findById.mockResolvedValue(mockResearchTask);
+    mockDb.users.findById.mockResolvedValue(mockUser);
+    mockedDownload.mockResolvedValue({ data: mockFileBuffer, contentType: undefined, finalUrl: '' });
+    mockedFileTypeFromBuffer.mockResolvedValue({ mime: 'application/pdf', ext: 'pdf' });
+    mockedFindOrUpdateExistingResearchData.mockResolvedValue({
+      file: null,
+      researchData: legacyResearchData,
+      storageLimitReached: false,
+    });
+    mockedFabFilesService.createFabFile.mockResolvedValue(freshFile);
+
+    await downloadRelevantLinks({ id: 'test-task-id' }, adapters);
+
+    expect(mockedFabFilesService.createFabFile).toHaveBeenCalledWith(
+      'test-user-id',
+      expect.anything(),
+      expect.anything()
+    );
+    expect(mockDb.researchDatas.update).toHaveBeenCalledWith({ id: 'legacy-rd-id', fabFileId: 'fresh-file-id' });
   });
 
   it('should handle download failures gracefully', async () => {

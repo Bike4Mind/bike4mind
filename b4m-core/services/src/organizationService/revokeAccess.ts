@@ -106,7 +106,7 @@ export const revokeAccess = async (
   // acceptOrganization/addMember. We hold only the removed user's id here, so fetch them to compare.
   // Idempotent under a withTransaction retry (a re-run recomputes the same set-to-null).
   const removed = await adapters.db.users.findById(userId);
-  if (removed?.organizationId?.toString() === id) {
+  if (removed?.organizationId?.toString() === organization.id) {
     await adapters.db.users.update({ id: userId, organizationId: null });
   }
 

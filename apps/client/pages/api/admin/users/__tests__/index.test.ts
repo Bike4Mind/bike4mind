@@ -181,6 +181,14 @@ describe('GET /api/admin/users', () => {
     expect(mockList).not.toHaveBeenCalled();
   });
 
+  it('forwards a signup client filter and rejects a malformed one with 400', async () => {
+    expect((await call(handler, { signupClient: 'b4m_x_1234abcd' }))._getStatusCode()).toBe(200);
+    expect(mockList.mock.calls[0][0]).toMatchObject({ signupClient: 'b4m_x_1234abcd' });
+    mockList.mockClear();
+    expect((await call(handler, { signupClient: 'bad%20id' }))._getStatusCode()).toBe(400);
+    expect(mockList).not.toHaveBeenCalled();
+  });
+
   describe('analytics drill-down filters', () => {
     const month = { createdFrom: '2026-10-01T00:00:00.000Z', createdTo: '2026-11-01T00:00:00.000Z' };
     const rejected = async (query: Record<string, string>, message: RegExp) => {

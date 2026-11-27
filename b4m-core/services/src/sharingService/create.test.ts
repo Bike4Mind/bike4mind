@@ -204,6 +204,14 @@ describe('sharingService - createInvite (project arm authority)', () => {
     expect(findShareAccessById).toHaveBeenCalledWith(user, PROJECT_ID);
   });
 
+  it("stores the loaded document's id, not the caller's spelling of it", async () => {
+    findShareAccessById.mockResolvedValue({ id: PROJECT_ID, name: PROJECT_NAME, userId: 'owner-2' });
+
+    await create(asUser('owner-2'), PROJECT_ID.toUpperCase());
+
+    expect(db.invites.create).toHaveBeenCalledWith(expect.objectContaining({ documentId: PROJECT_ID }));
+  });
+
   it('rejects when the scoped lookup finds nothing', async () => {
     // Deliberately NOT named "indistinguishably from a missing project": with a single mock,
     // "no access" and "does not exist" are the same input, so nothing here distinguishes them.

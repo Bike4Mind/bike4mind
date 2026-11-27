@@ -438,6 +438,10 @@ export const SettingKeySchema = z.enum([
   'ScanURLinPrompt',
   'DefaultInviteCode',
   'serverStatus',
+  'statusPageEnabled',
+  'statusPagePublicEnabled',
+  'statusPageVendorFeedsEnabled',
+  'statusPageSyntheticLlmEnabled',
   'CSMandCTAFlag',
   'showDesktopAppPromo',
   'SystemFiles',
@@ -1831,6 +1835,16 @@ export const AutoContainmentConfigSchema = z.object({
     title: 'Device-link common networks',
     description: 'A device seen on signups from this many distinct networks in 30 days is mainstream, never evidence.',
   }),
+  linkRules: z
+    .object({
+      enabled: z.boolean().prefault(true).meta({
+        title: 'Enabled',
+        description:
+          'When the model does not act, deterministic link rules (shared owned domain, admin-held signup domain, banned same device) may decide Limit or Hold signup grant, under the settings of those tiers.',
+      }),
+    })
+    .prefault({})
+    .meta({ title: 'Link rules' }),
   tiers: z
     .object({
       limit: z
@@ -2942,6 +2956,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'serverStatus', order: 1 },
       { key: 'AdminEmail', order: 2 },
       { key: 'mailFrom', order: 3 },
+      { key: 'statusPageEnabled', order: 4 },
+      { key: 'statusPagePublicEnabled', order: 5 },
+      { key: 'statusPageVendorFeedsEnabled', order: 6 },
+      { key: 'statusPageSyntheticLlmEnabled', order: 7 },
     ],
   },
   REGISTRATION: {
@@ -5230,6 +5248,44 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.ADMIN.id,
     order: 1,
     options: Object.values(ServerStatusEnum),
+  }),
+  statusPageEnabled: makeBooleanSetting({
+    key: 'statusPageEnabled',
+    name: 'Status Page Checks',
+    defaultValue: false,
+    description: 'Whether the status page tick runs: probes, vendor feeds, incident drafts and snapshot publishing.',
+    category: 'Admin',
+    group: API_SERVICE_GROUPS.ADMIN.id,
+    order: 4,
+  }),
+  statusPagePublicEnabled: makeBooleanSetting({
+    key: 'statusPagePublicEnabled',
+    name: 'Status Page Public',
+    defaultValue: false,
+    description:
+      'Whether the public status route and the in-app status page are served. History can accumulate while this is off.',
+    category: 'Admin',
+    group: API_SERVICE_GROUPS.ADMIN.id,
+    order: 5,
+  }),
+  statusPageVendorFeedsEnabled: makeBooleanSetting({
+    key: 'statusPageVendorFeedsEnabled',
+    name: 'Status Page Vendor Feeds',
+    defaultValue: true,
+    description: 'Whether the status page reads upstream vendor status feeds.',
+    category: 'Admin',
+    group: API_SERVICE_GROUPS.ADMIN.id,
+    order: 6,
+  }),
+  statusPageSyntheticLlmEnabled: makeBooleanSetting({
+    key: 'statusPageSyntheticLlmEnabled',
+    name: 'Status Page Synthetic LLM Probe',
+    defaultValue: false,
+    description:
+      'Whether the status page runs a synthetic LLM completion probe. Each probe call spends provider credits.',
+    category: 'Admin',
+    group: API_SERVICE_GROUPS.ADMIN.id,
+    order: 7,
   }),
   enforceCredits: makeBooleanSetting({
     key: 'enforceCredits',

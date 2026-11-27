@@ -39,6 +39,49 @@ actor FakeAPI: B4MAPI {
     return session
   }
 
+  private(set) var renames: [(id: String, name: String)] = []
+  private(set) var deletes: [String] = []
+  var renameFailure: APIError?
+  var deleteFailure: APIError?
+
+  func setRenameFailure(_ failure: APIError?) { renameFailure = failure }
+  func setDeleteFailure(_ failure: APIError?) { deleteFailure = failure }
+
+  private var holdingMutations = false
+  private var heldMutations: [CheckedContinuation<Void, Never>] = []
+
+  /// Parks every rename and delete until `releaseMutations()`, so a test can act while one is in flight.
+  func holdMutations() { holdingMutations = true }
+
+  func releaseMutations() {
+    holdingMutations = false
+    for mutation in heldMutations { mutation.resume() }
+    heldMutations.removeAll()
+  }
+
+  func renameSession(id: String, name: String) async throws -> SessionSummary {
+    renames.append((id, name))
+    if holdingMutations { await withCheckedContinuation { heldMutations.append($0) } }
+    if let renameFailure { throw renameFailure }
+    let existing =
+      sessionsByID[id]
+      ?? SessionSummary(
+        id: id, name: name, lastUsedModel: nil, firstCreated: .distantPast, lastUpdated: .distantPast)
+    let renamed = SessionSummary(
+      id: id, name: name, lastUsedModel: existing.lastUsedModel, firstCreated: existing.firstCreated,
+      lastUpdated: existing.lastUpdated)
+    sessionsByID[id] = renamed
+    return renamed
+  }
+
+  func deleteSession(id: String) async throws {
+    deletes.append(id)
+    if holdingMutations { await withCheckedContinuation { heldMutations.append($0) } }
+    // Mirrors `APIClient.deleteSession`, which treats a 404 as already deleted.
+    if let deleteFailure, deleteFailure != .notFound { throw deleteFailure }
+    sessionsByID[id] = nil
+  }
+
   var sessionPages: [String?: Page<SessionSummary>] = [:]
   var questPages: [String?: Page<QuestTurn>] = [:]
   var balance = CreditBalance(credits: 0)
@@ -51,8 +94,23 @@ actor FakeAPI: B4MAPI {
   func setFailure(_ failure: APIError?) { self.failure = failure }
   func setBalance(_ balance: CreditBalance) { self.balance = balance }
 
+  private var holdingSessionLists = false
+  private var heldSessionLists: [CheckedContinuation<Void, Never>] = []
+
+  /// Parks every `listSessions` after it records its cursor until `releaseSessionLists()`; the scripted page
+  /// or failure is read on release.
+  func holdSessionLists() { holdingSessionLists = true }
+
+  func releaseSessionLists() {
+    holdingSessionLists = false
+    for request in heldSessionLists { request.resume() }
+    heldSessionLists.removeAll()
+  }
+
   func listSessions(cursor: String?, limit: Int) async throws -> Page<SessionSummary> {
     sessionCursors.append(cursor)
+    if holdingSessionLists { await withCheckedContinuation { heldSessionLists.append($0) } }
+    try Task.checkCancellation()
     if let failure { throw failure }
     return sessionPages[cursor] ?? Page(items: [], nextCursor: nil)
   }

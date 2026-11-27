@@ -1614,11 +1614,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   // One row for both, shared by the two render paths below so they cannot drift.
   const replyActions =
     navSuggestions || choiceButtons ? (
-      <NavigationButtons
-        navigationIntents={navSuggestions ?? []}
-        leading={choiceButtons}
-        label={choiceButtons ? 'Your call' : undefined}
-      />
+      <NavigationButtons navigationIntents={navSuggestions ?? []} leading={choiceButtons} />
     ) : null;
 
   if (legacyQuestMasterPlan) {

@@ -33,7 +33,8 @@ describe('OrgModelPolicySchema', () => {
 
   it('rejects unknown providers, unknown tools, blank model ids and extra keys', () => {
     expect(OrgModelPolicySchema.safeParse({ allowedProviders: ['nope'] }).success).toBe(false);
-    expect(OrgModelPolicySchema.safeParse({ allowedTools: ['not_a_tool'] }).success).toBe(false);
+    expect(OrgModelPolicySchema.safeParse({ allowedTools: ['Not A Tool'] }).success).toBe(false);
+    expect(OrgModelPolicySchema.safeParse({ allowedTools: ['contributed_alpha'] }).success).toBe(true);
     expect(OrgModelPolicySchema.safeParse({ allowedModels: ['  '] }).success).toBe(false);
     expect(OrgModelPolicySchema.safeParse({ allowedModels: null, extra: 1 }).success).toBe(false);
   });

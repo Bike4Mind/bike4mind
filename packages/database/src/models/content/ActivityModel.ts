@@ -76,7 +76,7 @@ class ActivityRepository extends BaseRepository<IActivityDocument> implements IA
       ],
     };
 
-    const activities = await this.model.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit);
+    const activities = await this.model.find(query).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit);
 
     const totalCount = await this.model.countDocuments(query);
 

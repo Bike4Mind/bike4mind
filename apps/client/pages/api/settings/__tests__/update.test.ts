@@ -127,7 +127,7 @@ describe('settings/update settings that constrain delegated admins', () => {
     }
   );
 
-  it('protects approval, audit alerting, MFA policy and system email sender settings', () => {
+  it('protects approval, audit alerting, MFA policy, system email sender and status page settings', () => {
     expect([...FULL_ADMIN_SETTING_KEYS]).toEqual(
       expect.arrayContaining([
         'AdminApprovalsEnabled',
@@ -141,6 +141,9 @@ describe('settings/update settings that constrain delegated admins', () => {
         'allowTrustedDevices',
         'signupGrantUnprotectedMaxCredits',
         'mailFrom',
+        'statusPageEnabled',
+        'statusPagePublicEnabled',
+        'statusPageSyntheticLlmEnabled',
       ])
     );
   });

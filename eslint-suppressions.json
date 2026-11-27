@@ -2110,11 +2110,6 @@
       "count": 1
     }
   },
-  "apps/client/pages/api/credits/transactions.ts": {
-    "b4m/no-raw-entity-response": {
-      "count": 1
-    }
-  },
   "apps/client/pages/api/elabs/voice/[id]/index.ts": {
     "b4m/no-raw-entity-response": {
       "count": 1
@@ -4485,7 +4480,7 @@
   "b4m-core/slack/src/github/GitHubSlackNotifier.ts": {
     "b4m/require-update-validators": { "count": 2 },
     "@typescript-eslint/no-explicit-any": {
-      "count": 6
+      "count": 5
     }
   },
   "b4m-core/slack/src/handlers/WorkflowStepHandler.ts": {

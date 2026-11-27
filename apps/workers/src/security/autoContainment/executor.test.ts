@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   AutoContainmentConfigSchema,
+  INTERVENTION_POLICY_VERSION,
   RISK_EVIDENCE_VERSION,
   type AbuseAssessmentItem,
   type AutoContainmentConfig,
   type AutoContainmentDecisionItem,
   type InterventionHold,
+  type LinkRuleFacts,
   type ShadowDetectionItem,
 } from '@bike4mind/common';
 
@@ -33,6 +35,7 @@ vi.mock('@bike4mind/server-utils/admin/usersBulk/resolve', async importOriginal 
   resolveAdminUsersBulk: h.resolve,
 }));
 vi.mock('@workers/utils/systemAuditWriter', () => ({ systemAuditWriter: h.writer }));
+vi.mock('@bike4mind/server-utils/security/autoContainment/linkRuleFacts', () => ({ loadLinkRuleFacts: vi.fn() }));
 
 import type { AdminUsersBulkResult } from '@bike4mind/server-utils/app/utils/adminUsersBulk';
 import { cohortHashOf } from '@bike4mind/server-utils/admin/usersBulk/resolve';
@@ -185,6 +188,9 @@ function makeDeps(config: Partial<AutoContainmentConfig> = {}, slot = true, deci
     }),
     auditHold: vi.fn(async (_userId: string, _decision: Row) => undefined),
     verificationAvailable: vi.fn(async () => false),
+    loadLinkRuleFacts: vi.fn(
+      async (_userIds: string[], _config: AutoContainmentConfig): Promise<LinkRuleFacts[]> => []
+    ),
     now: () => now,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   } satisfies AutoContainmentDeps;
@@ -457,7 +463,11 @@ describe('applyAutoContainment graduated tiers', () => {
       status: 'decided',
       decision: { tier: 'holdGrant', mode: 'shadow', outcome: 'would_intervene' },
     });
-    expect(stored[0]).toMatchObject({ tier: 'holdGrant', policyVersion: 1, scope: 'signup_grant' });
+    expect(stored[0]).toMatchObject({
+      tier: 'holdGrant',
+      policyVersion: INTERVENTION_POLICY_VERSION,
+      scope: 'signup_grant',
+    });
     expect(stored[0].expiresAt).toEqual(new Date(NOW.getTime() + 72 * 3_600_000));
     expect(deps.takeHourlySlot).toHaveBeenCalledWith('shadow', 5, 'holdGrant');
     expect(deps.applyHold).not.toHaveBeenCalled();
@@ -789,5 +799,107 @@ describe('applyAutoContainment graduated verdict landing mid-apply', () => {
       .mockResolvedValueOnce({ ...holding, verdict: 'confirmed_abuse' });
     await applyAutoContainment(assessment, deps);
     expect(deps.releaseHold).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyAutoContainment link rules', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const limitDetection: ShadowDetectionItem = { ...detection, wouldAction: 'limit', userIds: ['user-1', 'user-2'] };
+  const abstained: AbuseAssessmentItem = { ...assessment, result: 'insufficient_evidence', confidence: 0.55 };
+  const shadowLimit = {
+    mode: 'shadow',
+    tiers: { limit: { mode: 'shadow', rolloutPercent: 100 } },
+  } as Partial<AutoContainmentConfig>;
+  const firing: LinkRuleFacts = {
+    userId: 'user-1',
+    paying: false,
+    partnerDomain: false,
+    creditsSpent: 25,
+    ownedDomainCluster: null,
+    adminHeldDomain: null,
+    bannedSameDevice: 1,
+  };
+
+  it('records a shadow would_intervene with the rule, the decider and the model judgment it overrode', async () => {
+    const { deps, stored } = makeDeps(shadowLimit);
+    vi.mocked(deps.findDetection).mockResolvedValue(limitDetection);
+    deps.loadLinkRuleFacts.mockResolvedValue([firing, { ...firing, userId: 'user-2', bannedSameDevice: 0 }]);
+
+    const run = await applyAutoContainment(abstained, deps);
+
+    expect(run).toMatchObject({ status: 'decided', decision: { tier: 'limit', outcome: 'would_intervene' } });
+    expect(stored[0]).toMatchObject({
+      tier: 'limit',
+      userIds: ['user-1'],
+      decidedBy: 'link_rule',
+      linkRules: ['bannedSameDevice'],
+      modelJudgment: { result: 'insufficient_evidence', confidence: 0.55 },
+      policyVersion: INTERVENTION_POLICY_VERSION,
+    });
+    expect(deps.loadLinkRuleFacts).toHaveBeenCalledWith(['user-1', 'user-2'], expect.anything());
+    expect(deps.applyHold).not.toHaveBeenCalled();
+  });
+
+  it('records the model judgment and decider on a model-decided graduated row too', async () => {
+    const { deps, stored } = makeDeps(shadowLimit);
+    vi.mocked(deps.findDetection).mockResolvedValue(limitDetection);
+    await applyAutoContainment(assessment, deps);
+    expect(stored[0]).toMatchObject({
+      decidedBy: 'model',
+      linkRules: [],
+      modelJudgment: { result: 'abuse', confidence: 0.97 },
+    });
+    // The model acted, so no rule could replace it and the facts are never read.
+    expect(deps.loadLinkRuleFacts).not.toHaveBeenCalled();
+  });
+
+  it('never lets a rule decision reclaim a capped model-decided row, which keeps its accounts and decider', async () => {
+    const enforceLimit = {
+      mode: 'enforce',
+      tiers: { limit: { mode: 'enforce', minConfidence: 0.7, rolloutPercent: 100 } },
+    } as Partial<AutoContainmentConfig>;
+    const { deps, stored, advance } = makeDeps(enforceLimit, false);
+    vi.mocked(deps.findDetection).mockResolvedValue(limitDetection);
+    await applyAutoContainment(assessment, deps);
+    expect(stored[0]).toMatchObject({ tier: 'limit', outcome: 'capped', decidedBy: 'model' });
+    vi.mocked(deps.takeHourlySlot).mockResolvedValue(true);
+    advance(2 * 60 * 60 * 1000);
+    deps.loadLinkRuleFacts.mockResolvedValue([firing]);
+
+    expect(await applyAutoContainment(abstained, deps)).toEqual({ status: 'skipped', reason: 'already_decided' });
+    expect(deps.decisions.reclaim).not.toHaveBeenCalled();
+    expect(stored[0]).toMatchObject({ outcome: 'capped', decidedBy: 'model', userIds: ['user-1', 'user-2'] });
+  });
+
+  it('does not load facts when link rules are disabled or the detection is already reviewed', async () => {
+    const disabled = makeDeps({ ...shadowLimit, linkRules: { enabled: false } });
+    vi.mocked(disabled.deps.findDetection).mockResolvedValue(limitDetection);
+    expect(await applyAutoContainment(abstained, disabled.deps)).toEqual({ status: 'skipped', reason: 'not_abuse' });
+    expect(disabled.deps.loadLinkRuleFacts).not.toHaveBeenCalled();
+
+    const reviewed = makeDeps(shadowLimit);
+    vi.mocked(reviewed.deps.findDetection).mockResolvedValue({ ...limitDetection, verdict: 'legitimate_human' });
+    await applyAutoContainment(abstained, reviewed.deps);
+    expect(reviewed.deps.loadLinkRuleFacts).not.toHaveBeenCalled();
+  });
+
+  it('does not load facts when both rule tiers are off', async () => {
+    const tiersOff = makeDeps({
+      mode: 'shadow',
+      tiers: { limit: { mode: 'off' }, holdGrant: { mode: 'off' } },
+    } as Partial<AutoContainmentConfig>);
+    vi.mocked(tiersOff.deps.findDetection).mockResolvedValue(limitDetection);
+    await applyAutoContainment(abstained, tiersOff.deps);
+    expect(tiersOff.deps.loadLinkRuleFacts).not.toHaveBeenCalled();
+  });
+
+  it('keeps the model skip when the fact load throws', async () => {
+    const { deps, stored } = makeDeps(shadowLimit);
+    vi.mocked(deps.findDetection).mockResolvedValue(limitDetection);
+    deps.loadLinkRuleFacts.mockRejectedValue(new Error('db down'));
+    expect(await applyAutoContainment(abstained, deps)).toEqual({ status: 'skipped', reason: 'not_abuse' });
+    expect(stored).toHaveLength(0);
+    expect(deps.logger.error).toHaveBeenCalled();
   });
 });

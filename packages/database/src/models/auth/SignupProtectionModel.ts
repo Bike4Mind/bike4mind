@@ -224,6 +224,23 @@ export const signupDomainHoldListRepository = {
 
 /** Queue operations for the automated hold triage (apps/workers/src/cron/signupDomainHoldTriage.ts). */
 export const signupDomainReviewRepository = {
+  /**
+   * The first of `candidates` (most specific first, as emailDomainCandidates lists them) an admin
+   * confirmed blocked on review; an automated confirmation (autoDecision set) never counts. Null when none.
+   */
+  async findAdminBlockedDomain(candidates: readonly string[]): Promise<string | null> {
+    if (candidates.length === 0) return null;
+    const rows = await SignupDomainReviewModel.find({
+      domain: { $in: [...candidates] },
+      status: 'blocked',
+      reviewedBy: { $type: 'string', $ne: '' },
+      autoDecision: { $exists: false },
+    })
+      .select('domain')
+      .lean();
+    const blocked = new Set(rows.map(row => row.domain));
+    return candidates.find(candidate => blocked.has(candidate)) ?? null;
+  },
   /** Oldest first, so a backlog drains in order across runs. */
   async listPending(reason: string, limit: number): Promise<SignupDomainReview[]> {
     return SignupDomainReviewModel.find({ status: 'held_pending_review', reason })

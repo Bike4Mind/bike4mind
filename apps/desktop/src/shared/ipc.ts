@@ -176,6 +176,9 @@ export const IPC_CHANNELS = {
   hostConnect: 'host:connect',
   hostDisconnect: 'host:disconnect',
   hostRemove: 'host:remove',
+  hostSshAliases: 'host:ssh-aliases',
+  hostSshDescribe: 'host:ssh-describe',
+  hostSshAdd: 'host:ssh-add',
   /** main -> renderer: the whole host list, on every change of any host's connection state. */
   hostStateChanged: 'host:state-changed',
   studioGet: 'studio:get',

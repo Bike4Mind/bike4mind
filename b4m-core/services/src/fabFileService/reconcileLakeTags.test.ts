@@ -222,6 +222,106 @@ describe('reconcileLakeTags', () => {
     await expect(run(adapters, [], [tag('datalake:lake', 1)])).rejects.toThrow(/do not have permission to add/i);
   });
 
+  // Managing the lake is not enough: the meta-tag is read access, so a sharee who can edit
+  // someone else's file must not stamp their own lake onto it.
+  it("refuses a lake manager's join of a file someone else owns", async () => {
+    const adapters = makeAdapters([]);
+    adapters.db.fabFiles.findById = vi.fn().mockResolvedValue({ id: 'f1', userId: 'someone-else', tags: [] });
+
+    await expect(run(adapters, [], [tag('datalake:lake', 1)])).rejects.toThrow(/do not have permission to add/i);
+  });
+
+  // A stale miscased meta-tag is not membership, so normalizing it would be a join. A manager who may
+  // not cold-add the file has it dropped instead, so the unrelated edit still saves.
+  it("drops a lake manager's resent miscased meta-tag on a file someone else owns", async () => {
+    const adapters = makeAdapters([tag('DataLake:Lake', 1)]);
+    adapters.db.fabFiles.findById = vi.fn().mockResolvedValue({ id: 'f1', userId: 'someone-else', tags: [] });
+
+    const result = await run(
+      adapters,
+      ['DataLake:Lake', 'note'],
+      [tag('note'), tag('DataLake:Lake', 1), tag('renamed')]
+    );
+    await result.commit();
+
+    expect(result.tagsToPersist).toEqual([tag('note'), tag('renamed')]);
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+  });
+
+  it("drops a non-manager's resent miscased meta-tag so an unrelated edit still saves", async () => {
+    const adapters = makeAdapters([tag('DataLake:Lake', 1)], lake({ createdByUserId: 'someone-else' }));
+
+    const result = await run(adapters, ['DataLake:Lake', 'note'], [tag('DataLake:Lake', 1), tag('renamed')]);
+
+    expect(result.tagsToPersist).toEqual([tag('renamed')]);
+  });
+
+  it('drops only the miscased resend when the same write also joins another lake', async () => {
+    const otherLake = lake({ id: 'lake2', slug: 'other', fileTagPrefix: 'ot:', datalakeTag: 'datalake:other' });
+    const adapters = makeAdapters([tag('DataLake:Lake', 1)]);
+    adapters.db.dataLakes.findByDatalakeTag = vi
+      .fn()
+      .mockImplementation(async (key: string) =>
+        key === 'datalake:lake'
+          ? lake({ createdByUserId: 'someone-else' })
+          : key === 'datalake:other'
+            ? otherLake
+            : null
+      );
+
+    const result = await run(
+      adapters,
+      ['DataLake:Lake', 'note'],
+      [tag('note'), tag('datalake:other', 1), tag('DataLake:Lake', 1)]
+    );
+
+    const names = result.tagsToPersist.map(t => t.name);
+    expect(names).toEqual(expect.arrayContaining(['note', 'datalake:other']));
+    expect(names.filter(n => n.toLowerCase() === 'datalake:lake')).toEqual([]);
+  });
+
+  it("normalizes the file owner's resent miscased meta-tag into membership", async () => {
+    const adapters = makeAdapters([tag('DataLake:Lake', 1)]);
+
+    const result = await run(adapters, ['DataLake:Lake'], [tag('DataLake:Lake', 1)]);
+
+    expect(result.tagsToPersist).toEqual(expect.arrayContaining([tag('datalake:lake', 1)]));
+  });
+
+  it('uses the owner the caller supplies when deciding a join', async () => {
+    const adapters = makeAdapters([]);
+
+    await expect(
+      reconcileLakeTags(owner, 'f1', [], [tag('datalake:lake', 1)], {
+        ...adapters,
+        fileOwnerUserId: 'someone-else',
+      } as never)
+    ).rejects.toThrow(/do not have permission to add/i);
+  });
+
+  it("refuses an admin's join of a file the lake's owner does not own", async () => {
+    const adapters = makeAdapters([]);
+    adapters.db.fabFiles.findById = vi.fn().mockResolvedValue({ id: 'f1', userId: 'someone-else', tags: [] });
+
+    await expect(
+      reconcileLakeTags({ userId: 'admin', isAdmin: true }, 'f1', [], [tag('datalake:lake', 1)], adapters as never)
+    ).rejects.toThrow(/do not have permission to add/i);
+  });
+
+  it("lets an admin join a file the lake's owner owns", async () => {
+    const adapters = makeAdapters([]);
+
+    const result = await reconcileLakeTags(
+      { userId: 'admin', isAdmin: true },
+      'f1',
+      [],
+      [tag('datalake:lake', 1)],
+      adapters as never
+    );
+
+    expect(result.tagsToPersist).toContainEqual(tag('datalake:lake', 1));
+  });
+
   it('preserves membership when the caller drops the meta-tag, regardless of manage rights', async () => {
     const adapters = makeAdapters([tag('datalake:lake', 1)], lake({ createdByUserId: 'someone-else' }));
 
@@ -688,19 +788,14 @@ describe('reconcileLakeTags - admission contract', () => {
     ).rejects.toThrow(/chunks at 512/);
   });
 
-  it('logs rather than silently passing when the file owner cannot be resolved', async () => {
-    const base = makeAdapters([], lake({ requiredPassageTokenTarget: 1000 }));
+  it('refuses a join, and warns, when the file owner cannot be resolved', async () => {
+    const base = makeAdapters([]);
     base.db.fabFiles.findById = vi.fn().mockResolvedValue(null);
     const warn = vi.fn();
 
-    await reconcileLakeTags(owner, 'f1', [], [tag('datalake:lake', 1)], {
-      db: {
-        ...base.db,
-        ...settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' }, [enforcingLake('lake1')]),
-      },
-      logger: { warn },
-    } as never);
-
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('admission contract NOT evaluated'), 'f1');
+    await expect(
+      reconcileLakeTags(owner, 'f1', [], [tag('datalake:lake', 1)], { db: base.db, logger: { warn } } as never)
+    ).rejects.toThrow(/do not have permission to add/i);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/could not resolve file owner/), 'f1');
   });
 });
