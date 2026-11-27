@@ -49,7 +49,7 @@ Only a Bike4Mind admin gives the `platform` label, and only to a live, `verified
 
 ### Functions offered to everyone signed in
 
-An admin can offer a `platform` function to everyone signed in. Every person then finds it under **Shared with me**, the same as a function shared with them, and reviews it before their first call. Once reviewed, it lists and calls over the API too. The offer needs the label: it ends at once when an admin withdraws it or removes the label, or when an edit removes the label. When an admin withdraws the offer or removes the label, a person the offer alone reached starts at review again if it is offered again. An offer shows you the function's inputs and outputs only, never its code, data files, or calls, and it does not add you to any project or organization.
+An admin can offer a `platform` function to everyone signed in. Every person then finds it under **Shared with me**, the same as a function shared with them, and reviews it before their first call. Once reviewed, it lists and calls over the API too. The offer needs the label: it ends at once when an admin withdraws it or removes the label, or when an edit removes the label. When an admin withdraws the offer or removes the label, a person the offer alone reached starts at review again if it is offered again. An offer shows you the function's inputs and outputs only, never its code, its calls, or its data files, not even their names: a call's `stamp` lists each data file by its hash and size with an empty `name`. It does not add you to any project or organization.
 
 ## Find your functions in the app
 

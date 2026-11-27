@@ -29,7 +29,8 @@ const SCOPE_LABELS: Readonly<Record<string, string>> = {
   'me:read': 'See your name, plan, subscription, credit balance and feature access',
   [FEDERATED_ADMIN_STATUS_SCOPE]: 'See whether you are a Bike4Mind administrator',
   'functions:invoke': 'List and run your functions, and the functions shared with you once you have reviewed them',
-  'functions:author': 'Create, change, test, share, and delete your functions',
+  'functions:author':
+    'Create, read, change, test, and delete your functions, including their code and recent calls, and share them with people found by email address',
   'notebooks:read': 'View your notebooks and sessions',
   'notebooks:write': 'Create and modify your notebooks',
   'files:read': 'View your uploaded files',

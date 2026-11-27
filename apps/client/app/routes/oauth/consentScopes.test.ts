@@ -39,7 +39,11 @@ describe('toConsentScopes', () => {
         id: 'functions:invoke',
         label: 'List and run your functions, and the functions shared with you once you have reviewed them',
       },
-      { id: 'functions:author', label: 'Create, change, test, share, and delete your functions' },
+      {
+        id: 'functions:author',
+        label:
+          'Create, read, change, test, and delete your functions, including their code and recent calls, and share them with people found by email address',
+      },
     ]);
   });
 
