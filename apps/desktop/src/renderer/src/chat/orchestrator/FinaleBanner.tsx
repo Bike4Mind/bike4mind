@@ -3,8 +3,6 @@ import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
 import { keyframes } from '@mui/system';
 import { finaleStats, formatWallTime, questSucceeded } from './finale';
-import { OfficePortrait } from './office/OfficeArt';
-import { OFFICE_PARENT } from './office/officeCast';
 import type { AgentView } from './roster';
 import type { RunSpendView } from './runSpend';
 import { INNKEEPER_ART } from './tavern/tavernArt';
@@ -22,7 +20,9 @@ const unfurlInline = keyframes`
 const SERIF = 'Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif';
 const MONO = 'ui-monospace, Menlo, Consolas, monospace';
 
-export type FinaleLook = 'tavern' | 'office';
+export const FINALE_LOOKS = ['tavern', 'office'] as const;
+export type FinaleLook = (typeof FINALE_LOOKS)[number];
+export type FinaleHostArt = { idle: string; cheering: string };
 
 interface Look {
   ink: string;
@@ -30,7 +30,7 @@ interface Look {
   /** The rule colour: `complete`, or `ended` for a quest with failed or unfinished agents. */
   rule: { complete: string; ended: string };
   fontFamily: string;
-  title: { complete: string; ended: string; sx: Record<string, string | number> };
+  title: Record<string, string | number>;
   card: (rule: string) => Record<string, string | number>;
   chip: Record<string, string | number>;
   read: { color: string; hover: string };
@@ -45,11 +45,7 @@ const LOOKS: Record<FinaleLook, Look> = {
     inkSoft: '#6b4a2b',
     rule: { complete: '#b8862f', ended: '#8a7a66' },
     fontFamily: SERIF,
-    title: {
-      complete: 'Quest complete',
-      ended: 'Quest ended',
-      sx: { fontSize: '18px', letterSpacing: '0.02em' },
-    },
+    title: { fontSize: '18px', letterSpacing: '0.02em' },
     card: rule => ({
       borderRadius: '6px',
       background: 'linear-gradient(180deg, #fbf0d4 0%, #f3dfb0 55%, #e8cc92 100%)',
@@ -69,7 +65,7 @@ const LOOKS: Record<FinaleLook, Look> = {
     inkSoft: '#566654',
     rule: { complete: '#5f8a4f', ended: '#8b8c80' },
     fontFamily: MONO,
-    title: { complete: 'Shift complete', ended: 'Shift ended', sx: { fontSize: '15px', letterSpacing: '0.04em' } },
+    title: { fontSize: '15px', letterSpacing: '0.04em' },
     card: rule => ({
       borderRadius: '2px',
       background: '#f1ecd9',
@@ -129,7 +125,7 @@ function StatChip({
  * The finale card, muted when not every agent finished done. `scene` pins it over the top of the scene art;
  * `inline` sets it in the flow above a Board or Table so it never covers their rows. `spend` is the run's
  * settled total from the server; until it arrives, or when there is none, the card shows the local estimate.
- * `look` dresses it for the scene it sits on.
+ * `look` dresses it for the scene it sits on, and `hostArt` is that scene's host, the Innkeeper by default.
  */
 export function FinaleBanner({
   agents,
@@ -137,6 +133,8 @@ export function FinaleBanner({
   onDismiss,
   placement = 'scene',
   look: lookId = 'tavern',
+  hostArt = INNKEEPER_ART,
+  title,
   spend,
 }: {
   agents: readonly AgentView[];
@@ -145,12 +143,15 @@ export function FinaleBanner({
   onDismiss(): void;
   placement?: 'scene' | 'inline';
   look?: FinaleLook;
+  hostArt?: FinaleHostArt;
+  /** The scene's words for a run that finished done, and for one that did not (its copy.stage.finale). */
+  title: { complete: string; ended: string };
 }) {
   const look = LOOKS[lookId];
   const stats = finaleStats(agents);
   const succeeded = questSucceeded(stats);
   const outcome = succeeded ? 'complete' : 'ended';
-  const title = look.title[outcome];
+  const heading = title[outcome];
   const rule = look.rule[outcome];
   const timing: FinaleChip[] = [
     { key: 'time', label: formatWallTime(stats.wallMs) },
@@ -168,7 +169,7 @@ export function FinaleBanner({
   return (
     <Box
       role="status"
-      aria-label={title}
+      aria-label={heading}
       data-testid="orchestrator-finale"
       data-outcome={outcome}
       data-placement={placement}
@@ -198,42 +199,27 @@ export function FinaleBanner({
         '@media (prefers-reduced-motion: reduce)': { animation: 'none' },
       }}
     >
-      {lookId === 'office' ? (
-        <Box
-          sx={{
-            width: 52,
-            height: 52,
-            flexShrink: 0,
-            display: 'flex',
-            alignItems: 'flex-end',
-            justifyContent: 'center',
-            overflow: 'hidden',
-            border: `2px solid ${look.ink}`,
-            bgcolor: '#aebbab',
-            '& svg': { width: 42, height: 50 },
-          }}
-        >
-          <OfficePortrait name={OFFICE_PARENT} resting={succeeded} />
-        </Box>
-      ) : (
-        <Box
-          component="img"
-          src={succeeded ? INNKEEPER_ART.cheering : INNKEEPER_ART.idle}
-          alt=""
-          draggable={false}
-          sx={{
-            width: 52,
-            height: 52,
-            flexShrink: 0,
-            objectFit: 'contain',
-            imageRendering: 'pixelated',
-            borderRadius: '50%',
-            border: `2px solid ${rule}`,
-            bgcolor: '#2a1a0c',
-            boxShadow: 'inset 0 0 8px rgba(0, 0, 0, 0.6)',
-          }}
-        />
-      )}
+      <Box
+        component="img"
+        src={succeeded ? hostArt.cheering : hostArt.idle}
+        alt=""
+        draggable={false}
+        sx={{
+          width: 52,
+          height: 52,
+          flexShrink: 0,
+          objectFit: 'contain',
+          imageRendering: 'pixelated',
+          ...(lookId === 'office'
+            ? { border: `2px solid ${look.ink}`, bgcolor: '#aebbab' }
+            : {
+                borderRadius: '50%',
+                border: `2px solid ${rule}`,
+                bgcolor: '#2a1a0c',
+                boxShadow: 'inset 0 0 8px rgba(0, 0, 0, 0.6)',
+              }),
+        }}
+      />
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, minWidth: 0 }}>
         <Typography
           component="h2"
@@ -243,10 +229,10 @@ export function FinaleBanner({
             fontWeight: 700,
             lineHeight: 1.2,
             m: 0,
-            ...look.title.sx,
+            ...look.title,
           }}
         >
-          {title}
+          {heading}
         </Typography>
         <Box
           component="ul"

@@ -13,6 +13,7 @@ import {
   ArtifactContent,
   CallableFunction,
   CallableFunctionCall,
+  UserApiKey,
   artifactContentRepository,
   artifactRepository,
   callableFunctionRepository,
@@ -568,6 +569,16 @@ describe('ownership', () => {
     expect(deletePrefix).toHaveBeenCalledWith(callableFunctionDataPrefix(view.id));
     expect(await CallableFunction.countDocuments({})).toBe(0);
   });
+
+  it('delete removes the stored source bytes of a function that has declared sources, even after removing them', async () => {
+    const view = await save();
+    const read = await callableFunctionRepository.findByIdForOwner(view.id, OWNER_KEY);
+    await callableFunctionRepository.setSources(view.id, OWNER_KEY, read!, []);
+    const storage = { deletePrefix: vi.fn(async () => 1) };
+    await deleteCallableFunction(OWNER, view.id, storage as never);
+    expect(storage.deletePrefix.mock.calls).toEqual([[`data/${view.id}/`], [`data/.live/${view.id}/`]]);
+    expect(await CallableFunction.countDocuments({})).toBe(0);
+  });
 });
 
 const OWNER_KEY = { ownerType: 'user' as const, ownerKey: OWNER.id };
@@ -603,8 +614,11 @@ async function promoteDirectly(id: string, seq = 1) {
       seq,
       runtime: { kind: 'pyodide-server', version: '0.25.1', packages: [] },
       lastServerRun: { at: new Date(), passed: 1, failed: 0, results: [] },
+      sourcePins: [],
       trustLabel: 'verified',
       contract: fn!.contract,
+      pin: fn!.pin,
+      description: fn!.description,
     }
   );
   expect(promoted).toMatchObject({ state: 'live', trustLabel: 'verified', pin: { seq } });
@@ -653,7 +667,7 @@ describe('repinning a promoted function', () => {
     expect(record?.pin.runtime).toBeUndefined();
   });
 
-  it('warns of a break with the promoted contract before the update, and updates to a draft once confirmed', async () => {
+  it('refuses an update that breaks the promoted contract, even when the caller asks to accept it', async () => {
     const view = await save();
     await promoteDirectly(view.id);
     const version = await addVersion('artifact-1', code('# reworked\n'));
@@ -665,6 +679,9 @@ describe('repinning a promoted function', () => {
       repinCallableFunction(OWNER, view.id, { expectedVersion: version, contract: next })
     ).rejects.toMatchObject({
       statusCode: 409,
+      message: expect.stringMatching(
+        /^Output deflection was removed since promotion 1, which could break callers of the tool, .* save this version as a new tool, give the function a new name in FUNCTION, save the artifact, and select Make this a tool\.$/
+      ),
       additionalInfo: {
         code: 'breaking_change',
         promotedSeq: 1,
@@ -673,12 +690,19 @@ describe('repinning a promoted function', () => {
     });
     expect(await stored(view.id)).toMatchObject({ state: 'live', pin: { version: 1 } });
 
-    const repinned = await repinCallableFunction(OWNER, view.id, {
-      expectedVersion: version,
-      contract: next,
-      acceptBreaking: true,
-    });
-    expect(repinned).toMatchObject({ state: 'draft', pin: { version: 2 } });
+    await expect(
+      repinCallableFunction(OWNER, view.id, {
+        expectedVersion: version,
+        contract: next,
+        acceptBreaking: true,
+      } as Parameters<typeof repinCallableFunction>[2])
+    ).rejects.toMatchObject({ statusCode: 409, additionalInfo: { code: 'breaking_change' } });
+    expect(await stored(view.id)).toMatchObject({ state: 'live', pin: { version: 1 } });
+
+    const compatible = contract();
+    Object.assign(compatible.inputs.properties, { depth: { type: 'number', unit: 'm' } });
+    const repinned = await repinCallableFunction(OWNER, view.id, { expectedVersion: version, contract: compatible });
+    expect(repinned.pin).toMatchObject({ version });
   });
 });
 
@@ -839,8 +863,11 @@ describe('callableFunctionRepository.promote', () => {
         seq: 1,
         runtime: { kind: 'pyodide-server', version: '0.25.1', packages: [] },
         lastServerRun: { at: new Date(), passed: 1, failed: 0, results: [] },
+        sourcePins: [],
         trustLabel: 'unverified',
         contract: read!.contract,
+        pin: read!.pin,
+        description: read!.description,
       }
     );
     expect(promoted).toBeNull();
@@ -878,9 +905,10 @@ describe('summarizeCallableFunctionCalls', () => {
   const row = (
     functionId: string,
     daysAgo: number,
-    outcome: 'ok' | 'error' | 'timeout',
+    outcome: 'ok' | 'error' | 'timeout' | 'refused',
     caller = OWNER.id,
-    op: 'call' | 'read_contract' = 'call'
+    op: 'call' | 'read_contract' = 'call',
+    reason?: 'not_caller'
   ) =>
     CallableFunctionCall.create({
       op,
@@ -893,6 +921,7 @@ describe('summarizeCallableFunctionCalls', () => {
       startedAt: new Date(NOW.getTime() - daysAgo * DAY),
       durationMs: 10,
       outcome,
+      ...(reason ? { reason } : {}),
     });
 
   afterEach(async () => {
@@ -913,7 +942,6 @@ describe('summarizeCallableFunctionCalls', () => {
       await row(view.id, days, outcome);
     }
     await row(view.id, 31, 'ok');
-    await row(view.id, 1, 'ok', STRANGER.id);
     await row('6650f0a1b2c3d4e5f6a7b8c9', 1, 'ok');
     await row(view.id, 0.5, 'ok', OWNER.id, 'read_contract');
 
@@ -926,7 +954,64 @@ describe('summarizeCallableFunctionCalls', () => {
       startedAt: new Date(NOW.getTime() - DAY),
       outcome: 'ok',
       surface: 'test',
+      byRecipient: false,
+      durationMs: 10,
     });
+  });
+
+  it("names the promotion that ran, its duration, and the owner's own API key, and never a recipient's", async () => {
+    const view = await save();
+    const ownKey = new mongoose.Types.ObjectId();
+    const deletedKey = new mongoose.Types.ObjectId();
+    const recipientKey = new mongoose.Types.ObjectId();
+    await UserApiKey.collection.insertMany([
+      { _id: ownKey, userId: OWNER.id, name: 'nightly-batch', keyPrefix: 'b4m_live_own' },
+      { _id: recipientKey, userId: STRANGER.id, name: 'their-key', keyPrefix: 'b4m_live_their' },
+    ]);
+    const keyed = async (daysAgo: number, caller: string, apiKeyId: string | undefined, pinSeq: number) => {
+      const created = await row(view.id, daysAgo, 'ok', caller);
+      await CallableFunctionCall.collection.updateOne(
+        { _id: created._id },
+        { $set: { pinSeq, durationMs: 1250, surface: 'rest', ...(apiKeyId ? { apiKeyId } : {}) } }
+      );
+    };
+    await keyed(1, OWNER.id, String(ownKey), 2);
+    await keyed(2, STRANGER.id, String(recipientKey), 2);
+    await keyed(3, OWNER.id, String(deletedKey), 1);
+    await keyed(4, OWNER.id, undefined, 1);
+
+    try {
+      const summary = await summarizeCallableFunctionCalls(OWNER, view.id, NOW);
+      expect(
+        summary.recent.map(({ byRecipient, pinSeq, durationMs, apiKey }) => ({
+          byRecipient,
+          pinSeq,
+          durationMs,
+          apiKey,
+        }))
+      ).toEqual([
+        { byRecipient: false, pinSeq: 2, durationMs: 1250, apiKey: { name: 'nightly-batch' } },
+        { byRecipient: true, pinSeq: 2, durationMs: 1250, apiKey: undefined },
+        { byRecipient: false, pinSeq: 1, durationMs: 1250, apiKey: { name: null } },
+        { byRecipient: false, pinSeq: 1, durationMs: 1250, apiKey: undefined },
+      ]);
+      expect(JSON.stringify(summary)).not.toContain('their-key');
+      expect(JSON.stringify(summary)).not.toContain(STRANGER.id);
+    } finally {
+      await UserApiKey.collection.deleteMany({});
+    }
+  });
+
+  it("counts a recipient's calls as the owner's to see, and leaves out a refused caller it was never shared with", async () => {
+    const view = await save();
+    await row(view.id, 1, 'ok');
+    await row(view.id, 0.5, 'ok', STRANGER.id);
+    await row(view.id, 0.25, 'refused', 'outsider-1', 'call', 'not_caller');
+
+    const summary = await summarizeCallableFunctionCalls(OWNER, view.id, NOW);
+    expect(summary).toMatchObject({ total: 2, outcomes: { ok: 2 } });
+    expect(summary.recent.map(call => call.byRecipient)).toEqual([true, false]);
+    await expect(summarizeCallableFunctionCalls(STRANGER, view.id, NOW)).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it("answers 404 for another owner's function", async () => {

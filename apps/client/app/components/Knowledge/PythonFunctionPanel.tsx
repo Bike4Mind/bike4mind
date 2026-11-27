@@ -47,6 +47,7 @@ import {
   callableFunctionContractUnreadable,
   callableFunctionErrorMessage,
   fetchCallableFunctionDataFiles,
+  fetchCallableFunctionSources,
   useArtifactCallableFunction,
   useCallableFunctionsServerRuntime,
   useDeleteCallableFunction,
@@ -66,6 +67,7 @@ import BreakingChangeDialog from './BreakingChangeDialog';
 import { ContractTable, unitLabel } from './FunctionContractTable';
 import PromoteFunctionSection from './PromoteFunctionSection';
 import FunctionDataSection from './FunctionDataSection';
+import FunctionSourcesSection from './FunctionSourcesSection';
 import SaveFunctionDialog from './SaveFunctionDialog';
 
 /** Where saving this artifact as a tool would pin it, or why it cannot be saved yet. */
@@ -507,8 +509,8 @@ function StampData({ label, data, testId }: { label: string; data: CallableFunct
       </Typography>
       {data.map(entry => (
         <Typography key={entry.name} level="body-xs" title={entry.sha256}>
-          <code>/data/{entry.name}</code> sha256 <code>{shortHash(entry.sha256)}</code> {entry.bytes.toLocaleString()}{' '}
-          bytes
+          <code>/data/{entry.name}</code> {entry.mode} sha256 <code>{shortHash(entry.sha256)}</code>{' '}
+          {entry.bytes.toLocaleString()} bytes{entry.fetched_at ? `, fetched ${entry.fetched_at}` : ''}
         </Typography>
       ))}
     </Stack>
@@ -986,6 +988,11 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
         )}
         {saved.status !== 'source_deleted' && (
           <Box sx={{ pt: 1 }}>
+            <FunctionSourcesSection tool={saved} />
+          </Box>
+        )}
+        {saved.status !== 'source_deleted' && (
+          <Box sx={{ pt: 1 }}>
             <PromoteFunctionSection
               tool={saved}
               contract={contract}
@@ -1081,19 +1088,6 @@ function FunctionSaveSection({ save, contract }: { save: PythonFunctionSave; con
           changes={refused.changes}
           unreadable={refused.unreadable}
           promotedSeq={refused.promotedSeq}
-          accepting={repin.isPending}
-          onAccept={() =>
-            repin.mutate(
-              { id: saved.id, expectedVersion: refused.version, contract, acceptBreaking: true },
-              {
-                onSuccess: () => {
-                  setRefused(null);
-                  setFocusWhen('repinned');
-                },
-                onError: failureToast('Could not update the tool.'),
-              }
-            )
-          }
         />
       )}
     </>
@@ -1120,11 +1114,29 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
     save?.version ?? 0,
     described.status === 'ready' ? described.contract.name : ''
   );
-  const pinnedData = savedTools?.saved?.dataPins?.length ? savedTools.saved : null;
+  const savedTool = savedTools?.saved;
+  const savedData = savedTool && (savedTool.dataPins?.length || savedTool.sources?.length) ? savedTool : null;
   const [browserStamp, setBrowserStamp] = useState<BrowserStamp | null>(null);
-  // The saved tool's pinned files, each checked against its hash, so a browser run reads what the server run reads.
-  const loadDataFiles = async () =>
-    pinnedData ? fetchCallableFunctionDataFiles(pinnedData.id, pinnedData.dataPins) : [];
+  // The saved tool's pinned files and sources, each checked against its hash, so a browser run reads what the
+  // server run reads and stamps it the same way.
+  const loadDataFiles = async (): Promise<{
+    files: { name: string; bytes: ArrayBuffer }[];
+    data: CallableFunctionStampData[];
+  }> => {
+    if (!savedData) return { files: [], data: [] };
+    const pins = savedData.dataPins ?? [];
+    const [pinned, sources] = await Promise.all([
+      fetchCallableFunctionDataFiles(savedData.id, pins),
+      fetchCallableFunctionSources(savedData.id, savedData.sources ?? []),
+    ]);
+    return {
+      files: [...pinned, ...sources.map(({ name, bytes }) => ({ name, bytes }))],
+      data: [
+        ...pins.map(({ name, sha256, bytes }): CallableFunctionStampData => ({ name, mode: 'pinned', sha256, bytes })),
+        ...sources.map(source => source.entry),
+      ],
+    };
+  };
 
   const describe = useCallback(
     async (source: string, sourcePackages: string[]) => {
@@ -1177,7 +1189,7 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
     setCalling(true);
     setOutcome(null);
     try {
-      const result = await callFunction(source, params, packages, await loadDataFiles());
+      const result = await callFunction(source, params, packages, (await loadDataFiles()).files);
       if (!result.success) {
         setOutcome({
           status: 'failed',
@@ -1228,17 +1240,15 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
     const outcomes: TestOutcome[] = [];
     setBrowserStamp(null);
     try {
-      let files: { name: string; bytes: ArrayBuffer }[];
+      let loaded: Awaited<ReturnType<typeof loadDataFiles>>;
       try {
-        files = await loadDataFiles();
+        loaded = await loadDataFiles();
       } catch (error) {
         setTestOutcomes([{ status: 'failed', error: errorMessage(error) }]);
         return;
       }
-      setBrowserStamp({
-        runtime: { kind: 'pyodide-browser', version: PYODIDE_VERSION },
-        data: (pinnedData?.dataPins ?? []).map(({ name, sha256, bytes }) => ({ name, mode: 'pinned', sha256, bytes })),
-      });
+      const { files } = loaded;
+      setBrowserStamp({ runtime: { kind: 'pyodide-browser', version: PYODIDE_VERSION }, data: loaded.data });
       for (const test of contract.tests ?? []) {
         // Each case gets its own copies: a call transfers its buffers to the sandbox.
         const caseFiles = files.map(file => ({ name: file.name, bytes: file.bytes.slice(0) }));
@@ -1365,7 +1375,7 @@ const PythonFunctionPanel: React.FC<PythonFunctionPanelProps> = ({ code, package
                 Call function
               </Button>
               <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                Calls run in your browser. Call results are not saved.
+                Calls run in your browser. They are not saved and do not appear in the call log.
               </Typography>
             </Stack>
 

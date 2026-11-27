@@ -34,7 +34,7 @@ import {
 } from './embeddingMismatch';
 import { BoundedTopK } from './boundedTopK';
 import { lakeOrderScopes, orderFilesFairlyAcrossLakes } from './lakeFairOrder';
-import { recordDataLakeSearchMetrics } from './dataLakeSearchMetrics';
+import { type AnnBlockedReason, recordDataLakeSearchMetrics } from './dataLakeSearchMetrics';
 import { reportScanTruncation, type ScanTruncationReport, type SearchEntrypoint } from './scanTruncationMetrics';
 import {
   isVectorSearchReady,
@@ -1124,13 +1124,7 @@ async function rankChunksForFiles(args: {
   // Why the ANN path did not engage, for the "flag on but nothing is using it" alert below. Each
   // cause needs a different fix and none of them is visible from `annModelsQueried` alone, so the
   // reason has to be captured here where it is actually known.
-  let annBlockedReason:
-    | 'no-backend'
-    | 'index-not-queryable'
-    | 'no-ready-files'
-    | 'ready-files-within-lag'
-    | 'no-index-resident-files'
-    | null = null;
+  let annBlockedReason: AnnBlockedReason | null = null;
   // Whether the self-host ANN split is backed by CONFIRMED index residency, which is what makes
   // absence from a saturated result readable as a ranking outcome rather than a missing document.
   let openSearchResidencyKnown = false;
@@ -1444,6 +1438,10 @@ async function rankChunksForFiles(args: {
   // Deliberately NOT hoisted to withTruncationReport, which exists to catch the return paths this
   // point cannot see. Those paths ranked nothing, so they would publish an all-zero datapoint -
   // and a zero on annUnrankedFilesLeftOffScan is precisely the regression this metric watches for.
+  // Same condition as the "ANN served nothing" warn below; `annBlockedReason` is only ever set on a
+  // primary model that never queried, so whether any ALTERNATE model served something is the question.
+  const annServedNothingReason =
+    annBlockedReason && servedByAlternateAnn.size === 0 && rankable.length > 0 ? annBlockedReason : null;
   await recordDataLakeSearchMetrics(
     {
       // Three-way, unlike the log lines above: a dimension value partitions the metric
@@ -1455,6 +1453,11 @@ async function rankChunksForFiles(args: {
       annHits: scan.annHits,
       annModelsQueried: scan.annModelsQueried,
       annSlowestQueryMs: scan.annSlowestQueryMs,
+      fallbacks: {
+        indexNotQueryable: annBlockedReason === 'index-not-queryable',
+        annQueryFailed: primaryAnnFailed,
+        annServedNothingReason,
+      },
     },
     logger
   );
@@ -1475,14 +1478,12 @@ async function rankChunksForFiles(args: {
   // empty; both of those leave retrieval entirely on the scan path, which is the state this alarm
   // exists to report, so neither can be allowed to silence it. `filesWithHits.size > 0` is the
   // same definition of "served" the mismatch accounting uses at `servedOutcomes` above.
-  // `annBlockedReason` is only ever set on a primary model that never queried, so whether any
-  // ALTERNATE model served something is the whole question here.
-  if (annBlockedReason && servedByAlternateAnn.size === 0 && rankable.length > 0) {
+  if (annServedNothingReason) {
     logger?.warn?.(
       '[semanticSearch] vector search is enabled but ANN served nothing - retrieval is entirely brute-force scan',
       {
         embeddingModel,
-        reason: annBlockedReason,
+        reason: annServedNothingReason,
         backend: canUseAtlas ? 'atlas' : canUseOpenSearch ? 'opensearch' : 'none',
         rankableFiles: rankable.length,
         // `reason` only ever describes the PRIMARY model, so this separates "no ANN query ran at

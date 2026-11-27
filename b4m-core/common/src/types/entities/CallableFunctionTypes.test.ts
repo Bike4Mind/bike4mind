@@ -2,9 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   CALLABLE_FUNCTION_PROTECTED_FIELDS,
   CALLABLE_FUNCTION_SLUG_PATTERN,
+  CALLABLE_FUNCTION_TRUST_LABEL_TEXT,
+  CALLABLE_FUNCTION_TRUST_LABELS,
   CallableFunctionGrantVisibilitySchema,
   callableFunctionTrustLabel,
   effectiveCallableFunctionStatus,
+  isOfferedToEverySignedInPerson,
+  recipientCallableFunction,
+  shownCallableFunctionTrustLabel,
   toCallableFunctionDetail,
   toCallableFunctionPublic,
   toCallableFunctionShared,
@@ -92,6 +97,7 @@ describe('toCallableFunctionPublic', () => {
         'latestVersion',
         'pin',
         'slug',
+        'sources',
         'state',
         'status',
         'trustLabel',
@@ -218,6 +224,23 @@ describe('sharing', () => {
     expect(shared(null).dataPins).toEqual([]);
   });
 
+  it('names the live and pinned sources and never their URLs', () => {
+    const view = toCallableFunctionShared(
+      doc({
+        state: 'live',
+        sources: [
+          { name: 'rates.csv', url: 'https://data.example.com/private/rates.csv', mode: 'live' },
+          { name: 'base.csv', url: 'https://data.example.com/private/base.csv', mode: 'pinned' },
+        ],
+      }),
+      'project',
+      { ownerName: 'Owner Name', reviewHash: hash, review: null }
+    );
+    expect(view.sources).toEqual(['rates.csv', 'base.csv']);
+    expect(JSON.stringify(view)).not.toMatch(/data\.example\.com|private/);
+    expect(shared(null).sources).toEqual([]);
+  });
+
   it('reads reviewed only while the review names the current hash and is on', () => {
     expect(shared(review)).toMatchObject({ status: 'reviewed', review: { approval: 'always_ask', current: true } });
     expect(shared({ ...review, enabled: false }).status).toBe('disabled');
@@ -257,5 +280,60 @@ describe('callableFunctionTrustLabel', () => {
     expect(callableFunctionTrustLabel([{ kind: 'test', passed: true }])).toBe('unverified');
     expect(callableFunctionTrustLabel([])).toBe('unverified');
     expect(callableFunctionTrustLabel([{ kind: 'example', passed: false }])).toBe('unverified');
+  });
+});
+
+describe('the platform label', () => {
+  const mark = { setBy: 'admin-1', setAt: new Date('2026-01-03T00:00:00Z') };
+  const live = (overrides: Partial<ICallableFunctionDocument> = {}) =>
+    doc({ state: 'live', trustLabel: 'verified', pin: { ...doc().pin, seq: 1 }, platform: mark, ...overrides });
+
+  it('is a label with its own words', () => {
+    expect(CALLABLE_FUNCTION_TRUST_LABELS).toContain('platform');
+    expect(CALLABLE_FUNCTION_TRUST_LABEL_TEXT.platform).toBe('Platform: curated and checked by Bike4Mind.');
+    expect(CALLABLE_FUNCTION_PROTECTED_FIELDS).toContain('platform');
+  });
+
+  it('shows on a live, verified function an admin marked, to the owner and to a recipient', () => {
+    expect(shownCallableFunctionTrustLabel(live())).toBe('platform');
+    expect(toCallableFunctionPublic(live(), { version: 2 }).trustLabel).toBe('platform');
+    const view = toCallableFunctionShared(live(), 'person', { ownerName: 'Owner', reviewHash: 'h', review: null });
+    expect(view.trustLabel).toBe('platform');
+    expect(view).not.toHaveProperty('platform');
+  });
+
+  it('never shows while unverified, unmarked, or a draft, and never names the admin', () => {
+    expect(shownCallableFunctionTrustLabel(live({ trustLabel: 'unverified' }))).toBe('unverified');
+    expect(shownCallableFunctionTrustLabel(live({ platform: undefined }))).toBe('verified');
+    expect(shownCallableFunctionTrustLabel(live({ state: 'draft' }))).toBeNull();
+    expect(JSON.stringify(toCallableFunctionPublic(live(), { version: 2 }))).not.toContain('admin-1');
+  });
+
+  it("shows on a recipient's kept promotion while the mark stands", () => {
+    const draft = live({
+      state: 'draft',
+      trustLabel: undefined,
+      promoted: { seq: 1, contract, at: new Date(), pin: { ...doc().pin, seq: 1 }, trustLabel: 'verified' },
+    });
+    expect(shownCallableFunctionTrustLabel(recipientCallableFunction(draft)!)).toBe('platform');
+    expect(shownCallableFunctionTrustLabel(recipientCallableFunction({ ...draft, platform: undefined })!)).toBe(
+      'verified'
+    );
+  });
+
+  it('offers to every signed-in person only a live, marked record with the audience, never a kept promotion', () => {
+    const offered = { ...mark, audience: 'signed_in' as const };
+    expect(isOfferedToEverySignedInPerson(live({ platform: offered }))).toBe(true);
+    expect(isOfferedToEverySignedInPerson(live())).toBe(false);
+    expect(isOfferedToEverySignedInPerson(live({ platform: undefined }))).toBe(false);
+    expect(isOfferedToEverySignedInPerson(live({ platform: offered, trustLabel: 'unverified' }))).toBe(false);
+    expect(isOfferedToEverySignedInPerson(live({ platform: offered, state: 'draft' }))).toBe(false);
+    const view = toCallableFunctionShared(live({ platform: offered }), 'signed_in', {
+      ownerName: 'Owner',
+      reviewHash: 'h',
+      review: null,
+    });
+    expect(view).toMatchObject({ sharedVia: 'signed_in', trustLabel: 'platform', status: 'pending_review' });
+    expect(JSON.stringify(view)).not.toContain('audience');
   });
 });

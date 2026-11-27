@@ -21,6 +21,7 @@ import { readVisitId } from '@server/analytics/visitSession';
 import { recordSignupNetwork } from '@server/auth/networkMeta';
 import { refreshSignupRiskScore } from '@server/auth/signupRiskScore';
 import { Logger } from '@bike4mind/observability';
+import { consumeSamlStateNonce } from '@bike4mind/server-utils/auth/oauthFlowCookie';
 
 const handleSamlCallback = async (req: any, res: any) => {
   try {
@@ -31,6 +32,8 @@ const handleSamlCallback = async (req: any, res: any) => {
     // Post-login path round-tripped via RelayState; sanitized client-side in
     // /auth/success, so carried through opaquely here.
     let redirectTo: string | undefined;
+    let nonceHash: string | undefined;
+    const presentedNonceHash = consumeSamlStateNonce(req, res);
 
     // Never log the request body or RelayState: the body carries the base64
     // SAMLResponse, i.e. a complete signed assertion that is replayable inside its
@@ -41,6 +44,7 @@ const handleSamlCallback = async (req: any, res: any) => {
       const params = new URLSearchParams(RelayState);
       idpId = params.get('idp') || undefined;
       redirectTo = params.get('redirectTo') || undefined;
+      nonceHash = params.get('nh') || undefined;
     }
 
     // RelayState is unsigned, so it only chooses which IdP validates the response: the SAML
@@ -60,6 +64,19 @@ const handleSamlCallback = async (req: any, res: any) => {
 
     if (!identityProvider || !identityProvider.isActive || identityProvider.type !== 'saml') {
       return res.redirect('/login?error=invalid_idp');
+    }
+
+    // Only a response to a login this browser started (index.ts set the nonce cookie that `nh`
+    // names) may sign it in. Anything else, an IdP-initiated response included, restarts as a
+    // login from this browser; the IdP's own session makes that a silent round trip.
+    if (!nonceHash) {
+      const restart = new URLSearchParams({ idp: identityProvider.id });
+      if (redirectTo) restart.set('redirectTo', redirectTo);
+      return res.redirect(`/api/auth/saml?${restart.toString()}`);
+    }
+    if (presentedNonceHash !== nonceHash) {
+      req.logger.warn('SAML response does not belong to a login started in this browser', { idpId });
+      return res.redirect('/login?error=saml_session_mismatch');
     }
 
     const strategyName = setupSamlStrategy({
@@ -136,7 +153,7 @@ const handleSamlCallback = async (req: any, res: any) => {
       // client-supplied one: only an active registered client yields a tag.
       if (user.isNewUser) {
         await stampOAuthSourceTag(user.id, clientIdFromAuthorizeRedirect(redirectTo));
-        await recordSignupNetwork({ req, userId: user.id, method: AuthStrategy.SAML });
+        await recordSignupNetwork({ req, userId: user.id, method: AuthStrategy.SAML, clientId: user.signupClientId });
         // After recordSignupNetwork so the datacenter signal sees the stored signup network.
         await refreshSignupRiskScore(user.id, Logger.globalInstance);
         const signupFunnel = await recordSignupAcquisition({ req, user, method: AuthStrategy.SAML });

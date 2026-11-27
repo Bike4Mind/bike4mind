@@ -4,7 +4,8 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { requestApproval } from '@server/admin/approvals/service';
 import { creditGrantNeedsApproval } from '@server/admin/creditGrants/gate';
 import { TopUpSchema, topUpOrg } from '@server/admin/creditGrants/topUpOrg';
-import { assertDelegateCanCreditOrganization } from '@server/admin/creditGrants/delegateTargets';
+import { assertDelegateCanCreditOrganization, belongsToOrganization } from '@server/admin/creditGrants/delegateTargets';
+import { SELF_GRANT_APPROVAL, isHeldSelfGrant } from '@server/admin/creditGrants/selfGrant';
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
@@ -23,10 +24,11 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
     const reason = parseAdminActionReason((req.body as { reason?: unknown } | undefined)?.reason);
     const params = { organizationId: id, credits, kind, idempotencyKey, reason };
     const request = req as unknown as Request;
-    const gate = await creditGrantNeedsApproval(credits, req.user.id);
+    const organization = await organizationRepository.findById(id);
+    if (!organization) throw new NotFoundError('Organization not found');
+    const heldSelfGrant = isHeldSelfGrant(req.user, belongsToOrganization(req.user, organization));
+    const gate = await creditGrantNeedsApproval(credits, req.user.id, { heldSelfGrant });
     if (gate.policy) {
-      const organization = await organizationRepository.findById(id);
-      if (!organization) throw new NotFoundError('Organization not found');
       await assertDelegateCanCreditOrganization(req.user, organization, 'top up');
       const pending = await requestApproval(
         request,
@@ -35,8 +37,7 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
           params,
           summary: `${kind === 'refund' ? 'Refund' : 'Top up'} ${credits} credits to org ${organization.name}`,
           reason,
-          requiredPermission: 'credits:adjust',
-          requiresFullAdmin: false,
+          ...(heldSelfGrant ? SELF_GRANT_APPROVAL : { requiredPermission: 'credits:adjust', requiresFullAdmin: false }),
         },
         gate.policy
       );

@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 import { setOptimisticQueryData } from '@client/app/utils/react-query';
-import { carriesTutorialMarker, samePrompt, type TutorialStatus } from '@bike4mind/common';
+import { carriesTutorialMarker, markedTurn, samePrompt, type TutorialStatus } from '@bike4mind/common';
 import { CoachMark } from './CoachMark';
 import { HideUnusedComposerChips } from './ComposerChips';
 import type {
@@ -24,6 +24,7 @@ export const LANDED_EARLIER_NOTICE =
   'That step needs the page set up first, so the tutorial picks up at the step that does it.';
 export const PAUSED_NOTICE = 'Tutorial paused. Pick it up from the Tutorials panel.';
 export const JUMP_FAILED_NOTICE = "Couldn't move to that step - please try again.";
+export const SKIP_FAILED_NOTICE = "Couldn't skip that step - please try again.";
 export const OFF_NOTICE = 'This tutorial was switched off for now. Your conversation carries on.';
 
 /** How the server said the module moved under a running walk: changed, or switched off. Undefined for anything else. */
@@ -65,7 +66,8 @@ export function stepProgress(script: TutorialScript, stepId: string) {
 /** Heads the bridge card, which closes the module, where a step shows its count. */
 export const bridgeHeading = (script: TutorialScript) => {
   const count = script.steps.filter(s => s.type !== 'bridge').length;
-  return count > 0 ? `Quest chain complete: all ${count} steps` : 'Quest chain complete';
+  if (count === 0) return 'All done';
+  return `All done: ${count} ${count === 1 ? 'step' : 'steps'} complete`;
 };
 
 export interface TutorialRunnerProps {
@@ -86,6 +88,11 @@ export interface TutorialRunnerProps {
   onShowSteps?: () => void;
   /** The server says the module changed or was switched off; the host refetches its scripts. */
   onChanged?: () => void;
+  /**
+   * Offers "Skip step" on every card but the closing bridge. Skipping a step that sends a recorded turn seeds
+   * that turn first, as a jump does, so later steps find the answer they point at. Off unless a host opts in.
+   */
+  skippable?: boolean;
 }
 
 /** Plays the active module's current step. Steps advance on events their renderer reports, never on timers. */
@@ -99,6 +106,7 @@ export function TutorialRunner({
   landOn,
   onShowSteps,
   onChanged,
+  skippable = false,
 }: TutorialRunnerProps) {
   const queryClient = useQueryClient();
   const host = useTutorialHost();
@@ -268,7 +276,7 @@ export function TutorialRunner({
   }, [store, jump, script, advance, landOn, report, endChanged]);
 
   const stepId = step?.id;
-  /* eslint-disable react-hooks/preserve-manual-memoization -- Step effects depend on these identities */
+
   const setAnchor = useCallback(
     (testid: string | undefined, options?: TutorialAnchorOptions) => {
       if (stepId) setAnchorOverride({ stepId, testid, ...options });
@@ -288,7 +296,33 @@ export function TutorialRunner({
     },
     [stepId]
   );
-  /* eslint-enable react-hooks/preserve-manual-memoization */
+
+  const skipping = useRef(false);
+  const skip = useCallback(async () => {
+    const current = store.getState().active;
+    if (!step || skipping.current || current?.moduleId !== script.id || current.stepId !== step.id) return;
+    skipping.current = true;
+    try {
+      const turn = step.turn;
+      const seeded = turn !== undefined && (quests ?? NO_QUESTS).some(q => markedTurn(q) === turn);
+      const sentByUser =
+        Boolean(step.prompt) && (quests ?? NO_QUESTS).some(q => q.prompt && samePrompt(q.prompt, step.prompt!));
+      // Wait out a pending jump so seeded turns land in order.
+      await jumpInFlight.current;
+      if (turn !== undefined && !seeded && !sentByUser) await advance(turn);
+      const after = store.getState().active;
+      // The walk may have ended or moved on while the turn was seeded.
+      if (after?.moduleId !== script.id || after.stepId !== step.id) return;
+      clearStalePrompt(script, current.sessionId);
+      completeFrom(step.id);
+    } catch (error) {
+      const change = moduleChangeOf(error);
+      if (change) endChanged(change);
+      else toast(SKIP_FAILED_NOTICE);
+    } finally {
+      skipping.current = false;
+    }
+  }, [store, step, script, quests, advance, completeFrom, endChanged]);
   const sheetFileId = useCallback(
     async () => (await transport.sheet({ moduleId: script.id })).fileId,
     [transport, script.id]
@@ -315,6 +349,7 @@ export function TutorialRunner({
         // Closing the card that ends the module finishes it: there is nothing left to pause.
         onLeave={step.type === 'bridge' ? () => completeFrom(step.id) : () => stop('left', PAUSED_NOTICE)}
         onShowSteps={onShowSteps}
+        onSkip={skippable && step.type !== 'bridge' ? () => void skip() : undefined}
         progress={progress}
         heading={progress ? undefined : bridgeHeading(script)}
       >

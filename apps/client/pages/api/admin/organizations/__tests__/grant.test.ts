@@ -80,10 +80,15 @@ import { sendToClient } from '@bike4mind/server-utils/websocket/utils';
 const approvalMocks = vi.hoisted(() => ({
   policy: vi.fn(async (_credits: number): Promise<unknown> => null),
   request: vi.fn(),
+  gateOptions: vi.fn(),
 }));
+const DISABLED_POLICY = { enabled: false, bulkUserThreshold: 25, creditThreshold: 10, expiryHours: 24 };
 vi.mock('@server/admin/creditGrants/gate', () => ({
-  creditGrantNeedsApproval: async (credits: number) => {
+  // Like the real gate, a held self-grant gets the policy even with approvals disabled.
+  creditGrantNeedsApproval: async (credits: number, _actorId: string, opts?: { heldSelfGrant?: boolean }) => {
+    approvalMocks.gateOptions(opts);
     const policy = await approvalMocks.policy(credits);
+    if (opts?.heldSelfGrant) return { policy: policy ?? DISABLED_POLICY };
     return policy ? { policy } : { policy: null, release: async () => undefined };
   },
 }));
@@ -94,6 +99,9 @@ const POLICY = { enabled: true, bulkUserThreshold: 25, creditThreshold: 10, expi
 const PENDING = { approvalId: 'approval-1', status: 'pending' };
 
 import handler from '../grant';
+import type { Request } from 'express';
+import { grantOrg } from '@server/admin/creditGrants/grantOrg';
+import type { AdminApproval } from '@bike4mind/common';
 
 const BODY = {
   name: 'Acme Corp',
@@ -260,10 +268,92 @@ describe('POST /api/admin/organizations/grant - approval gate', () => {
     expect(mockAddCredits).not.toHaveBeenCalled();
   });
 
+  it('holds a grant to the admin own account for credits:approve_self_grant', async () => {
+    approvalMocks.policy.mockResolvedValueOnce(POLICY);
+    mockUserFindByEmail.mockResolvedValue({ id: 'admin-1', email: 'owner@example.com' });
+    const { res, run } = call({});
+    await run();
+    expect(res._getStatusCode()).toBe(202);
+    expect(approvalMocks.request).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'org.credits.grant',
+        requiredPermission: 'credits:approve_self_grant',
+        requiresFullAdmin: false,
+      }),
+      POLICY
+    );
+  });
+
+  it.each([
+    ['direct', undefined],
+    ['impersonated', { impersonatedBy: 'admin-2', adminPermissions: ['credits:self_grant'] }],
+  ])('holds a %s self-grant with approvals disabled and answers 202', async (_label, extra) => {
+    mockUserFindByEmail.mockResolvedValue({ id: 'admin-1', email: 'owner@example.com' });
+    const { req, res } = createMocks({ method: 'POST', body: BODY });
+    (req as unknown as { user: unknown }).user = { isAdmin: true, id: 'admin-1', username: 'admin', ...extra };
+    (req as unknown as { logger: unknown }).logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    await (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res);
+    expect(approvalMocks.gateOptions).toHaveBeenCalledWith({ heldSelfGrant: true });
+    expect(res._getStatusCode()).toBe(202);
+    expect(approvalMocks.request).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ requiredPermission: 'credits:approve_self_grant', requiresFullAdmin: false }),
+      DISABLED_POLICY
+    );
+    expect(mockOrgCreate).not.toHaveBeenCalled();
+  });
+
   it('refuses an unknown owner before storing a request', async () => {
     approvalMocks.policy.mockResolvedValueOnce(POLICY);
     mockUserFindByEmail.mockResolvedValueOnce(null);
     await expect(call({}).run()).rejects.toThrow('No user with email');
     expect(approvalMocks.request).not.toHaveBeenCalled();
+  });
+});
+
+describe('grantOrg executor - selfGrant audit flag', () => {
+  const params = {
+    name: 'Acme Corp',
+    ownerEmail: 'owner@example.com',
+    seats: 5,
+    initialCredits: 1000,
+    reason: 'Pilot',
+  };
+  const executorReq = (user: Record<string, unknown>) =>
+    ({ user, logger: { info: vi.fn(), warn: vi.fn() } }) as unknown as Request;
+  const approvalBy = (...selfIds: string[]) =>
+    ({
+      id: 'approval-1',
+      requiredPermission: 'credits:approve_self_grant',
+      requestedBy: { id: selfIds[0], name: 'R', selfIds },
+    }) as unknown as AdminApproval;
+  const auditDetails = () => vi.mocked(recordAdminActionFromRequest).mock.calls[0][1].details;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserFindByEmail.mockResolvedValue({ id: 'owner-1', email: 'owner@example.com' });
+    mockOrgCreate.mockResolvedValue({ id: 'org-1', name: 'Acme Corp' });
+    mockSubCreate.mockResolvedValue({ id: 'sub-1' });
+    mockAddCredits.mockResolvedValue({ creditHolder: {}, creditTransactionId: 'tx-grant' });
+  });
+
+  it('flags a grant whose owner is the acting admin', async () => {
+    await grantOrg(executorReq({ id: 'owner-1', isAdmin: true, adminPermissions: ['credits:self_grant'] }), params);
+    expect(auditDetails()).toMatchObject({ selfGrant: true });
+  });
+
+  it('flags an approved grant whose owner is the requesting admin, run by a different approver', async () => {
+    await grantOrg(
+      executorReq({ id: 'admin-2', isAdmin: true, adminPermissions: ['credits:approve_self_grant'] }),
+      params,
+      approvalBy('owner-1')
+    );
+    expect(auditDetails()).toMatchObject({ selfGrant: true });
+  });
+
+  it('does not flag a grant to an owner who is neither the actor nor the requester', async () => {
+    await grantOrg(executorReq({ id: 'admin-1', isAdmin: true }), params, approvalBy('admin-3'));
+    expect(auditDetails()).toMatchObject({ selfGrant: false });
   });
 });

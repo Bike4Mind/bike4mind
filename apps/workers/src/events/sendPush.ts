@@ -1,9 +1,11 @@
 import type { EventBridgeEvent } from 'aws-lambda';
 import {
+  isBlockEndPushHeld,
   isHeldDuringBusyBlock,
   isInBusyBlock,
   isPushCategoryEnabled,
   PENDING_ACTION_DECISIONS,
+  type InterruptionFeedback,
   type LiveActivityContentState,
   type LiveActivityPushEvent,
   type PushNotificationCategory,
@@ -110,6 +112,8 @@ export type PushRecipient = {
   redactContent: boolean;
   /** Inside a synced calendar busy block now; BUSY_BLOCK_HELD_CATEGORIES are not delivered. */
   inBusyBlock?: boolean;
+  /** What the user taught the block-end brief push to stay quiet about. */
+  interruptionFeedback?: InterruptionFeedback;
 };
 
 export const APPROVAL_RESOLVED_COPY: Record<
@@ -153,7 +157,10 @@ export type SendPushDeps = {
 };
 
 export type PushDeliveryResult =
-  | { status: 'skipped'; reason: 'no_tokens' | 'no_recipient' | 'category_disabled' | 'busy_block_hold' }
+  | {
+      status: 'skipped';
+      reason: 'no_tokens' | 'no_recipient' | 'category_disabled' | 'busy_block_hold' | 'interruption_feedback_hold';
+    }
   | { status: 'sent'; delivered: number; pruned: number; failed: number };
 
 export async function deliverPush(
@@ -184,6 +191,17 @@ export async function deliverPush(
   if (!isPushCategoryEnabled(recipient.preferences, event.category)) {
     logger.info('[Push] category disabled by user preference', { category: event.category });
     return { status: 'skipped', reason: 'category_disabled' };
+  }
+  // The brief is already ready and listed; only the push announcing it is held. The notifyHeldBlockRuns
+  // summary is never held: it sends only when the block brief does not cover the runs (discarded, failed or
+  // limited to reminders), so it is the one place those runs show up.
+  if (
+    event.category === 'brief_ready' &&
+    event.blockEndCategories &&
+    isBlockEndPushHeld(recipient.interruptionFeedback, event.blockEndCategories)
+  ) {
+    logger.info('[Push] block-end push held by interruption feedback', { categories: event.blockEndCategories });
+    return { status: 'skipped', reason: 'interruption_feedback_hold' };
   }
   // Held, not queued: the brief composed when the block ends reports these runs, and when that brief does not
   // land notifyHeldBlockRuns sends one summary instead. With brief_ready off no block brief is composed
@@ -700,6 +718,7 @@ export async function loadPushRecipient(userId: string): Promise<PushRecipient |
     preferences: user.preferences?.pushNotifications,
     redactContent: organization?.redactPushContent === true,
     inBusyBlock: isInBusyBlock(user, new Date()),
+    interruptionFeedback: user.preferences?.interruptionFeedback,
   };
 }
 

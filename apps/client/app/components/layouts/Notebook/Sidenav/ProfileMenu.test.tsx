@@ -7,6 +7,7 @@ import { UiNavigationEvents } from '@bike4mind/common';
 import { useCookieSettings } from '@client/app/components/CookieConsentBanner';
 import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWindow';
 import ProfileMenu, { AccountCard, closeSideNavOnOverlay } from './ProfileMenu';
+import { useTutorialPicker } from '@client/app/components/tutorial/core/tutorialPickerStore';
 
 // Just enough of the menu's data hooks to render it; none of these rows are under test here.
 const router = vi.hoisted(() => ({ pathname: '/new', navigate: vi.fn() }));
@@ -47,11 +48,14 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: (select: (s: unknown) => unknown) =>
     select({ currentUser: user.current, isAdmin: false, avatarVersion: user.avatarVersion }),
 }));
-const userSettings = vi.hoisted(() => ({ updatePreferences: vi.fn(), showHelp: false }));
+const userSettings = vi.hoisted(() => ({ updatePreferences: vi.fn(), showHelp: false, tutorials: false }));
 vi.mock('@client/app/contexts/UserSettingsContext', () => ({
   useUserSettings: () => ({
     updatePreferences: userSettings.updatePreferences,
     settings: { showHelp: userSettings.showHelp },
+  }),
+  useServerSettings: () => ({
+    serverSettings: [{ settingName: 'EnableCoreTutorials', settingValue: userSettings.tutorials }],
   }),
 }));
 vi.mock('@client/app/hooks/data/analytics', () => ({ useLogEvent: () => ({ mutate: analytics.mutate }) }));
@@ -434,6 +438,24 @@ describe('ProfileMenu - Send feedback', () => {
       screen.getByTestId('profile-menu-send-feedback')
     );
     billing.creditsEnabled = false;
+  });
+
+  it('offers no Tutorials row while core tutorials are switched off', () => {
+    openMenu();
+    expect(screen.queryByTestId('profile-menu-tutorials')).not.toBeInTheDocument();
+  });
+
+  it('offers Tutorials once core tutorials are switched on, and opens the picker', () => {
+    userSettings.tutorials = true;
+    try {
+      openMenu();
+      fireEvent.click(screen.getByTestId('profile-menu-tutorials'));
+      expect(useTutorialPicker.getState().open).toBe(true);
+      expect(screen.queryByTestId('profile-menu-panel')).not.toBeInTheDocument();
+    } finally {
+      userSettings.tutorials = false;
+      useTutorialPicker.setState({ open: false });
+    }
   });
 
   it('opens the feedback form (set, never toggle) and closes the menu', () => {

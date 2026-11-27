@@ -7,12 +7,14 @@ import {
   GrantSubscriptionSchema,
   grantSubscription,
   grantSubscriptionCredits,
+  grantSubscriptionTargetIds,
   validateGrantSubscription,
 } from '@server/admin/creditGrants/grantSubscription';
 import { assertDelegateCanCreditUser } from '@server/admin/creditGrants/delegateTargets';
 import { adminApi } from '@server/middlewares/adminApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
+import { SELF_GRANT_APPROVAL, isHeldSelfGrant } from '@server/admin/creditGrants/selfGrant';
+import { isSelfOrImpersonator, parseAdminActionReason } from '@bike4mind/server-utils/utils/adminAudit';
 import type { Request } from 'express';
 
 interface RequestQuery {
@@ -32,7 +34,12 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
     const request = req as unknown as Request;
 
     const credits = grantSubscriptionCredits(params, teamPlan);
-    const gate = await creditGrantNeedsApproval(credits, req.user.id);
+    const targetIds = await grantSubscriptionTargetIds(params);
+    const heldSelfGrant = isHeldSelfGrant(
+      req.user,
+      targetIds.some(id => isSelfOrImpersonator(req.user, id))
+    );
+    const gate = await creditGrantNeedsApproval(credits, req.user.id, { heldSelfGrant });
     if (gate.policy) {
       const user = await validateGrantSubscription(params, teamPlan);
       await assertDelegateCanCreditUser(req.user, user.id, 'grant a subscription to');
@@ -43,8 +50,7 @@ const handler = adminApi({ requiredScopes: [ApiKeyScope.ADMIN], adminPermissions
           params: { ...params, creditsAtRequest: credits },
           summary: `Grant ${params.subscriptionType} subscription with ${credits} credits to ${user.email ?? user.username}`,
           reason,
-          requiredPermission: 'credits:adjust',
-          requiresFullAdmin: false,
+          ...(heldSelfGrant ? SELF_GRANT_APPROVAL : { requiredPermission: 'credits:adjust', requiresFullAdmin: false }),
         },
         gate.policy
       );

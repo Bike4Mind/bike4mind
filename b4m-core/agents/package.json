@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/agents",
-  "version": "1.8.8",
+  "version": "1.8.12",
   "publishConfig": {
     "access": "restricted"
   },
@@ -37,9 +37,8 @@
     "clean": "rm -rf dist",
     "build": "pnpm clean && tsdown",
     "incremental": "tsdown",
-    "typecheck": "tsc --noEmit",
-    "typecheck:native": "tsgo --noEmit --types node",
-    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "typecheck:tsc": "tsc --noEmit",
+    "typecheck":"tsgo --noEmit --types node",
     "dev": "tsdown --watch",
     "test": "vitest run"
   },

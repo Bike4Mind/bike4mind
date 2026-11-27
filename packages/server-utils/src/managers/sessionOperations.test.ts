@@ -41,7 +41,7 @@ vi.mock('@bike4mind/common', async () => {
     // @server/utils/errors re-exports NotFoundError from here, so it must be provided.
     NotFoundError: class NotFoundError extends Error {},
     // Real implementation: the redaction test below verifies the actual behavior, not a stub.
-    redactPromptMetaForViewer: actual.redactPromptMetaForViewer,
+    redactChatMessageForViewer: actual.redactChatMessageForViewer,
   };
 });
 
@@ -120,6 +120,29 @@ describe('sessionOperations', () => {
       // name/id/success must survive - only returnValue/error are owner-only.
       expect(JSON.stringify(data)).toContain('web_search');
       expect(JSON.stringify(data)).toContain('call_1');
+    });
+
+    const questWithPendingAction = () => ({
+      toJSON: () => ({ id: 'q1', pendingAction: { tool: 'send_email', params: { to: 'x' }, ts: 1 } }),
+    });
+
+    it('keeps pendingAction for the session owner', async () => {
+      findAccessibleById.mockResolvedValueOnce({ userId: 'owner-1' });
+      QuestMock.find.mockReturnValueOnce(chainableFind([questWithPendingAction()]));
+
+      const { data } = await getMessagesFromSession({ id: 'owner-1' } as never, 's1', undefined, { all: true });
+
+      expect(data[0].pendingAction).toEqual({ tool: 'send_email', params: { to: 'x' }, ts: 1 });
+    });
+
+    it('withholds pendingAction from a non-owner viewer', async () => {
+      findAccessibleById.mockResolvedValueOnce({ userId: 'owner-1' });
+      QuestMock.find.mockReturnValueOnce(chainableFind([questWithPendingAction()]));
+
+      const { data } = await getMessagesFromSession({ id: 'sharee-2' } as never, 's1', undefined, { all: true });
+
+      expect(data[0].pendingAction).toBeUndefined();
+      expect(JSON.stringify(data)).not.toContain('send_email');
     });
 
     it('throws NotFoundError when the session is not accessible', async () => {

@@ -556,6 +556,29 @@ describe('CoachMark', () => {
     await waitFor(() => expect(screen.getByTestId('tutorial-anchor-ring')).toHaveStyle({ top: `${420 - 6}px` }));
   });
 
+  it('finds an anchor that slides on screen in a CSS transition once the transition ends', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 844 });
+    boxes.set('menu-item', rect(8, 900, 382, 944));
+    boxes.set('tutorial-coach-card', rect(0, 0, 358, 200));
+    stubRects();
+    render(
+      <>
+        <div data-testid="drawer">
+          <button data-testid="menu-item">Add</button>
+        </div>
+        <CoachMark stepKey="s" body="Choose Add." anchor="menu-item" onLeave={() => undefined} />
+      </>
+    );
+    expect(screen.queryByTestId('tutorial-anchor-ring')).toBeNull();
+    boxes.set('menu-item', rect(8, 640, 382, 684));
+    act(() => {
+      screen.getByTestId('drawer').dispatchEvent(new Event('transitionend', { bubbles: true }));
+    });
+    expect(await screen.findByTestId('tutorial-anchor-ring')).toHaveStyle({ top: `${640 - 6}px` });
+    expect(screen.getByTestId('tutorial-coach-card')).toHaveStyle({ top: '16px' });
+  });
+
   it('shows the step count, or the heading on a card without one', () => {
     const { rerender } = render(
       <CoachMark stepKey="s" body="b" progress={{ index: 1, count: 14 }} onLeave={() => undefined} />

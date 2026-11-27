@@ -23,6 +23,8 @@ export const aiHolders = {
     references: [
       { path: 'userId', matchBy: 'userId', action: 'deleteDocument', where: { ownerType: 'user' } },
       { path: 'grants.userIds', matchBy: 'userId', action: 'pullFromArray' },
+      // The admin who marked another person's function `platform`.
+      { path: 'platform.setBy', matchBy: 'userId', action: 'anonymize' },
     ],
     // Recipients' reviews name the function, not its owner, so they are deleted before the functions are.
     beforeErasure: ['deleteReviewsOfOwnedCallableFunctions'],

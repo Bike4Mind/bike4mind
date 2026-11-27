@@ -1,4 +1,9 @@
-import { identityProviderRepository, withTransaction, type IIdentityProviderDocument } from '@bike4mind/database';
+import {
+  identityProviderRepository,
+  isSameOktaAudience,
+  withTransaction,
+  type IIdentityProviderDocument,
+} from '@bike4mind/database';
 import { Logger } from '@bike4mind/observability';
 import { adminApi } from '@server/middlewares/adminApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/server-utils/utils/errors';
@@ -80,6 +85,17 @@ const handler = adminApi({
         const existing = await identityProviderRepository.findById(id);
         if (!existing) {
           throw new NotFoundError('Identity provider not found');
+        }
+
+        // updateIDP drops a stored secret whose audience changed; ask for it instead of saving a
+        // provider that can no longer sign anyone in.
+        if (
+          oktaConfig &&
+          !oktaConfig.clientSecret &&
+          existing.oktaConfig?.audience &&
+          !isSameOktaAudience(oktaConfig.audience, existing.oktaConfig.audience)
+        ) {
+          throw new BadRequestError('Re-enter the client secret when changing the Okta audience');
         }
 
         const updated = await identityProviderRepository.updateIDP(id, {

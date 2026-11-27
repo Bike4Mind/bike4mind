@@ -16,6 +16,7 @@ import { Session as SessionModel, sessionRepository } from '@bike4mind/database/
 import { logEvent } from '@bike4mind/server-utils/utils/analyticsLog';
 import { unpublishUserArtifactsBySource } from '@bike4mind/server-utils/services/publish/purgeUserPublishedArtifacts';
 import { purgeDeletedNotebookMedia } from '@bike4mind/server-utils/sessions/purgeDeletedNotebookMedia';
+import { decodeOwnSessionListCursor, encodeOwnSessionListCursor } from '@server/sessions/ownSessionListCursor';
 
 // Door admits either notebook scope or admin:*; DELETE narrows to notebooks:write (or admin:*) below.
 // The door admits legacy keys until the legacy window ends, since GET was open to every key before.
@@ -29,37 +30,26 @@ const handler = baseApi({
    */
   .get<Request<unknown, unknown, unknown, Record<string, string>>>(
     asyncHandler(async (req, res) => {
-      const { search, surface, pagination, orderBy, origin, excludeOrigin, hasImages } = sessionSearchSchema.parse(
-        qs.parse(req.query)
-      );
+      const { search, surface, pagination, orderBy, origin, excludeOrigin, hasImages, cursor } =
+        sessionSearchSchema.parse(qs.parse(req.query));
+      if (!req.user) return res.json([]);
 
-      const result = req.user
-        ? await sessionService.searchOwnSessions(
-            req.user.id,
-            {
-              search,
-              surface,
-              pagination,
-              orderBy,
-              origin,
-              excludeOrigin,
-              hasImages,
-            },
-            {
-              db: {
-                sessions: sessionRepository,
-              },
-            }
-          )
-        : [];
-      // Redact server-owned fields (e.g. systemPromptText) from the listed sessions.
-      // Redact in both shapes ({ data, hasMore } and the bare-array fallback) so the redaction
-      // can't be bypassed if the service is ever refactored to return a populated array.
-      return res.json(
-        Array.isArray(result)
-          ? redactSessionsForClient(result)
-          : { ...result, data: redactSessionsForClient(result.data) }
+      // Same defaults as searchOwnSessions, so the cursor scope names the order actually served.
+      const order = { field: orderBy?.field ?? 'lastUpdated', direction: orderBy?.direction ?? 'desc' } as const;
+      const after = cursor === undefined ? undefined : decodeOwnSessionListCursor(cursor, order);
+
+      const result = await sessionService.searchOwnSessions(
+        req.user.id,
+        { search, surface, pagination, orderBy: order, origin, excludeOrigin, hasImages },
+        { db: { sessions: sessionRepository } },
+        { after }
       );
+      // Redact server-owned fields (e.g. systemPromptText) from the listed sessions.
+      return res.json({
+        data: redactSessionsForClient(result.data),
+        hasMore: result.hasMore,
+        nextCursor: encodeOwnSessionListCursor(result.last, order),
+      });
     })
   )
   /**

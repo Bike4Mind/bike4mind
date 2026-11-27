@@ -1,19 +1,27 @@
 import type { HostBridgeResponse, HostNotificationDelivery } from '@shared/hostBridge';
+import type { HostAccount, HostConnectionState, HostEntry, HostKind } from '@shared/hostConnection';
 import {
   HOST_ERROR_CODES,
+  HostConnectError,
   HostRequestError,
   hostMethods,
   isHostMethod,
   type HostError,
-  type HostTransport,
 } from '@shared/hostProtocol';
+import type { ClientIdentity } from './handshake';
+import {
+  DEFAULT_HOST_LINK_TUNING,
+  HostLink,
+  REACHABLE_STATUSES,
+  sameAccount,
+  type HostConnector,
+  type HostLinkTuning,
+} from './HostLink';
+import { WindowConnection } from './WindowConnection';
 
 export { LOCAL_HOST_ID } from '@shared/hostBridge';
-
-export type HostConnectionState = { status: 'connected' } | { status: 'disconnected'; reason: string };
-
-/** How to open one client connection to a host. */
-export type HostConnector = { connect(): HostTransport };
+export type { HostConnector } from './HostLink';
+export type { ClientIdentity } from './handshake';
 
 /** A window, as far as host connections care: where its notifications go and when it is gone. */
 export type HostClientEndpoint = {
@@ -21,50 +29,156 @@ export type HostClientEndpoint = {
   deliver(delivery: HostNotificationDelivery): void;
   /** Called once, when the window is destroyed. */
   onClosed(listener: () => void): void;
+  /** True once the window is destroyed; onClosed never fires for a window already gone. */
+  isClosed(): boolean;
 };
 
-type ClientConnection = { transport: HostTransport; subscriptions: Set<string> };
+/** Wake and network signals; in Desktop, powerMonitor and `net` (see systemSignals.ts). */
+export type SystemSignals = {
+  isOnline(): boolean;
+  onWake(listener: () => void): () => void;
+  onOnline(listener: () => void): () => void;
+};
 
-type RegisteredHost = { connector: HostConnector; state: HostConnectionState };
+export type DesktopAccountSource = {
+  current(): HostAccount;
+  onChanged(listener: (account: HostAccount) => void): () => void;
+};
+
+export type ConnectionManagerOptions = {
+  client: ClientIdentity;
+  account: DesktopAccountSource;
+  signals?: SystemSignals;
+  tuning?: Partial<HostLinkTuning>;
+  now?: () => number;
+  random?: () => number;
+  log?: (message: string) => void;
+};
+
+export type HostRegistration = { label: string; kind: HostKind; /** Default true. */ connect?: boolean };
+
+type RegisteredHost = { link: HostLink; label: string; windows: Map<number, WindowConnection> };
+
+/** The `host/*` methods reach a host whose control connection is up, signed in or not; the rest need `connected`. */
+const servesMethod = (state: HostConnectionState, method: string): boolean =>
+  state.status === 'connected' || (method.startsWith('host/') && REACHABLE_STATUSES.has(state.status));
 
 const failure = (code: number, message: string, data?: unknown): HostBridgeResponse => ({
   ok: false,
   error: { code, message, ...(data === undefined ? {} : { data }) },
 });
 
-const asHostError = (error: unknown): HostError =>
-  error instanceof HostRequestError
-    ? error.toHostError()
-    : { code: HOST_ERROR_CODES.internalError, message: error instanceof Error ? error.message : String(error) };
+const asHostError = (error: unknown): HostError => {
+  if (error instanceof HostRequestError) return error.toHostError();
+  if (error instanceof HostConnectError) {
+    return { code: HOST_ERROR_CODES.capabilityUnavailable, message: `Host connection lost: ${error.message}` };
+  }
+  return { code: HOST_ERROR_CODES.internalError, message: error instanceof Error ? error.message : String(error) };
+};
+
+const ALWAYS_ONLINE: SystemSignals = {
+  isOnline: () => true,
+  onWake: () => () => undefined,
+  onOnline: () => () => undefined,
+};
 
 /**
- * The hosts this Desktop can reach, and each window's connection to them. Every window is its own
- * protocol client: it holds one connection per host it has spoken to, so a session's events reach
- * only the windows subscribed to it, and a destroyed window's subscriptions end with its
- * connections.
+ * The hosts this Desktop can reach, and each window's connection to them. Every host has one
+ * control connection (its HostLink), which decides the state the rest of Desktop sees. Every
+ * window is its own protocol client: it holds one WindowConnection per host it has spoken to, so
+ * a session's events reach only the windows subscribed to it, and a destroyed window's
+ * subscriptions end with its connections. Window connections close whenever their host is not
+ * `connected` and resume when it is connected again.
  */
 export class ConnectionManager {
   private readonly hosts = new Map<string, RegisteredHost>();
-  private readonly clients = new Map<number, Map<string, ClientConnection>>();
+  private readonly endpoints = new Set<number>();
+  private readonly listeners = new Set<(hosts: HostEntry[]) => void>();
+  private readonly tuning: HostLinkTuning;
+  private readonly signals: SystemSignals;
+  private readonly unsubscribe: Array<() => void>;
+  private account: HostAccount;
 
-  register(hostId: string, connector: HostConnector, state: HostConnectionState = { status: 'connected' }): void {
+  constructor(private readonly options: ConnectionManagerOptions) {
+    this.tuning = { ...DEFAULT_HOST_LINK_TUNING, ...options.tuning };
+    this.signals = options.signals ?? ALWAYS_ONLINE;
+    this.account = options.account.current();
+    const retryAll = () => {
+      for (const host of this.hosts.values()) host.link.retryNow();
+    };
+    this.unsubscribe = [
+      this.signals.onWake(retryAll),
+      this.signals.onOnline(retryAll),
+      options.account.onChanged(account => this.accountChanged(account)),
+    ];
+  }
+
+  /** Adds a host and, unless `connect` is false, starts connecting to it. */
+  register(hostId: string, connector: HostConnector, registration: HostRegistration): void {
     if (this.hosts.has(hostId)) throw new Error(`Host ${hostId} is already registered`);
-    this.hosts.set(hostId, { connector, state });
+    const host: RegisteredHost = {
+      link: this.createLink(hostId, connector, registration.kind),
+      label: registration.label,
+      windows: new Map(),
+    };
+    this.hosts.set(hostId, host);
+    if (registration.connect === false) host.link.disconnect('disconnected');
+    else host.link.connect();
+    this.emit();
   }
 
-  hostStates(): Array<{ hostId: string; state: HostConnectionState }> {
-    return [...this.hosts].map(([hostId, host]) => ({ hostId, state: host.state }));
+  /** Closes every connection to the host and forgets it. */
+  unregister(hostId: string): void {
+    const host = this.hosts.get(hostId);
+    if (!host) throw new Error(`Host ${hostId} is not registered`);
+    this.hosts.delete(hostId);
+    for (const window of host.windows.values()) window.close();
+    host.windows.clear();
+    host.link.dispose();
+    this.emit();
   }
 
-  /** The sessions a window is subscribed to on a host, as of its last answered subscribe or unsubscribe. */
+  list(): HostEntry[] {
+    return [...this.hosts].map(([hostId, host]) => ({
+      hostId,
+      label: host.label,
+      kind: host.link.kind,
+      state: host.link.state,
+    }));
+  }
+
+  onStateChanged(listener: (hosts: HostEntry[]) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  connect(hostId: string): void {
+    this.require(hostId).link.connect();
+  }
+
+  /** Disconnects a remote host; the local host serves local chat, so it is never taken offline. */
+  disconnect(hostId: string): void {
+    const { link } = this.require(hostId);
+    if (link.kind === 'local') throw new Error('The local host cannot be disconnected');
+    link.disconnect('disconnected');
+  }
+
+  /** Unregisters a remote host; the local host is part of Desktop and cannot be removed. */
+  remove(hostId: string): void {
+    if (this.require(hostId).link.kind === 'local') throw new Error('The local host cannot be removed');
+    this.unregister(hostId);
+  }
+
+  /** The sessions a window is subscribed to on a host, as of the host's last answer. */
   subscriptions(clientId: number, hostId: string): ReadonlySet<string> {
-    return this.clients.get(clientId)?.get(hostId)?.subscriptions ?? new Set();
+    return this.hosts.get(hostId)?.windows.get(clientId)?.subscriptions() ?? new Set();
   }
 
   /**
    * Arguments arrive from a renderer, so each is checked here before anything is dispatched: the
-   * host must be registered and connected, the method one of hostMethods, and the params valid
-   * for it. Never rejects.
+   * host must be registered and serve the method in its current state, the method one of
+   * hostMethods, and the params valid for it. A request made while the host is first connecting
+   * waits for that to settle; in any other state but `connected` it fails at once. Never rejects.
    */
   async request(
     client: HostClientEndpoint,
@@ -76,56 +190,109 @@ export class ConnectionManager {
       return failure(HOST_ERROR_CODES.methodNotFound, `Method not found: ${String(method)}`);
     }
     const host = typeof hostId === 'string' ? this.hosts.get(hostId) : undefined;
-    if (typeof hostId !== 'string' || !host)
+    if (typeof hostId !== 'string' || !host) {
       return failure(HOST_ERROR_CODES.invalidParams, `Unknown host: ${String(hostId)}`);
-    if (host.state.status !== 'connected') {
-      return failure(HOST_ERROR_CODES.capabilityUnavailable, `Host ${hostId} is not connected: ${host.state.reason}`);
     }
     const parsed = hostMethods[method].params.safeParse(params);
     if (!parsed.success) {
       return failure(HOST_ERROR_CODES.invalidParams, `Invalid params for ${method}`, parsed.error.issues);
     }
-
-    const connection = this.connection(client, hostId, host);
+    await host.link.whenSettled();
+    // Checked after the wait: a window closed during it would get a connection nothing releases.
+    if (client.isClosed()) return failure(HOST_ERROR_CODES.internalError, 'The window is gone');
+    const { state } = host.link;
+    if (this.hosts.get(hostId) !== host || !servesMethod(state, method)) {
+      return failure(HOST_ERROR_CODES.capabilityUnavailable, `Host ${hostId} is not connected (${state.status})`, {
+        state: state.status,
+      });
+    }
     try {
-      const result = await connection.transport.request(method, parsed.data);
-      this.track(connection, method, parsed.data);
+      // Window connections stay closed until the host is connected, so `host/*` before then goes over the control connection.
+      const result =
+        state.status === 'connected'
+          ? await this.windowConnection(client, hostId, host).request(method, parsed.data)
+          : await host.link.request(method, parsed.data);
       return { ok: true, result };
     } catch (error) {
       return { ok: false, error: asHostError(error) };
     }
   }
 
-  private track(connection: ClientConnection, method: string, params: unknown): void {
-    if (method === 'session/subscribe') {
-      connection.subscriptions.add(hostMethods['session/subscribe'].params.parse(params).sessionId);
-    } else if (method === 'session/unsubscribe') {
-      connection.subscriptions.delete(hostMethods['session/unsubscribe'].params.parse(params).sessionId);
-    }
+  /** Disconnects every host, for app quit. */
+  dispose(): void {
+    for (const unsubscribe of this.unsubscribe) unsubscribe();
+    for (const hostId of [...this.hosts.keys()]) this.unregister(hostId);
+    this.listeners.clear();
   }
 
-  private connection(client: HostClientEndpoint, hostId: string, host: RegisteredHost): ClientConnection {
-    let connections = this.clients.get(client.id);
-    if (!connections) {
-      const created = new Map<string, ClientConnection>();
-      connections = created;
-      this.clients.set(client.id, created);
-      client.onClosed(() => this.release(client.id, created));
+  private createLink(hostId: string, connector: HostConnector, kind: HostKind): HostLink {
+    return new HostLink({
+      hostId,
+      kind,
+      connector,
+      client: this.options.client,
+      desktopAccount: () => this.account,
+      isOnline: () => this.signals.isOnline(),
+      now: this.options.now ?? Date.now,
+      random: this.options.random ?? Math.random,
+      tuning: this.tuning,
+      onStateChanged: state => this.linkStateChanged(hostId, state),
+      log: this.options.log ?? (() => undefined),
+    });
+  }
+
+  private linkStateChanged(hostId: string, state: HostConnectionState): void {
+    const host = this.hosts.get(hostId);
+    if (host) {
+      if (state.status === 'connected') {
+        for (const window of host.windows.values()) void window.resume();
+      } else {
+        // needsSignIn and accountMismatch too: a window must not get events for sessions it may not read.
+        for (const window of host.windows.values()) window.suspend();
+      }
     }
-    const existing = connections.get(hostId);
+    this.emit();
+  }
+
+  private accountChanged(account: HostAccount): void {
+    if (sameAccount(account, this.account)) return;
+    this.account = account;
+    for (const host of this.hosts.values()) host.link.accountChanged();
+  }
+
+  private windowConnection(client: HostClientEndpoint, hostId: string, host: RegisteredHost): WindowConnection {
+    const existing = host.windows.get(client.id);
     if (existing) return existing;
-    const transport = host.connector.connect();
-    transport.onNotification(notification => client.deliver({ hostId, notification }));
-    const opened: ClientConnection = { transport, subscriptions: new Set() };
-    connections.set(hostId, opened);
-    return opened;
+    if (!this.endpoints.has(client.id)) {
+      this.endpoints.add(client.id);
+      client.onClosed(() => this.release(client.id));
+    }
+    const created = new WindowConnection({
+      hostId,
+      open: () => host.link.openClient(),
+      deliver: delivery => client.deliver(delivery),
+      reportBroken: detail => host.link.reportBroken(detail),
+    });
+    host.windows.set(client.id, created);
+    return created;
   }
 
-  private release(clientId: number, connections: Map<string, ClientConnection>): void {
-    for (const connection of connections.values()) {
-      connection.subscriptions.clear();
-      connection.transport.close();
+  private release(clientId: number): void {
+    this.endpoints.delete(clientId);
+    for (const host of this.hosts.values()) {
+      host.windows.get(clientId)?.close();
+      host.windows.delete(clientId);
     }
-    if (this.clients.get(clientId) === connections) this.clients.delete(clientId);
+  }
+
+  private require(hostId: string): RegisteredHost {
+    const host = this.hosts.get(hostId);
+    if (!host) throw new Error(`Host ${hostId} is not registered`);
+    return host;
+  }
+
+  private emit(): void {
+    const hosts = this.list();
+    for (const listener of this.listeners) listener(hosts);
   }
 }

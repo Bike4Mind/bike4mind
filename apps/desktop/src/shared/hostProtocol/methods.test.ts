@@ -126,6 +126,7 @@ const notificationSamples: Record<HostNotificationName, { params: unknown; badPa
     badParams: { decisions: 'none' },
   },
   'host/stateChanged': { params: { account: null }, badParams: { account: { userId: 'u1' } } },
+  'session/resyncRequired': { params: { sessionId: 's1' }, badParams: {} },
 };
 
 describe('hostMethods', () => {

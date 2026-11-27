@@ -98,6 +98,7 @@ import perfLogger from '../../../utils/performanceLogger';
 import { consumeQuestLaunchIntent } from '../../../utils/questLaunchIntent';
 import { LexicalChatInputRef } from '../LexicalChatInput';
 import { shouldBlurComposerAfterSend } from './composerFocus';
+import { isRecordedTutorialTurn } from '../../tutorial/core/walkActive';
 
 interface UseSendMessageParams {
   lexicalInputRef: React.RefObject<LexicalChatInputRef | null>;
@@ -427,6 +428,7 @@ export function useSendMessage({
       effectiveCredits,
       enforceCredits,
       selectedModel: model,
+      recordedTutorialTurn: isRecordedTutorialTurn(prompt),
     });
     if (errorMessage) {
       console.error(errorMessage);

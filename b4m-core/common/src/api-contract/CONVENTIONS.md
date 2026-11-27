@@ -441,6 +441,11 @@ additionally carry the six rate-limit headers set by
 `X-RateLimit-{Limit,Remaining,Reset}-{Minute,Day}` - on API-key-authenticated requests.
 Reset values are Unix epoch **seconds**.
 
+Every `baseApi` response to a request whose API key validated, the scope `403` included, carries
+`X-Api-Key-Scopes`: the calling key's own scopes, comma-separated (empty for a legacy key
+with none). It is the one way a key without `api-keys:manage` reads its own scopes, and it
+says nothing about other keys, the user, or the organization.
+
 **A contract declares whether it emits them**, via `emitsRateLimitHeaders: true`. This is
 declared, not inferred, because reaching that middleware is a transport fact the contract
 cannot derive: the Lambda adapter sets no rate-limit headers, and the Fargate SSE route

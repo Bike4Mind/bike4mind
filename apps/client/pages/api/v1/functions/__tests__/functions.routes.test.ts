@@ -7,11 +7,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import {
   ApiKeyScope,
+  cancelFunctionCallContract,
   getFunctionCallContract,
   getFunctionContract,
   invokeFunctionContract,
   isZodError,
   listFunctionsContract,
+  reviewFunctionContract,
+  reviewHash,
   type FunctionContract,
 } from '@bike4mind/common';
 import { decideScopeGate } from '@bike4mind/server-utils/middlewares/apiKeyScopeGate';
@@ -30,6 +33,8 @@ const h = vi.hoisted(() => ({
   functions: [] as Record<string, unknown>[],
   artifacts: [] as { id: string; userId: string; version: number; deletedAt: Date | null }[],
   calls: [] as Record<string, unknown>[],
+  recordFails: { value: false },
+  reviews: [] as Record<string, unknown>[],
   runner: vi.fn(),
   runnerConfigured: { value: true },
   limitMs: { value: 30_000 },
@@ -55,6 +60,8 @@ vi.mock('@bike4mind/server-utils/utils/sqs', () => ({
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
+  methodNotAllowedHandler: () => async (_req: unknown, res: { status: (code: number) => { end: () => void } }) =>
+    res.status(405).end(),
   baseApi: (options?: Record<string, unknown>) => {
     h.baseApiOptions.push(options);
     type Mw = (req: unknown, res: unknown, next: (error?: unknown) => void) => unknown;
@@ -113,6 +120,10 @@ vi.mock('@bike4mind/database', async () => ({
   mongoose: (await import('mongoose')).default,
   adminSettingsRepository: {},
   artifactContentRepository: {},
+  // Read at load by the artifact access table the authoring routes in the same files import.
+  artifactVersionRepository: {},
+  questRepository: {},
+  sessionRepository: {},
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: async (key: string, limit: number, windowMs: number) => {
       const count = (h.buckets.get(key) ?? 0) + 1;
@@ -127,7 +138,42 @@ vi.mock('@bike4mind/database', async () => ({
     findByIdForOwner: async (id: string, owner: Owner) =>
       isHexId(id) ? (h.functions.find(fn => fn.id === id && owned(owner)(fn)) ?? null) : null,
     listForOwner: async (owner: Owner) => h.functions.filter(owned(owner)),
+    listLiveForOwner: async (owner: Owner) =>
+      h.functions.filter(fn => owned(owner)(fn) && fn.state === 'live' && fn.enabled),
+    listSharedWith: async ({ userId }: { userId: string }) =>
+      h.functions.filter(
+        fn =>
+          fn.ownerKey !== userId &&
+          fn.enabled &&
+          fn.state === 'live' &&
+          ((fn.grants as { userIds: string[] } | undefined)?.userIds.includes(userId) ||
+            (fn.platform as { audience?: string } | undefined)?.audience === 'signed_in')
+      ),
   },
+  callableFunctionReviewRepository: {
+    findFor: async (functionId: string, userId: string) =>
+      h.reviews.find(r => r.functionId === functionId && r.userId === userId) ?? null,
+    findForUser: async (userId: string, ids: string[]) =>
+      h.reviews.filter(r => r.userId === userId && ids.includes(r.functionId as string)),
+    saveReview: async (review: Record<string, unknown>) => {
+      const saved = { ...review, enabled: true, reviewedAt: new Date() };
+      h.reviews = [...h.reviews.filter(r => r.functionId !== review.functionId || r.userId !== review.userId), saved];
+      return saved;
+    },
+    updateSettings: async (functionId: string, userId: string, settings: Record<string, unknown>) => {
+      const index = h.reviews.findIndex(r => r.functionId === functionId && r.userId === userId);
+      if (index < 0) return null;
+      h.reviews[index] = { ...h.reviews[index], ...settings };
+      return h.reviews[index];
+    },
+  },
+  // The email is returned whatever the projection, so a test can show the answers never carry it.
+  userRepository: {
+    find: async (filter: { _id: { $in: string[] } }) =>
+      filter._id.$in.filter(id => id === 'u2').map(id => ({ _id: id, name: 'Owner Two', email: OWNER_EMAIL })),
+  },
+  projectRepository: { find: async () => [] },
+  organizationRepository: { findMembershipOrgIds: async () => [] },
   artifactRepository: {
     find: async (filter: { id: { $in: string[] }; userId: string }) =>
       h.artifacts.filter(a => filter.id.$in.includes(a.id) && a.userId === filter.userId),
@@ -136,13 +182,14 @@ vi.mock('@bike4mind/database', async () => ({
   },
   callableFunctionCallRepository: {
     record: async (row: Record<string, unknown>) => {
+      if (h.recordFails.value) throw new Error('db down');
       h.calls.push(row);
       // A 24-hex id, as Mongo would give, so the poll route reads it.
       return { ...row, id: `6c${String(h.calls.length).padStart(22, '0')}` };
     },
     rewrite: async (id: string, row: Record<string, unknown>) => {
       const index = Number(id.slice(2)) - 1;
-      h.calls[index] = { ...h.calls[index], ...row };
+      if (h.calls[index]?.outcome !== 'cancelled') h.calls[index] = { ...h.calls[index], ...row };
       return { ...h.calls[index], id };
     },
   },
@@ -163,6 +210,14 @@ vi.mock('@bike4mind/database', async () => ({
       const doc = h.results.get(callId);
       return doc && doc.callerUserId === callerUserId ? doc : null;
     },
+    cancel: async (callId: string, callerUserId: string) => {
+      const doc = h.results.get(callId);
+      if (!doc || doc.callerUserId !== callerUserId || doc.state === 'finished') return null;
+      const { input: _input, ...rest } = doc;
+      const cancelled = { ...rest, state: 'finished', outcome: 'cancelled' };
+      h.results.set(callId, cancelled);
+      return cancelled;
+    },
   },
 }));
 
@@ -170,12 +225,16 @@ const { default: listRoute } = await import('@pages/api/v1/functions/index');
 const { default: getRoute } = await import('@pages/api/v1/functions/[id]/index');
 const { default: invokeRoute, config: invokeConfig } = await import('@pages/api/v1/functions/[id]/invoke');
 const { default: pollRoute } = await import('@pages/api/v1/functions/calls/[call_id]');
+const { default: cancelRoute } = await import('@pages/api/v1/functions/calls/[call_id]/cancel');
+const { default: reviewRoute } = await import('@pages/api/v1/functions/[id]/review');
 const { queueFunctionCall } = await import('@bike4mind/server-utils/callableFunctions/asyncCalls');
 const {
   FUNCTION_INVOKE_BUDGET_MS,
   FUNCTION_CALL_STOPPED_MESSAGE,
   FUNCTION_INVOKE_MAX_BODY_BYTES,
+  FUNCTION_REVIEW_REQUIRED_MESSAGE,
   FUNCTION_SYNC_STOP_MESSAGE,
+  FUNCTION_SYNC_STOP_SELF_HOST_MESSAGE,
   TIMEOUT_MESSAGE,
   functionCallAnswer,
   invokeAnswer,
@@ -209,6 +268,7 @@ const LIVE_ID = '6b0000000000000000000001';
 const DRAFT_ID = '6b0000000000000000000002';
 const OTHERS_ID = '6b0000000000000000000003';
 const MISSING_ID = '6b0000000000000000000009';
+const OWNER_EMAIL = 'owner.two@example.com';
 
 const fnDoc = (id: string, overrides: Record<string, unknown> = {}) => ({
   id,
@@ -260,7 +320,12 @@ async function call(handler: unknown, { method = 'GET', query = {}, body, user =
     await (handler as AnyHandler)(req, res);
   } catch (error) {
     const status = (error as { statusCode?: number }).statusCode ?? (isZodError(error) ? 422 : 500);
-    return { status, body: { error: (error as Error).message } as Record<string, unknown> };
+    // The service's refusal reason, as errorHandler spreads it into the body.
+    const info = (error as { additionalInfo?: { code?: string } }).additionalInfo;
+    return {
+      status,
+      body: { error: (error as Error).message, ...(info?.code ? { code: info.code } : {}) } as Record<string, unknown>,
+    };
   }
   const text = res._getData();
   return {
@@ -285,6 +350,8 @@ beforeEach(() => {
   h.sent = [];
   h.sendFails.value = false;
   h.calls = [];
+  h.recordFails.value = false;
+  h.reviews = [];
   h.functions = [
     fnDoc(LIVE_ID),
     fnDoc(DRAFT_ID, { slug: 'beam_draft', state: 'draft', trustLabel: undefined }),
@@ -304,7 +371,9 @@ describe('scopes and limits', () => {
     ['listFunctions', listFunctionsContract],
     ['getFunction', getFunctionContract],
     ['invokeFunction', invokeFunctionContract],
+    ['reviewFunction', reviewFunctionContract],
     ['getFunctionCall', getFunctionCallContract],
+    ['cancelFunctionCall', cancelFunctionCallContract],
   ] as const;
 
   it.each(contracts)('%s names functions:invoke and declares the 403 scope envelope', (_name, contract) => {
@@ -318,9 +387,15 @@ describe('scopes and limits', () => {
     expect(decideScopeGate(contract.scopes, [ApiKeyScope.FUNCTIONS_INVOKE], new Set())).toEqual({ outcome: 'allow' });
   });
 
-  it('hands functions:invoke to the API-key chain for every route', () => {
+  // The collection and [id] files also build the create, PATCH, and DELETE authoring routers.
+  it('hands functions:invoke to the API-key chain for every calling route, and functions:author to the rest', () => {
     const required = h.baseApiOptions.map(o => o?.requiredScopes);
     expect(required).toEqual([
+      [ApiKeyScope.FUNCTIONS_INVOKE],
+      [ApiKeyScope.FUNCTIONS_AUTHOR],
+      [ApiKeyScope.FUNCTIONS_INVOKE],
+      [ApiKeyScope.FUNCTIONS_AUTHOR],
+      [ApiKeyScope.FUNCTIONS_AUTHOR],
       [ApiKeyScope.FUNCTIONS_INVOKE],
       [ApiKeyScope.FUNCTIONS_INVOKE],
       [ApiKeyScope.FUNCTIONS_INVOKE],
@@ -329,7 +404,7 @@ describe('scopes and limits', () => {
   });
 
   it('takes a body as large as the input cap on invoke only', () => {
-    const [list, get, post] = h.baseApiOptions;
+    const [list, , get, , , post] = h.baseApiOptions;
     expect(list?.maxBodySize).toBeUndefined();
     expect(get?.maxBodySize).toBeUndefined();
     expect(post?.maxBodySize).toBe(FUNCTION_INVOKE_MAX_BODY_BYTES);
@@ -339,9 +414,14 @@ describe('scopes and limits', () => {
   it('uses one stable per-user rate-limit bucket per route, with no id in it', () => {
     expect(rateLimitBuckets).toEqual([
       '/api/v1/functions',
+      'POST /api/v1/functions',
       '/api/v1/functions/[id]',
+      'PATCH /api/v1/functions/[id]',
+      'DELETE /api/v1/functions/[id]',
       '/api/v1/functions/[id]/invoke',
       '/api/v1/functions/calls/[call_id]',
+      '/api/v1/functions/calls/[call_id]/cancel',
+      '/api/v1/functions/[id]/review',
     ]);
   });
 
@@ -375,6 +455,7 @@ describe('scopes and limits', () => {
     ['list', () => call(listRoute, {})],
     ['read', () => call(getRoute, { query: { id: LIVE_ID } })],
     ['invoke', () => invoke(LIVE_ID, { input: { load: 1, span: 2 } })],
+    ['review', () => call(reviewRoute, { method: 'POST', query: { id: LIVE_ID }, body: { action: 'withdraw' } })],
   ])('answers 403 when callable functions are off: %s', async (_name, run) => {
     h.enabled.value = false;
     expect(await run()).toEqual({
@@ -395,6 +476,8 @@ describe('list', () => {
           id: LIVE_ID,
           slug: 'beam_midspan_deflection',
           description: CONTRACT.description,
+          group: 'own',
+          review_status: null,
           trust_label: 'verified',
           pin_version: 5,
           pin_seq: 2,
@@ -403,6 +486,13 @@ describe('list', () => {
       ],
       next_cursor: null,
     });
+  });
+
+  it('labels a verified function an admin marked as platform, without naming the admin', async () => {
+    h.functions[0] = fnDoc(LIVE_ID, { platform: { setBy: 'admin1', setAt: T0 } });
+    const res = await call(listRoute, {});
+    expect((res.body.data as { trust_label: string }[])[0].trust_label).toBe('platform');
+    expect(JSON.stringify(res.body)).not.toContain('admin1');
   });
 
   it('leaves out a live function that is turned off or whose artifact was deleted', async () => {
@@ -433,6 +523,8 @@ describe('read', () => {
     expect(data.output_schema).toEqual(CONTRACT.outputs);
     expect(JSON.stringify(res.body)).not.toContain('def run');
     expect(data).not.toHaveProperty('tests');
+    expect(data).toMatchObject({ group: 'own', review_status: null, shared_by: null, shared_via: null });
+    expect(data.review_hash).toBeNull();
   });
 });
 
@@ -450,6 +542,35 @@ describe('not found', () => {
     expect(h.runner).not.toHaveBeenCalled();
   });
 
+  it('writes one refused row per invoke of a function the caller cannot see, without inputs or outputs', async () => {
+    await invoke(OTHERS_ID, { input: { load: 1, span: 2 } });
+    await invoke(DRAFT_ID, { input: { load: 1, span: 2 } });
+    await invoke('not-an-id', { input: { load: 1, span: 2 } });
+    expect(h.calls).toHaveLength(3);
+    for (const row of h.calls) {
+      expect(row).toMatchObject({ callerUserId: 'u1', surface: 'rest', apiKeyId: 'k1', outcome: 'refused' });
+      expect(row).not.toHaveProperty('inputs');
+      expect(row).not.toHaveProperty('outputs');
+    }
+    expect(h.calls.map(row => [row.functionId, row.reason, row.ownerUserId])).toEqual([
+      ['unknown', 'not_found', undefined],
+      [DRAFT_ID, 'not_live', 'u1'],
+      ['unknown', 'not_found', undefined],
+    ]);
+  });
+
+  it('still answers the 404 when the refusal row cannot be written', async () => {
+    h.recordFails.value = true;
+    const res = await invoke(DRAFT_ID, { input: { load: 1, span: 2 } });
+    expect(res).toEqual({ status: 404, body: { error: 'Function not found' } });
+    expect(logger.warn).toHaveBeenCalledWith('[functions] refusal row not written', { message: 'db down' });
+  });
+
+  it('writes no row for a read of a function the caller cannot see', async () => {
+    await call(getRoute, { query: { id: OTHERS_ID } });
+    expect(h.calls).toHaveLength(0);
+  });
+
   it('answers a turned-off function and one whose artifact was deleted with the same 404 on read and invoke', async () => {
     h.functions[0] = fnDoc(LIVE_ID, { enabled: false });
     expect(await call(getRoute, { query: { id: LIVE_ID } })).toEqual(missing);
@@ -459,6 +580,388 @@ describe('not found', () => {
     expect(await call(getRoute, { query: { id: LIVE_ID } })).toEqual(missing);
     expect(await invoke(LIVE_ID, { input: { load: 1, span: 2 } })).toEqual(missing);
     expect(h.runner).not.toHaveBeenCalled();
+  });
+});
+
+describe('a function shared with the caller', () => {
+  const RECIPIENT = 'u3';
+  const shareWithRecipient = () => {
+    h.functions[2] = fnDoc(OTHERS_ID, {
+      slug: 'beam_other',
+      ownerKey: 'u2',
+      userId: 'u2',
+      grants: { visibility: 'private', userIds: [RECIPIENT] },
+    });
+  };
+  const review = async () =>
+    h.reviews.push({
+      functionId: OTHERS_ID,
+      userId: RECIPIENT,
+      reviewHash: await reviewHash(CONTRACT),
+      approval: 'default',
+      enabled: true,
+    });
+  const as = { user: RECIPIENT, keyId: 'k3' };
+
+  const REVIEW_REQUIRED = {
+    status: 403,
+    body: { error: FUNCTION_REVIEW_REQUIRED_MESSAGE, errorCode: 'review_required' },
+  };
+
+  it('is listed and read before review, refused with review_required, run after it, and gone once revoked', async () => {
+    shareWithRecipient();
+    expect((await call(listRoute, { user: RECIPIENT })).body.data).toEqual([
+      expect.objectContaining({ id: OTHERS_ID, slug: 'beam_other', group: 'shared', review_status: 'needs_review' }),
+    ]);
+    const unread = await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT });
+    expect(unread.status).toBe(200);
+    expect(unread.body.data).toMatchObject({
+      id: OTHERS_ID,
+      description: CONTRACT.description,
+      group: 'shared',
+      review_status: 'needs_review',
+      trust_label: 'verified',
+      input_schema: CONTRACT.inputs,
+      output_schema: CONTRACT.outputs,
+      shared_by: { name: 'Owner Two' },
+      shared_via: 'person',
+      review_hash: await reviewHash(CONTRACT),
+    });
+    const before = await invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as);
+    expect(before).toEqual(REVIEW_REQUIRED);
+    expect(h.runner).not.toHaveBeenCalled();
+    expect(h.calls.at(-1)).toMatchObject({ callerUserId: RECIPIENT, ownerUserId: 'u2', reason: 'review_required' });
+
+    await review();
+    const list = await call(listRoute, { user: RECIPIENT });
+    expect(list.body.data).toEqual([
+      expect.objectContaining({ id: OTHERS_ID, slug: 'beam_other', group: 'shared', review_status: 'allowed' }),
+    ]);
+    const read = await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT });
+    expect((read.body.data as Record<string, unknown>).input_schema).toEqual(CONTRACT.inputs);
+    expect(JSON.stringify(read.body)).not.toContain('def run');
+    const after = await invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as);
+    expect(after).toMatchObject({ status: 200, body: { output: { deflection: 0.0081 } } });
+    expect(h.calls.at(-1)).toMatchObject({
+      callerUserId: RECIPIENT,
+      ownerUserId: 'u2',
+      apiKeyId: 'k3',
+      surface: 'rest',
+      outcome: 'ok',
+    });
+    expect((await call(listRoute, {})).body.data).toEqual([expect.objectContaining({ id: LIVE_ID })]);
+
+    h.functions[2] = fnDoc(OTHERS_ID, { slug: 'beam_other', ownerKey: 'u2', userId: 'u2' });
+    expect((await call(listRoute, { user: RECIPIENT })).body.data).toEqual([]);
+    expect(await invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as)).toEqual({
+      status: 404,
+      body: { error: 'Function not found' },
+    });
+    expect(h.runner).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists, reads, and reviews one the signed-in audience alone reaches as a platform entry', async () => {
+    const offer = { setBy: 'admin1', setAt: T0, audience: 'signed_in' };
+    h.functions[2] = fnDoc(OTHERS_ID, { slug: 'beam_other', ownerKey: 'u2', userId: 'u2', platform: offer });
+    const listed = async () => (await call(listRoute, { user: RECIPIENT })).body.data;
+    const read = async () => (await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT })).body.data;
+    const entry = { id: OTHERS_ID, group: 'platform', trust_label: 'platform' };
+    const detail = {
+      shared_by: { name: 'Owner Two' },
+      shared_via: 'signed_in',
+      review_hash: await reviewHash(CONTRACT),
+    };
+
+    expect(await listed()).toEqual([expect.objectContaining({ ...entry, review_status: 'needs_review' })]);
+    const unread = await read();
+    expect(unread).toMatchObject({ ...entry, ...detail, review_status: 'needs_review' });
+    expect(getFunctionContract.responses[200].schema.safeParse({ data: unread }).success).toBe(true);
+    expect(await invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as)).toEqual(REVIEW_REQUIRED);
+
+    const allowed = await call(reviewRoute, {
+      method: 'POST',
+      query: { id: OTHERS_ID },
+      body: { action: 'allow', review_hash: await reviewHash(CONTRACT) },
+      user: RECIPIENT,
+    });
+    expect(allowed.body.data).toMatchObject({ ...entry, ...detail, review_status: 'allowed' });
+    expect(await listed()).toEqual([expect.objectContaining({ ...entry, review_status: 'allowed' })]);
+    expect(await invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as)).toMatchObject({ status: 200 });
+
+    h.functions[2] = fnDoc(OTHERS_ID, {
+      slug: 'beam_other',
+      ownerKey: 'u2',
+      userId: 'u2',
+      platform: { setBy: 'admin1', setAt: T0 },
+    });
+    expect(await listed()).toEqual([]);
+    expect(await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT })).toEqual({
+      status: 404,
+      body: { error: 'Function not found' },
+    });
+  });
+
+  it('lists one also shared with the caller under the share, and keeps it there when the audience is withdrawn', async () => {
+    const BOTH_ID = '6b0000000000000000000004';
+    const owner = { ownerKey: 'u2', userId: 'u2' };
+    const offered = (audience?: 'signed_in') => ({ setBy: 'admin1', setAt: T0, ...(audience ? { audience } : {}) });
+    const grants = { visibility: 'private', userIds: [RECIPIENT] };
+    const place = (audience?: 'signed_in') => {
+      h.functions[2] = fnDoc(OTHERS_ID, { slug: 'beam_other', ...owner, platform: offered(audience) });
+      h.functions[3] = fnDoc(BOTH_ID, { slug: 'beam_both', ...owner, grants, platform: offered(audience) });
+    };
+    h.artifacts.push({ id: `artifact-${BOTH_ID}`, userId: 'u2', version: 5, deletedAt: null });
+    const listed = async () => (await call(listRoute, { user: RECIPIENT })).body.data;
+    const read = async (id: string) => (await call(getRoute, { query: { id }, user: RECIPIENT })).body.data;
+    const both = { id: BOTH_ID, group: 'shared', review_status: 'needs_review', trust_label: 'platform' };
+
+    place('signed_in');
+    expect(await listed()).toEqual([
+      expect.objectContaining({ id: OTHERS_ID, group: 'platform' }),
+      expect.objectContaining(both),
+    ]);
+    expect(await read(OTHERS_ID)).toMatchObject({ group: 'platform', shared_via: 'signed_in' });
+    expect(await read(BOTH_ID)).toMatchObject({ ...both, shared_via: 'person' });
+    expect((await call(listRoute, { user: 'u2' })).body.data).toEqual([
+      expect.objectContaining({ id: OTHERS_ID, group: 'own', review_status: null }),
+      expect.objectContaining({ id: BOTH_ID, group: 'own', review_status: null }),
+    ]);
+
+    place();
+    expect(await listed()).toEqual([expect.objectContaining(both)]);
+    expect(await read(BOTH_ID)).toMatchObject({ ...both, shared_via: 'person' });
+  });
+
+  it('neither lists nor reads a function shared with someone else, or one shared with no one', async () => {
+    shareWithRecipient();
+    const missing = { status: 404, body: { error: 'Function not found' } };
+    expect((await call(listRoute, { user: 'u4' })).body.data).toEqual([]);
+    expect(await call(getRoute, { query: { id: OTHERS_ID }, user: 'u4' })).toEqual(missing);
+
+    h.functions[2] = fnDoc(OTHERS_ID, { slug: 'beam_other', ownerKey: 'u2', userId: 'u2' });
+    expect((await call(listRoute, { user: RECIPIENT })).body.data).toEqual([]);
+    expect(await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT })).toEqual(missing);
+  });
+
+  it('lists, reads, and answers a review with no code, data, source, owner email, or call, before and after it', async () => {
+    shareWithRecipient();
+    const shared = h.functions[2]!;
+    const pin = shared.pin as Record<string, unknown>;
+    const dataPin = { name: 'table.csv', sha256: 'd'.repeat(64), bytes: 10, sourceFileId: 'file-1', pinnedAt: T0 };
+    h.functions[2] = {
+      ...shared,
+      pin: { ...pin, dataPins: [dataPin] },
+      sources: [{ name: 'feed.json', url: 'https://data.example.com/feed.json', mode: 'live' }],
+    };
+    expect(await invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as)).toEqual(REVIEW_REQUIRED);
+    const callId = `6c${String(h.calls.length).padStart(22, '0')}`;
+    const listAndRead = async () => [
+      await call(listRoute, { user: RECIPIENT }),
+      await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT }),
+    ];
+    const before = await listAndRead();
+    const allowed = await call(reviewRoute, {
+      method: 'POST',
+      query: { id: OTHERS_ID },
+      body: { action: 'allow', review_hash: await reviewHash(CONTRACT) },
+      user: RECIPIENT,
+    });
+    const after = await listAndRead();
+
+    const listKeys = [
+      'description',
+      'group',
+      'id',
+      'pin_seq',
+      'pin_version',
+      'review_status',
+      'slug',
+      'trust_label',
+      'updated_at',
+    ];
+    const detailKeys = [...listKeys, 'input_schema', 'output_schema', 'review_hash', 'shared_by', 'shared_via'].sort();
+    for (const [list, read] of [before, after]) {
+      expect(Object.keys((list!.body.data as Record<string, unknown>[])[0]!).sort()).toEqual(listKeys);
+      expect(Object.keys(read!.body.data as Record<string, unknown>).sort()).toEqual(detailKeys);
+      expect((read!.body.data as Record<string, unknown>).shared_by).toEqual({ name: 'Owner Two' });
+    }
+    expect(Object.keys(allowed.body.data as Record<string, unknown>).sort()).toEqual(detailKeys);
+    expect(
+      [before[1], allowed, after[1]].map(res => (res!.body.data as { review_status: string }).review_status)
+    ).toEqual(['needs_review', 'allowed', 'allowed']);
+    const hidden = ['def run', 'table.csv', 'feed.json', 'data.example.com', 'file-1', 'd'.repeat(64), 'artifact-'];
+    for (const res of [...before, allowed, ...after]) {
+      expect(res!.status).toBe(200);
+      for (const word of [...hidden, OWNER_EMAIL, callId]) expect(JSON.stringify(res!.body)).not.toContain(word);
+    }
+  });
+
+  it('tells review_required apart from not allowed and not found, on a synchronous and an asynchronous call', async () => {
+    shareWithRecipient();
+    expect(await invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as)).toEqual(REVIEW_REQUIRED);
+    expect(await invoke(OTHERS_ID, { input: { load: 1, span: 2 }, mode: 'async' }, as)).toEqual(REVIEW_REQUIRED);
+    expect(h.sent).toEqual([]);
+    expect(await invoke(DRAFT_ID, { input: { load: 1, span: 2 } }, as)).toEqual({
+      status: 404,
+      body: { error: 'Function not found' },
+    });
+    h.enabled.value = false;
+    expect(await invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as)).toEqual({
+      status: 403,
+      body: { error: 'Callable functions are turned off for this account.' },
+    });
+    expect(h.runner).not.toHaveBeenCalled();
+  });
+
+  it('answers review_required with its code when the dispatcher refuses the call', () => {
+    expect(invokeAnswer({ outcome: 'refused', reason: 'review_required', durationMs: 0, callId: 'c' })).toEqual(
+      REVIEW_REQUIRED
+    );
+  });
+});
+
+describe('review', () => {
+  const RECIPIENT = 'u3';
+  const UNSHARED_ID = '6b0000000000000000000007';
+  const as = { user: RECIPIENT, keyId: 'k3' };
+  const share = () => {
+    h.functions[2] = fnDoc(OTHERS_ID, {
+      slug: 'beam_other',
+      ownerKey: 'u2',
+      userId: 'u2',
+      grants: { visibility: 'private', userIds: [RECIPIENT] },
+    });
+  };
+  const review = (id: string, body: unknown, user = RECIPIENT) =>
+    call(reviewRoute, { method: 'POST', query: { id }, body, user });
+  const allow = async (id = OTHERS_ID, user = RECIPIENT) =>
+    review(id, { action: 'allow', review_hash: await reviewHash(CONTRACT) }, user);
+  const run = () => invoke(OTHERS_ID, { input: { load: 1, span: 2 } }, as);
+
+  beforeEach(() => {
+    share();
+    h.functions.push(fnDoc(UNSHARED_ID, { slug: 'beam_unshared', ownerKey: 'u2', userId: 'u2' }));
+    h.artifacts.push({ id: `artifact-${UNSHARED_ID}`, userId: 'u2', version: 5, deletedAt: null });
+  });
+
+  it('allows a shared function with the hash its read returned, so the next call runs', async () => {
+    const read = await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT });
+    const hash = (read.body.data as { review_hash: string }).review_hash;
+    const res = await review(OTHERS_ID, { action: 'allow', review_hash: hash });
+    expect(res.status).toBe(200);
+    expect(res.body.data).toMatchObject({
+      id: OTHERS_ID,
+      group: 'shared',
+      review_status: 'allowed',
+      shared_by: { name: 'Owner Two' },
+      review_hash: hash,
+      input_schema: CONTRACT.inputs,
+    });
+    expect(h.reviews).toEqual([
+      expect.objectContaining({ functionId: OTHERS_ID, userId: RECIPIENT, reviewHash: hash, approval: 'default' }),
+    ]);
+    expect(await run()).toMatchObject({ status: 200, body: { output: { deflection: 0.0081 } } });
+  });
+
+  it('keeps the approval mode chosen in the app across a withdraw and a re-allow', async () => {
+    const hash = await reviewHash(CONTRACT);
+    h.reviews.push({
+      functionId: OTHERS_ID,
+      userId: RECIPIENT,
+      reviewHash: hash,
+      approval: 'always_ask',
+      enabled: true,
+    });
+    expect((await review(OTHERS_ID, { action: 'withdraw' })).status).toBe(200);
+    expect(h.reviews).toEqual([expect.objectContaining({ approval: 'always_ask', enabled: false })]);
+    expect((await allow()).status).toBe(200);
+    expect(h.reviews).toEqual([expect.objectContaining({ approval: 'always_ask', enabled: true, reviewHash: hash })]);
+  });
+
+  it('sends an allowed function back to needs_review when its interface changes, and refuses the old hash', async () => {
+    const old = await reviewHash(CONTRACT);
+    await allow();
+    const changed = { ...CONTRACT, description: 'Midspan deflection of a beam, in meters.' };
+    h.functions[2] = { ...h.functions[2]!, contract: changed, description: changed.description };
+    const current = await reviewHash(changed);
+    expect(current).not.toBe(old);
+
+    expect((await call(listRoute, { user: RECIPIENT })).body.data).toEqual([
+      expect.objectContaining({ id: OTHERS_ID, review_status: 'needs_review' }),
+    ]);
+    const read = await call(getRoute, { query: { id: OTHERS_ID }, user: RECIPIENT });
+    expect(read.body.data).toMatchObject({ review_status: 'needs_review', review_hash: current });
+    expect(await run()).toEqual({
+      status: 403,
+      body: { error: FUNCTION_REVIEW_REQUIRED_MESSAGE, errorCode: 'review_required' },
+    });
+    expect(h.runner).not.toHaveBeenCalled();
+
+    expect(await review(OTHERS_ID, { action: 'allow', review_hash: old })).toMatchObject({
+      status: 409,
+      body: { code: 'review_conflict' },
+    });
+    expect(h.reviews).toEqual([expect.objectContaining({ reviewHash: old })]);
+    expect((await review(OTHERS_ID, { action: 'allow', review_hash: current })).body.data).toMatchObject({
+      review_status: 'allowed',
+    });
+    expect(await run()).toMatchObject({ status: 200 });
+  });
+
+  it('withdraws the allow, so calls are refused with review_required until it is allowed again', async () => {
+    await allow();
+    const res = await review(OTHERS_ID, { action: 'withdraw' });
+    expect(res).toMatchObject({ status: 200, body: { data: { id: OTHERS_ID, review_status: 'withdrawn' } } });
+    expect((await call(listRoute, { user: RECIPIENT })).body.data).toEqual([
+      expect.objectContaining({ id: OTHERS_ID, review_status: 'withdrawn' }),
+    ]);
+    expect(await run()).toEqual({
+      status: 403,
+      body: { error: FUNCTION_REVIEW_REQUIRED_MESSAGE, errorCode: 'review_required' },
+    });
+    expect((await allow()).body.data).toMatchObject({ review_status: 'allowed' });
+    expect(await run()).toMatchObject({ status: 200 });
+    expect(h.runner).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an allow of an interface that changed since it was read, and a withdraw of nothing', async () => {
+    expect(await review(OTHERS_ID, { action: 'allow', review_hash: 'f'.repeat(64) })).toMatchObject({
+      status: 409,
+      body: { code: 'review_conflict' },
+    });
+    expect(await review(OTHERS_ID, { action: 'withdraw' })).toMatchObject({
+      status: 409,
+      body: { code: 'not_reviewed' },
+    });
+    expect(h.reviews).toEqual([]);
+  });
+
+  it.each([
+    ["the key owner's own function", LIVE_ID, 'u1'],
+    ["the key owner's own draft", DRAFT_ID, 'u1'],
+    ["another person's function shared with someone else", OTHERS_ID, 'u4'],
+    ["another person's function shared with no one", UNSHARED_ID, RECIPIENT],
+    ['a missing id', MISSING_ID, RECIPIENT],
+    ['a malformed id', 'not-an-id', RECIPIENT],
+  ])('answers 404 to an allow or a withdraw of %s and saves nothing', async (_name, id, user) => {
+    for (const body of [{ action: 'allow', review_hash: await reviewHash(CONTRACT) }, { action: 'withdraw' }]) {
+      expect(await review(id, body, user)).toEqual({ status: 404, body: { error: 'Function not found' } });
+    }
+    expect(h.reviews).toEqual([]);
+  });
+
+  it.each([
+    ['an allow without review_hash', { action: 'allow' }],
+    ['a review_hash that is not a sha256', { action: 'allow', review_hash: 'abc' }],
+    ['an unknown action', { action: 'approve' }],
+    ['an extra field', { action: 'withdraw', enabled: false }],
+    [
+      'an approval mode, which only the app sets',
+      { action: 'allow', review_hash: 'a'.repeat(64), approval: 'always_allow' },
+    ],
+  ])('answers 422 to %s', async (_name, body) => {
+    expect((await review(OTHERS_ID, body)).status).toBe(422);
+    expect(h.reviews).toEqual([]);
   });
 });
 
@@ -544,7 +1047,16 @@ describe('invoke', () => {
     [
       'output_invalid',
       { outcome: 'ok', outputs: { deflection: 'x' }, durationMs: 3 },
-      'The function returned outputs that do not fit its output schema.',
+      'The function returned outputs that do not fit its output schema. Output deflection must be a number.',
+    ],
+    [
+      'output_invalid',
+      {
+        outcome: 'output_invalid',
+        problems: [{ path: 'report', message: 'must be at most 2000 characters (it has 4000000)' }],
+        durationMs: 3,
+      },
+      'The function returned outputs that do not fit its output schema. Output report must be at most 2000 characters (it has 4000000).',
     ],
   ] as const)('answers a run that ends in %s with 502, its outcome, and its stamp', async (outcome, run, error) => {
     h.runner.mockResolvedValue(run);
@@ -576,6 +1088,29 @@ describe('invoke', () => {
       body: { error: 'The function runtime did not answer. Try again later.' },
     });
     expect(h.calls).toEqual([expect.objectContaining({ outcome: 'error', reason: 'runtime_unavailable' })]);
+  });
+
+  it('names the field, the limit, and the length when an output text is too long', () => {
+    const problems = [
+      { path: 'report', message: 'must be at most 2000 characters (it has 4000000)' },
+      { path: 'note', message: 'must be at most 500 characters (it has 900)' },
+    ];
+    const answer = invokeAnswer({ outcome: 'output_invalid', problems, durationMs: 1, callId: 'c' });
+    expect(answer.status).toBe(502);
+    expect(answer.body.error).toBe(
+      'The function returned outputs that do not fit its output schema. Output report must be at most 2000 characters (it has 4000000) (and 1 more).'
+    );
+  });
+
+  it('keeps the plain output refusal when the contract or result could not be read', () => {
+    const answer = invokeAnswer({
+      outcome: 'output_invalid',
+      reason: 'result_not_json',
+      problems: [{ path: 'inputs.x', message: 'is not valid' }],
+      durationMs: 1,
+      callId: 'c',
+    });
+    expect(answer.body.error).toBe('The function returned outputs that do not fit its output schema.');
   });
 
   it('answers 503 when the runtime never replied', () => {
@@ -688,6 +1223,21 @@ describe('synchronous stop', () => {
     const res = await pastBudget();
     expect(res.body.error).toBe(TIMEOUT_MESSAGE);
     expect(h.runner.mock.calls[0][0].limits.timeoutMs).toBe(40_000);
+  });
+
+  it('says async mode is unavailable on self-host instead of pointing to it', async () => {
+    h.limitMs.value = 300_000;
+    h.runner.mockResolvedValue({ outcome: 'timeout', durationMs: 45_000 });
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    try {
+      const res = await invoke(LIVE_ID, { input: { load: 1, span: 2 } });
+      expect(res.status).toBe(504);
+      expect(res.body.error).toBe(FUNCTION_SYNC_STOP_SELF_HOST_MESSAGE);
+      expect(res.body.error).not.toContain('"mode": "async"');
+      expect(res.body.error).toContain('not available on self-hosted installs');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('names async mode when the runtime stops a run the 45 s cap cut short', async () => {
@@ -825,6 +1375,24 @@ describe('async invoke and poll', () => {
     expect(answer.error).toBe('The function raised an error (ValueError).');
   });
 
+  it('polls an over-long output text with the field, the limit, and the length', () => {
+    const problems = [{ path: 'report', message: 'must be at most 2000 characters (it has 4000000)' }];
+    const answer = functionCallAnswer({
+      callId: 'c1',
+      state: 'finished',
+      outcome: 'output_invalid',
+      problems,
+    } as Parameters<typeof functionCallAnswer>[0]);
+    expect(answer).toEqual({
+      call_id: 'c1',
+      status: 'finished',
+      outcome: 'output_invalid',
+      error:
+        'The function returned outputs that do not fit its output schema. Output report must be at most 2000 characters (it has 4000000).',
+      problems,
+    });
+  });
+
   it("answers another person's call id exactly as a made-up or malformed one", async () => {
     const callId = (await asyncInvoke()).body.call_id as string;
     const theirs = await poll(callId, 'u2');
@@ -839,5 +1407,58 @@ describe('async invoke and poll', () => {
     const callId = (await asyncInvoke()).body.call_id as string;
     h.enabled.value = false;
     expect((await poll(callId)).status).toBe(403);
+  });
+
+  describe('cancel', () => {
+    const cancel = (callId: string, user?: string) =>
+      call(cancelRoute, { method: 'POST', query: { call_id: callId }, user });
+    const CANCELLED = (callId: string) => ({
+      call_id: callId,
+      status: 'finished',
+      outcome: 'cancelled',
+      error: 'The call was cancelled.',
+    });
+
+    it.each(['queued', 'running'] as const)(
+      'ends a %s call cancelled, drops its inputs, marks its row, and polls it as cancelled',
+      async state => {
+        const callId = (await asyncInvoke()).body.call_id as string;
+        h.results.set(callId, { ...h.results.get(callId), state });
+        const res = await cancel(callId);
+        expect(res).toEqual({ status: 200, body: CANCELLED(callId) });
+        expect(h.results.get(callId)?.input).toBeUndefined();
+        expect(h.calls[0]).toMatchObject({ outcome: 'cancelled' });
+        expect(await poll(callId)).toEqual({ status: 200, body: CANCELLED(callId) });
+      }
+    );
+
+    it('returns a finished call unchanged', async () => {
+      const callId = (await asyncInvoke()).body.call_id as string;
+      const outputs = { deflection: 2 };
+      h.results.set(callId, { ...h.results.get(callId), state: 'finished', outcome: 'ok', outputs });
+      const res = await cancel(callId);
+      expect(res).toEqual({
+        status: 200,
+        body: { call_id: callId, status: 'finished', outcome: 'ok', output: outputs },
+      });
+      expect(h.calls[0]).toMatchObject({ outcome: 'queued' });
+    });
+
+    it("answers another person's call id exactly as a made-up or malformed one, and leaves the call", async () => {
+      const callId = (await asyncInvoke()).body.call_id as string;
+      const theirs = await cancel(callId, 'u2');
+      expect(theirs).toEqual({ status: 404, body: { error: 'Call not found' } });
+      expect(await cancel('6c9999999999999999999999')).toEqual(theirs);
+      expect(await cancel('not-an-id')).toEqual(theirs);
+      expect(h.results.get(callId)).toMatchObject({ state: 'queued' });
+      expect(h.calls[0]).toMatchObject({ outcome: 'queued' });
+    });
+
+    it('answers 403 when callable functions are off, and leaves the call', async () => {
+      const callId = (await asyncInvoke()).body.call_id as string;
+      h.enabled.value = false;
+      expect((await cancel(callId)).status).toBe(403);
+      expect(h.results.get(callId)).toMatchObject({ state: 'queued' });
+    });
   });
 });

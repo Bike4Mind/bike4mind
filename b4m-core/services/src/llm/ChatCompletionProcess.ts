@@ -2628,6 +2628,8 @@ export class ChatCompletionProcess {
       // same denylist the post-buildTools pass enforces; see adminAssistantGate.ts.
       const adminAssistantPlan = resolveAdminAssistantTools({
         surface: session.surface,
+        sessionOwnerId: session.userId,
+        userId: this.user.id,
         isAdmin: this.user.isAdmin,
         availableToolNames: new Set(Object.keys(externalTools ?? {})),
       });
@@ -2664,7 +2666,11 @@ export class ChatCompletionProcess {
       // toolset - no user MCP servers, no agent delegation. No product-specific branch in
       // core; mirrors the generic `enabledTools`/`disabledTools` capability above. The request
       // field is the per-turn twin for callers running a prompt the user did not author.
-      const userIntegrationsDisabled = Boolean(session.disableUserIntegrations || parsedBody.disableUserIntegrations);
+      const userIntegrationsDisabled = Boolean(
+        session.disableUserIntegrations ||
+        parsedBody.disableUserIntegrations ||
+        adminAssistantPlan.disableUserIntegrations
+      );
       if (userIntegrationsDisabled) {
         enableAgents = false;
         parsedBody.mcpServers = [];
@@ -2883,7 +2889,7 @@ export class ChatCompletionProcess {
         {
           userId: this.user.id,
           type: LLMEvents.QUEUE_HANDLER_START_HEARD_PROMPT,
-          metadata: { sessionId, questId, promptMessage: message },
+          metadata: { sessionId, questId, promptLength: message.length },
         },
         { ability: this.userAbility }
       );

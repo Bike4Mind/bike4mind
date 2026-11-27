@@ -26,7 +26,7 @@ import { PinnedPane, type PaneSessionSource } from './PinnedPane';
 import { assignPersonas, type AgentPersona } from '@shared/agentPersona';
 import { formatRosterCost, summarizeRoster, type AgentView, type ParentView } from './roster';
 import { TableView } from './TableView';
-import { ORCHESTRATOR_VIEW_INFO, ViewSwitcher } from './ViewSwitcher';
+import { ORCHESTRATOR_VIEW_INFO, ViewSwitcher, useSceneStageCopy, useSceneStageInfo } from './ViewSwitcher';
 import { useApplySkin, useSkinTheme } from './skins';
 import { SKIN_STAGE_VARIABLE } from './statePalette';
 import { useQuickApprovals } from './quickApprovals';
@@ -348,14 +348,18 @@ export function OrchestratorStage({
   }, [finale.shown]);
   useAgentSoundEvents(agents, parentNeedsYou);
 
-  const parentScene = !split && (view === 'tavern' || view === 'office');
+  const sceneInfo = useSceneStageInfo(view);
+  const stageCopy = useSceneStageCopy(view);
+  const parentScene = !split && sceneInfo?.host === true;
   const bannerInScene = parentScene && renderView !== undefined && agents.length > 0 && !focused;
   const banner = finale.shown && report && (
     <FinaleBanner
       agents={quest}
       spend={presenting ? undefined : spend}
       placement={bannerInScene ? 'scene' : 'inline'}
-      look={view === 'office' ? 'office' : 'tavern'}
+      look={sceneInfo?.finale}
+      hostArt={sceneInfo?.hostArt}
+      title={stageCopy.finale}
       onRead={() => {
         finale.dismiss();
         onReadReport?.(report.id);
@@ -364,13 +368,17 @@ export function OrchestratorStage({
     />
   );
 
-  // The Tavern asks its requests in a dialogue box of its own (tavern/TavernDialogue.tsx). Presenter mode keeps
-  // the strip off and the bubbles' Open-only answers, since the box would show the real requests.
+  // A scene that answers in place asks its requests in a dialogue box of its own (scene/SceneDialogue.tsx).
+  // Presenter mode keeps the strip off and the bubbles' Open-only answers, since the box would show the real requests.
   const inSceneDecisions =
-    !split && view === 'tavern' && renderView !== undefined && agents.length > 0 && !focused && !presenting;
+    !split &&
+    sceneInfo?.inSceneDecisions === true &&
+    renderView !== undefined &&
+    agents.length > 0 &&
+    !focused &&
+    !presenting;
 
-  const detailsInScene =
-    (parentScene || (!split && view === 'aquarium')) && renderView !== undefined && agents.length > 0 && !focused;
+  const detailsInScene = !split && sceneInfo !== undefined && renderView !== undefined && agents.length > 0 && !focused;
   const detailsPosition = useAvatarDetailsPosition(selected?.id, detailsInScene && !settled, view);
   const detailsOverlay = selected && (
     // Stay mounted while settled so waking restores the draft and selection.
@@ -484,19 +492,13 @@ export function OrchestratorStage({
   };
 
   // The parent first: it is the one whose answer everything else is waiting behind.
-  // An agent's request is the Tavern dialogue box's to show; the card keeps the parent's.
+  // An agent's request is the scene dialogue box's to show; the card keeps the parent's.
   const askingAgent = parentNeedsYou || inSceneDecisions ? undefined : firstNeedsYou;
   const needsYouCard = settled && (parentNeedsYou || askingAgent) && (
     <NeedsYouCard
       key={askingAgent?.id ?? 'parent'}
       agent={askingAgent}
-      name={
-        askingAgent
-          ? (personas.get(askingAgent.id)?.label ?? askingAgent.title)
-          : view === 'office'
-            ? 'The orchestrator'
-            : 'The Innkeeper'
-      }
+      name={askingAgent ? (personas.get(askingAgent.id)?.label ?? askingAgent.title) : stageCopy.host}
       onOpen={() => {
         ambient?.wake();
         if (askingAgent) setSelectedId(askingAgent.id);
@@ -535,7 +537,7 @@ export function OrchestratorStage({
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.5, minWidth: 0 }}>
           {presenting && <PresentingBadge />}
           <Typography level="body-xs" textColor="text.tertiary" noWrap data-testid="orchestrator-ambient-status">
-            {summary || (view === 'office' ? 'The office is quiet' : 'The tavern is quiet')}
+            {summary || stageCopy.quiet}
           </Typography>
         </Box>
       ) : (
@@ -655,7 +657,7 @@ export function OrchestratorStage({
           {agents.length === 0 ? (
             <EmptyStage
               scene={parentScene && renderView ? renderView(view, viewProps) : null}
-              office={view === 'office'}
+              prompt={archivedAgents.length > 0 ? stageCopy.emptyArchived : stageCopy.empty}
               archived={archivedAgents}
               canStart={canStartAgents}
               presenting={presenting}
@@ -713,7 +715,8 @@ const NO_ARCHIVED: readonly ArchivedAgent[] = [];
 
 interface EmptyStageProps {
   scene: ReactNode;
-  office: boolean;
+  /** The scene's own line under it (its copy.stage.empty, or emptyArchived once agents were archived). */
+  prompt: string;
   archived: readonly ArchivedAgent[];
   canStart: boolean;
   presenting: boolean;
@@ -723,20 +726,14 @@ interface EmptyStageProps {
 const CANNOT_START_HINT =
   'This session cannot start agents. That needs a project folder, a model that supports tools, and room below the sub-session depth limit.';
 
-/** `plain` is the wording without the Tavern's Innkeeper, for the Office and for a stage with no scene. */
-function emptyStageHint(plain: boolean, archivedCount: number, canStart: boolean): string {
-  if (!canStart) return CANNOT_START_HINT;
-  if (archivedCount > 0) {
-    return plain
-      ? 'Every agent has finished and been archived. Describe more work to start new ones.'
-      : 'Every quest is done and its agent archived. Describe more work and the Innkeeper will hand it out.';
-  }
-  return plain
-    ? 'No agents yet. Describe the work and it will be split across agents.'
-    : 'No quests yet. Describe the work and the Innkeeper will split it across agents.';
+/** The wording for a stage with no scene, which has no host to name. */
+function plainEmptyHint(archivedCount: number): string {
+  return archivedCount > 0
+    ? 'Every agent has finished and been archived. Describe more work to start new ones.'
+    : 'No agents yet. Describe the work and it will be split across agents.';
 }
 
-function EmptyStage({ scene, office, archived, canStart, presenting, onOpen }: EmptyStageProps) {
+function EmptyStage({ scene, prompt, archived, canStart, presenting, onOpen }: EmptyStageProps) {
   const archivedList = archived.length > 0 && (
     <ArchivedAgentList archived={archived} presenting={presenting} onOpen={onOpen} />
   );
@@ -749,7 +746,7 @@ function EmptyStage({ scene, office, archived, canStart, presenting, onOpen }: E
         {scene}
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.25, p: 2 }}>
           <Typography level="body-sm" textColor="text.secondary" textAlign="center">
-            {emptyStageHint(office, archived.length, canStart)}
+            {canStart ? prompt : CANNOT_START_HINT}
           </Typography>
           {archivedList}
         </Box>
@@ -770,7 +767,7 @@ function EmptyStage({ scene, office, archived, canStart, presenting, onOpen }: E
       }}
     >
       <Typography level="body-sm" textColor="text.tertiary" textAlign="center">
-        {emptyStageHint(true, archived.length, canStart)}
+        {canStart ? plainEmptyHint(archived.length) : CANNOT_START_HINT}
       </Typography>
       {archivedList}
     </Box>

@@ -2,8 +2,8 @@
   "manifest": 1,
   "id": "nightglass",
   "name": "Nightglass",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "kind": "skin",
-  "contract": 1,
-  "description": "Cool blues on a dark stage. Test fixture for the skin loader."
+  "contract": 2,
+  "description": "Cool blues on a dark stage, in every scene. Test fixture for the skin loader."
 }

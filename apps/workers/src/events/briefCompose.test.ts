@@ -319,6 +319,35 @@ describe('composeBrief', () => {
     });
   });
 
+  describe('block-end push categories', () => {
+    const block = { start: new Date('2026-11-17T00:00:00Z'), end: new Date('2026-11-17T00:30:00Z') };
+    const runsOnly = {
+      ...activeActivity,
+      approvals: [],
+      runs: [
+        { id: 'r1', query: 'q', status: 'completed', finishedAt: undefined, errorMessage: undefined },
+        { id: 'r2', query: 'q', status: 'failed', finishedAt: undefined, errorMessage: 'boom' },
+      ],
+    };
+
+    it('tags a busy-block brief push with the categories it reports', async () => {
+      const deps = makeDeps({ loadActivity: vi.fn().mockResolvedValue(runsOnly) });
+      deps.briefs.findById = vi.fn().mockResolvedValue(brief({ trigger: 'busy_block', busyBlock: block }));
+      await composeBrief(deps, { briefId: 'b1', userId: 'u1', scheduled: true });
+      expect(deps.briefs.markReady).toHaveBeenCalledOnce();
+      expect(deps.push).toHaveBeenCalledWith(
+        expect.objectContaining({ category: 'brief_ready', blockEndCategories: ['agent_completed', 'agent_failed'] })
+      );
+    });
+
+    it('leaves a regular brief push untagged', async () => {
+      const deps = makeDeps({ loadActivity: vi.fn().mockResolvedValue(runsOnly) });
+      await composeBrief(deps, { briefId: 'b1', userId: 'u1', scheduled: true });
+      expect(deps.push).toHaveBeenCalledOnce();
+      expect(deps.push.mock.calls[0][0]).not.toHaveProperty('blockEndCategories');
+    });
+  });
+
   it('composes a scheduled brief whose only activity is an obligation coming due', async () => {
     const obligation = {
       obligationId: 'o1',

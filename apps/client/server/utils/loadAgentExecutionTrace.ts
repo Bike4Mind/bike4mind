@@ -8,7 +8,7 @@
  */
 
 import { agentExecutionRepository, sessionRepository, type AgentExecutionStatus } from '@bike4mind/database';
-import { planStepProgress, type IAgentStep, type PlanStepProgress } from '@bike4mind/common';
+import { planStepProgress, redactAgentStepsForViewer, type IAgentStep, type PlanStepProgress } from '@bike4mind/common';
 import { isSessionOwnedByUser } from '@server/utils/sessionOwnership';
 import { toUserFacingFailureMessage } from '@bike4mind/server-utils/utils/agentFailureMessage';
 
@@ -16,6 +16,8 @@ export type AgentExecutionTrace = {
   id: string;
   status: AgentExecutionStatus;
   sessionId: string | null;
+  /** The caller owns the session or started the run; false for a share holder, whose `steps` are redacted. */
+  isOwner: boolean;
   answer: string | null;
   /**
    * Failure reason, already safe to hand an external caller; null unless the run
@@ -61,11 +63,14 @@ export async function loadAgentExecutionTrace(id: string, userId: string): Promi
   if (!execution) return null;
 
   // Ownership via the session - mirrors the access check on /api/quests/[id], and lets
-  // a shared session's members read the run.
+  // a shared session's members read the run, minus the tool output of the owner's turns.
+  // The user who started the run counts as its owner too: the output is their own.
+  let isOwner = execution.userId === userId;
   if (execution.sessionId) {
     const session = await sessionRepository.findById(execution.sessionId);
     if (!session) return null;
     if (!isSessionOwnedByUser(session, userId)) return null;
+    isOwner = isOwner || session.userId === userId;
   } else if (execution.userId !== userId) {
     // No session linkage (legacy/edge cases): fall back to a direct owner check so we
     // never leak another user's reasoning trace.
@@ -86,9 +91,10 @@ export async function loadAgentExecutionTrace(id: string, userId: string): Promi
     id,
     status: execution.status,
     sessionId: execution.sessionId ?? null,
+    isOwner,
     answer: result?.answer ?? null,
     error: toCallerSafeError(execution.error),
-    steps: result?.steps ?? checkpoint?.steps ?? [],
+    steps: redactAgentStepsForViewer(result?.steps ?? checkpoint?.steps ?? [], isOwner),
     totalIterations: result?.totalIterations ?? checkpoint?.iteration ?? null,
     stepProgress: planStepProgress(execution.optiPlanState),
     createdAt: execution.createdAt,

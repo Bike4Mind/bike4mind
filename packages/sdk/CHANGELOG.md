@@ -1,5 +1,27 @@
 # @bike4mind/sdk
 
+## 6.3.0
+
+### Minor Changes
+
+- [#8602](https://github.com/Bike4Mind/bike4mind/pull/8602) [`36528fc`](https://github.com/Bike4Mind/bike4mind/commit/36528fc1f58b57e3df068623182179f189a544a4) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - hold the block-end push when the user muted agent run updates
+
+## 6.2.1
+
+### Patch Changes
+
+- [#8753](https://github.com/Bike4Mind/bike4mind/pull/8753) [`cce8f4c`](https://github.com/Bike4Mind/bike4mind/commit/cce8f4ce0b2912a23d561d1e12145cf03a1aef4d) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - tighten response fields for viewers of shared notebooks
+
+## 6.2.0
+
+### Minor Changes
+
+- [#8723](https://github.com/Bike4Mind/bike4mind/pull/8723) [`e1dee9d`](https://github.com/Bike4Mind/bike4mind/commit/e1dee9da4be4aef95f2efacd97cc022c0b5c7273) Thanks [@onoya](https://github.com/onoya)! - sync web notebooks from a change feed instead of a full re-list
+
+### Patch Changes
+
+- [#8705](https://github.com/Bike4Mind/bike4mind/pull/8705) [`2461e22`](https://github.com/Bike4Mind/bike4mind/commit/2461e2267ee7583121e554393aba27126cdccd70) Thanks [@vinchi777](https://github.com/vinchi777)! - require matching API key scopes on artifact, notebook, lake and integration routes
+
 ## 6.1.0
 
 ### Minor Changes

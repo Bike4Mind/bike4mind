@@ -25,7 +25,7 @@ export async function handleCallableFunctionCallRecords(event: SQSEvent, logger:
     const call = await runQueuedFunctionCall(job.data);
     logger.info('Callable function job', {
       callId: job.data.callId,
-      outcome: call ? call.outcome : 'already_claimed',
+      outcome: call ? call.outcome : 'claimed_elsewhere_or_cancelled',
       ...(call?.reason ? { reason: call.reason } : {}),
     });
   }

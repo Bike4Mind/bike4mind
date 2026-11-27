@@ -238,11 +238,15 @@ export function registerFunctionTools(server: McpServer, client: B4mApiClient): 
       return { content: [{ type: 'text', text }], structuredContent: value };
     } catch (error) {
       const text = functionErrorMessage(error, client.baseURL, ref);
-      const { stamp } = errorBody(error);
+      const { stamp, problems } = errorBody(error);
+      const meta = {
+        ...(stamp && typeof stamp === 'object' ? { stamp } : {}),
+        ...(Array.isArray(problems) && problems.length > 0 ? { problems } : {}),
+      };
       return {
         content: [{ type: 'text', text }],
         isError: true,
-        ...(stamp && typeof stamp === 'object' ? { _meta: { stamp } } : {}),
+        ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
       };
     }
   };

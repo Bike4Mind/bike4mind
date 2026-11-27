@@ -56,6 +56,7 @@ describe('cloneSession - redaction at the copy boundary', () => {
             {
               id: 'msg-1',
               sessionId: 'session-1',
+              pendingAction: { tool: 'send_email', params: { to: 'x' }, ts: 1 },
               promptMeta: {
                 functionCalls: [
                   {
@@ -618,6 +619,16 @@ describe('cloneSession - redaction at the copy boundary', () => {
     expect(clonedFunctionCalls[0]).not.toHaveProperty('returnValue');
     expect(clonedFunctionCalls[0]).not.toHaveProperty('error');
     expect(clonedFunctionCalls[0]).toMatchObject({ id: 'call-1', name: 'web_search' });
+  });
+
+  it('drops the pending tool approval when the caller only holds a share, and keeps it for the owner', async () => {
+    const shared = makeAdapters('owner-1');
+    await cloneSession('caller-1', { id: 'session-1' }, { db: shared.db, workspaceSessionSettings: {} });
+    expect(shared.created[0]).not.toHaveProperty('pendingAction');
+
+    const owned = makeAdapters('caller-1');
+    await cloneSession('caller-1', { id: 'session-1' }, { db: owned.db, workspaceSessionSettings: {} });
+    expect(owned.created[0].pendingAction).toEqual({ tool: 'send_email', params: { to: 'x' }, ts: 1 });
   });
 
   // Same store invariant the fork 500 exposed, plus the search-scoping half: a clone made by a

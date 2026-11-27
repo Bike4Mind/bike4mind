@@ -155,6 +155,35 @@ class DesktopAffectedTest(unittest.TestCase):
         self.write_lock()
         self.assertTrue(self.changed())
 
+    def test_aliased_dependency_resolves(self):
+        # (dependency name, specifier, lockfile version, package key, snapshot key)
+        shapes = [
+            ('tool-next-0', 'npm:tool@2.0.0', 'tool@2.0.0', 'tool@2.0.0', 'tool@2.0.0'),
+            ('tool-next-1', 'npm:@scope/tool@1.0.0', '@scope/tool@1.0.0',
+             '@scope/tool@1.0.0', '@scope/tool@1.0.0'),
+            ('tool-next-2', 'npm:tool@2.0.0', 'tool@2.0.0(peer@1.0.0)',
+             'tool@2.0.0', 'tool@2.0.0(peer@1.0.0)'),
+            ('plain-0', '^1.0.0', '1.0.0(peer@1.0.0)', 'plain-0@1.0.0',
+             'plain-0@1.0.0(peer@1.0.0)'),
+        ]
+        for index, (name, specifier, version, package, snapshot) in enumerate(shapes):
+            with self.subTest(version=version):
+                self.lock['importers']['apps/desktop']['dependencies'] = {name: {
+                    'specifier': specifier, 'version': version}}
+                self.lock['snapshots'][snapshot] = {}
+                self.lock['packages'][package] = {}
+                self.write_lock()
+                self.git('add', '.')
+                self.git('commit', '-qm', 'build: aliased dependency')
+                base = self.git('rev-parse', 'HEAD')
+                self.commit('feat: unrelated', f'b4m-core/unrelated/src/{index}.ts')
+                self.assertFalse(affected(base, 'HEAD'))
+                self.lock['packages'][package] = {'resolution': {'integrity': f'changed-{index}'}}
+                self.write_lock()
+                self.git('add', '.')
+                self.git('commit', '-qm', 'chore: change aliased resolution')
+                self.assertTrue(affected(base, 'HEAD'))
+
     def test_shared_test_config_runs(self):
         self.commit('test: shared configuration', 'vitest.shared.ts')
         self.assertTrue(affected(self.base, 'HEAD'))

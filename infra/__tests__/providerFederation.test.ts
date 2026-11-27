@@ -20,21 +20,31 @@ const CONFIGURED: ProviderFederationDeployEnv = {
   OPENAI_WIF_AUDIENCE: 'openai-aud',
 };
 
+const CREDENTIAL_METRICS_ONLY = { environment: { PROVIDER_CREDENTIAL_METRICS: 'true' }, permissions: [] };
+
 describe('buildProviderFederation', () => {
-  it.each([undefined, '', 'false', 'TRUE', '1'])('is empty when the toggle is %j', toggle => {
-    expect(buildProviderFederation({ ...CONFIGURED, B4M_PROVIDER_AUTH_FEDERATED: toggle })).toEqual({
-      environment: {},
-      permissions: [],
-    });
+  it.each([undefined, '', 'false', 'TRUE', '1'])('only reports credentials when the toggle is %j', toggle => {
+    expect(buildProviderFederation({ ...CONFIGURED, B4M_PROVIDER_AUTH_FEDERATED: toggle })).toEqual(
+      CREDENTIAL_METRICS_ONLY
+    );
   });
 
-  it('is empty with nothing configured', () => {
-    expect(buildProviderFederation({})).toEqual({ environment: {}, permissions: [] });
+  it('only reports credentials with nothing configured', () => {
+    expect(buildProviderFederation({})).toEqual(CREDENTIAL_METRICS_ONLY);
+  });
+
+  it('returns a fresh object per call so a caller cannot mutate the next one', () => {
+    const first = buildProviderFederation({});
+    first.environment.EXTRA = 'x';
+    first.permissions.push({ actions: [], resources: [], conditions: [] });
+
+    expect(buildProviderFederation({})).toEqual(CREDENTIAL_METRICS_ONLY);
   });
 
   it('emits the runtime env and the STS grant when on', () => {
     expect(buildProviderFederation(CONFIGURED)).toEqual({
       environment: {
+        PROVIDER_CREDENTIAL_METRICS: 'true',
         B4M_PROVIDER_AUTH: 'federated',
         PROVIDER_WIF_TOKEN_SOURCE: 'aws-sts',
         ANTHROPIC_FEDERATION_RULE_ID: 'rule',

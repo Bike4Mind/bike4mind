@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { IResolvedPromptDispatch } from '@bike4mind/common';
+import { CHAT_INPUT_DRAFTS_STORAGE_KEY, onIdentityReset } from '../utils/identityScopedStorage';
 
 // Stable draft key for a brand-new / unsaved notebook that has no session id yet.
 // Lets the in-progress text ride the persisted `drafts` map (session-scoped) so a
@@ -112,9 +113,11 @@ export const useChatInput = create<ChatInputStore>()(
       },
     }),
     {
-      name: 'chat-input-drafts',
+      name: CHAT_INPUT_DRAFTS_STORAGE_KEY,
       // Only persist the drafts, not the transient state
       partialize: state => ({ drafts: state.drafts }),
     }
   )
 );
+
+onIdentityReset(() => useChatInput.setState({ drafts: {}, chatInputValue: '' }));

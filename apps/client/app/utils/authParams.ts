@@ -104,6 +104,15 @@ export function parseQueryParams(search: Record<string, unknown>): AuthParams {
 }
 
 /**
+ * Inline script for the root layout, run while the HTML is still parsing: moves the /auth/success
+ * fragment out of the URL into a window global before any analytics tag can record the page's
+ * location, which would otherwise carry the token. parseAuthParams reads the global back.
+ */
+export function authFragmentCaptureScript(): string {
+  return `(function(){try{var l=window.location;if(/^\\/auth\\/success\\/?$/.test(l.pathname)&&l.hash.length>1){window.__b4mAuthFragment=l.hash;history.replaceState(history.state,'',l.pathname+l.search);}}catch(e){}})();`;
+}
+
+/**
  * Parse auth parameters from URL, preferring hash fragments over query params.
  * Also clears the hash fragment to minimize token exposure time.
  *
@@ -115,11 +124,12 @@ export function parseAuthParams(search: Record<string, unknown>, windowRef?: Win
   // Use provided window or global window (SSR-safe)
   const win = windowRef ?? (typeof window !== 'undefined' ? window : undefined);
 
-  // First, try to read from URL hash fragment (more secure, preferred)
-  if (win?.location?.hash) {
-    // Immediately capture and clear the hash to minimize token exposure time
-    const hash = win.location.hash;
-    win.history?.replaceState(null, '', win.location.pathname + win.location.search);
+  const captured = win?.__b4mAuthFragment;
+  if (win && captured !== undefined) delete win.__b4mAuthFragment;
+  const hash = captured || win?.location?.hash;
+
+  if (win && hash) {
+    if (!captured) win.history?.replaceState(null, '', win.location.pathname + win.location.search);
 
     const hashResult = parseHashParams(hash);
     if (hashResult) {

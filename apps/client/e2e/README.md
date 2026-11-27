@@ -406,7 +406,7 @@ demoting a spec back to advisory over letting a red Core gate get ignored.
 
 Preview deploys are created on demand by maintainers via the internal deployer (not by PR events). To run the suite against a PR preview, a maintainer dispatches **`E2E Tests (preview rerun)`** (`.github/workflows/e2e-on-label.yml`) or `e2e-manual.yml` with a `pr_number`. Both dispatch `e2e-core.yml` on `main`, which:
 
-1. Verifies the deployed preview (revision, deploy status and marker comment) before any test starts
+1. Verifies the deployed preview (revision, deploy status and marker comment) before any test starts, then wakes it if its services are scaled to zero for the weekend (via `/api/test/preview-sleep`, gated by the stage's `E2E_CLEANUP_SECRET`). The wake step polls for up to 8 minutes and fails before any test runs if the services never come up, saying whether the stage was still asleep or its status could not be read; a preview where the route returns 404 (deployed before it existed, or with weekend sleep disabled) is tested as-is
 2. Selects the projects to run (see [PROJECT_SELECTION.md](./PROJECT_SELECTION.md)) and runs them headless (3 workers, `PW_WORKERS`) against the preview URL
 3. Posts an advisory **comment on the PR** (`Advisory preview E2E: <outcome>`) and sets the `e2e/preview-advisory` commit status; neither is a required check
 4. Uploads the **HTML report** as a build artifact (`playwright-report-preview-pr<N>`)

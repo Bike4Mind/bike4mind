@@ -57,7 +57,7 @@ const colourUnderUses = (testId: string, variable: string) =>
 
 /**
  * The sample skin's visible mark on each view that has one, beyond the root colours useApplySkin sets for all.
- * Office, Plan, Swimlanes, Constellation and Transit only read those root colours.
+ * Plan, Swimlanes, Constellation and Transit only read those root colours.
  */
 const SKINNED: Partial<Record<OrchestratorViewId, () => void>> = {
   tavern: () => {
@@ -65,9 +65,15 @@ const SKINNED: Partial<Record<OrchestratorViewId, () => void>> = {
     expect(img?.getAttribute('src')).toBe('b4m-skin://nightglass/sprites/tavern.png');
     expect(colourUnderUses('orchestrator-tavern', '--b4m-skin-state-working')).toBe(true);
   },
+  office: () => {
+    const img = el('orchestrator-office').querySelector('img');
+    expect(img?.getAttribute('src')).toBe('b4m-skin://nightglass/sprites/office.png');
+    expect(colourUnderUses('orchestrator-office', '--b4m-skin-state-working')).toBe(true);
+  },
   aquarium: () => {
-    expect(rootVariable('--b4m-skin-aquarium-backdrop')).toBe('url("b4m-skin://nightglass/sprites/tank.png")');
-    expect(styleOf('orchestrator-aquarium').backgroundImage).toContain('--b4m-skin-aquarium-backdrop');
+    const img = el('orchestrator-aquarium').querySelector('img');
+    expect(img?.getAttribute('src')).toBe('b4m-skin://nightglass/sprites/tank.png');
+    expect(colourUnderUses('orchestrator-aquarium', '--b4m-skin-state-working')).toBe(true);
   },
   board: () => {
     expect(colourUnderUses('orchestrator-board-column-working', '--b4m-skin-card')).toBe(true);
@@ -131,7 +137,7 @@ describe('the sample skin', () => {
     );
     await themed.render(<Skinned view="aquarium" />);
     expect(rootVariable('--b4m-skin-state-working')).toBe('');
-    expect(rootVariable('--b4m-skin-aquarium-backdrop')).toBe('');
+    expect(el('orchestrator-aquarium').querySelector('img')?.getAttribute('src')).not.toContain('b4m-skin:');
   });
 });
 
@@ -211,7 +217,7 @@ describe('statePalette', () => {
       expect(theme.states).toMatchObject({ working: '#3cc8ff', done: '#b48cff', failed: '#ff5f87' });
       expect(theme.surfaces).toEqual({ stage: '#0f1a24', card: '#16263a' });
       expect(theme.fontFamily).toMatch(/monospace/);
-      expect(theme.sprites.aquariumBackdrop).toBe('b4m-skin://nightglass/sprites/tank.png');
+      expect(theme.scenes.aquarium?.backdrop).toBe('b4m-skin://nightglass/sprites/tank.png');
       expect(theme.sounds.finale).toBe('b4m-skin://nightglass/sounds/finale.ogg');
     });
 

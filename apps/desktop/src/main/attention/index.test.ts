@@ -67,7 +67,7 @@ describe('registerAttention', () => {
   const openWindow = vi.fn();
   let attention: ReturnType<typeof registerAttention>;
 
-  const notice = { sessionId: 'agent-1', rootId: 'root-1', title: 'Brannoc the Warden needs you', body: 'bash rm -rf' };
+  const notice = { sessionId: 'agent-1', rootId: 'root-1', title: 'Brannoc needs you', body: 'bash rm -rf' };
   const call = (channel: string, value?: unknown) => electron.handlers.get(channel)?.({}, value);
   const originalPlatform = process.platform;
   const setPlatform = (platform: NodeJS.Platform) => Object.defineProperty(process, 'platform', { value: platform });
