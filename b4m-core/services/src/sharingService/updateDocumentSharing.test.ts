@@ -164,19 +164,27 @@ describe('sharingService - updateDocumentSharing', () => {
       expect(db.sessions.update).toHaveBeenCalledWith({ id: 's1', isGlobalRead: true, isGlobalWrite: false });
     });
 
-    it('lets a share-only sharee keep or turn off global write that is already on', async () => {
+    it('lets a share-only sharee keep global write that is already on', async () => {
       db.sessions.shareable.findShareAccessById.mockResolvedValue({ ...shareOnly, isGlobalWrite: true });
 
       await updateDocumentSharing(user, { id: 's1', type: 'sessions', isGlobalRead: true, isGlobalWrite: true }, {
         db,
         storage,
       } as unknown as Adapters);
-      await updateDocumentSharing(user, { id: 's1', type: 'sessions', isGlobalRead: true, isGlobalWrite: false }, {
-        db,
-        storage,
-      } as unknown as Adapters);
 
-      expect(db.sessions.update).toHaveBeenCalledTimes(2);
+      expect(db.sessions.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a share-only sharee turning off global write that the owner turned on', async () => {
+      db.sessions.shareable.findShareAccessById.mockResolvedValue({ ...shareOnly, isGlobalWrite: true });
+
+      await expect(
+        updateDocumentSharing(user, { id: 's1', type: 'sessions', isGlobalRead: true, isGlobalWrite: false }, {
+          db,
+          storage,
+        } as unknown as Adapters)
+      ).rejects.toBeInstanceOf(ForbiddenError);
+      expect(db.sessions.update).not.toHaveBeenCalled();
     });
 
     it('lets a sharee with update and share, through a group, turn on global write', async () => {

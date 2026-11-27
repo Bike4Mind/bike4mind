@@ -231,6 +231,31 @@ describe('reconcileLakeTags', () => {
     await expect(run(adapters, [], [tag('datalake:lake', 1)])).rejects.toThrow(/do not have permission to add/i);
   });
 
+  // A stale miscased meta-tag is not membership, so normalizing it would be a join. A manager who may
+  // not cold-add the file has it dropped instead, so the unrelated edit still saves.
+  it("drops a lake manager's resent miscased meta-tag on a file someone else owns", async () => {
+    const adapters = makeAdapters([tag('DataLake:Lake', 1)]);
+    adapters.db.fabFiles.findById = vi.fn().mockResolvedValue({ id: 'f1', userId: 'someone-else', tags: [] });
+
+    const result = await run(
+      adapters,
+      ['DataLake:Lake', 'note'],
+      [tag('note'), tag('DataLake:Lake', 1), tag('renamed')]
+    );
+    await result.commit();
+
+    expect(result.tagsToPersist).toEqual([tag('note'), tag('renamed')]);
+    expect(adapters.db.dataLakes.setStats).not.toHaveBeenCalled();
+  });
+
+  it("normalizes the file owner's resent miscased meta-tag into membership", async () => {
+    const adapters = makeAdapters([tag('DataLake:Lake', 1)]);
+
+    const result = await run(adapters, ['DataLake:Lake'], [tag('DataLake:Lake', 1)]);
+
+    expect(result.tagsToPersist).toEqual(expect.arrayContaining([tag('datalake:lake', 1)]));
+  });
+
   it('uses the owner the caller supplies when deciding a join', async () => {
     const adapters = makeAdapters([]);
 
@@ -731,21 +756,14 @@ describe('reconcileLakeTags - admission contract', () => {
     ).rejects.toThrow(/chunks at 512/);
   });
 
-  // Without an owner the ownership check on a join cannot pass, so the join is refused before
-  // the admission contract would have had to skip it.
-  it('refuses a join when the file owner cannot be resolved', async () => {
-    const base = makeAdapters([], lake({ requiredPassageTokenTarget: 1000 }));
+  it('refuses a join, and warns, when the file owner cannot be resolved', async () => {
+    const base = makeAdapters([]);
     base.db.fabFiles.findById = vi.fn().mockResolvedValue(null);
     const warn = vi.fn();
 
     await expect(
-      reconcileLakeTags(owner, 'f1', [], [tag('datalake:lake', 1)], {
-        db: {
-          ...base.db,
-          ...settingsDb({ defaultEmbeddingModel: MODEL, DefaultChunkSize: '512' }, [enforcingLake('lake1')]),
-        },
-        logger: { warn },
-      } as never)
+      reconcileLakeTags(owner, 'f1', [], [tag('datalake:lake', 1)], { db: base.db, logger: { warn } } as never)
     ).rejects.toThrow(/do not have permission to add/i);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/could not resolve file owner/), 'f1');
   });
 });

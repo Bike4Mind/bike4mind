@@ -136,20 +136,8 @@ export const addFileToDataLake = async (
   const isRestore = !!liveRemoval;
 
   if (!isRestore) {
-    // Cold-add path: admit only the lake's effective owner. Not-found-style denial, so the door
-    // does not confirm the existence of a file the actor cannot see.
-    //
-    // BOTH SIDES of the effective-owner arm are load-bearing, and the ACTOR side is the one that is
-    // easy to drop: `resolveEffectiveOwnerIds(...).includes(file.userId)` is a property of the FILE,
-    // so on its own it admits any manage-gate rung (a curator user grant, an org admin, an org
-    // grant holder - see canManageLake) to stamp membership onto any file the lake's owner happens
-    // to own. Membership IS read access (the meta-tag arm of buildDataLakeMembershipFilter carries
-    // no ownership conjunct, and files/[id] re-authorizes by lake tag rather than per-file ACL), so
-    // that would publish a non-consenting owner's private file to every reader of the lake.
-    // Conjoining the actor test keeps the arm to "an owner adding their own library's files", and
-    // leaves the platform-admin rung exactly as wide as it already was - deliberately NOT wider:
-    // `actor.isAdmin` gates the same file-side test rather than replacing it, so an admin still
-    // cannot cold-add a third party's file.
+    // Cold-add path; the rule and why both of its sides matter live in canColdAddFileToLake. Not-found-style
+    // denial, so the door does not confirm the existence of a file the actor cannot see.
     if (!canColdAddFileToLake(lake, actor, grants, file.userId)) {
       throw new NotFoundError('File not found');
     }

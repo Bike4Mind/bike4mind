@@ -179,6 +179,9 @@ export const reconcileLakeTags = async (
   // `wanted`). The subset this actor cannot manage (`unmanagedPreservedLakes`, below) is derived
   // after the grants are primed - its content tags are then force-carried, see far below.
   const preservedMemberLakes: MembershipLake[] = [];
+  // Joins whose key the file already holds in a non-canonical casing: a client resending the stale
+  // tag unchanged. Not membership, so normalizing it would be a real join (see the gate below).
+  const resentNonCanonicalLakes = new Set<MembershipLake>();
 
   for (const key of new Set([...desiredKeys, ...currentKeys])) {
     const wanted = desiredKeys.has(key);
@@ -213,6 +216,7 @@ export const reconcileLakeTags = async (
     } else if (wanted) {
       metaTagsToPersist.push(lake.datalakeTag);
       joins.push(lake);
+      if (currentKeys.has(key)) resentNonCanonicalLakes.add(lake);
     }
   }
 
@@ -226,19 +230,26 @@ export const reconcileLakeTags = async (
   if (owner === undefined) {
     // Not reachable from updateFabFile (resolves the file first) or the PUT route (authorizes it
     // first) - both always supply one of the two owner signals. A hypothetical future caller
-    // missing both has any meta-tag join refused below; logged rather than thrown so a write
-    // that joins nothing still goes through, minus prefix-arm preservation.
-    logger?.warn?.('reconcileLakeTags: could not resolve file owner; prefix-arm preservation skipped', fabFileId);
+    // missing both has any meta-tag join refused below, and nothing can join through the
+    // owner-scoped prefix arm either, so the admission contract has nothing to grade. Logged
+    // rather than thrown so a write that joins nothing still goes through.
+    logger?.warn?.(
+      'reconcileLakeTags: could not resolve file owner; prefix-arm preservation and admission skipped',
+      fabFileId
+    );
   }
 
-  for (const lake of joins) {
-    if (!canManage(lake)) {
-      throw new BadRequestError('You do not have permission to add files to this data lake');
-    }
+  for (const lake of [...joins]) {
     // Managing the lake is not enough: its meta-tag is read access, so the cold-add ownership rule applies.
-    if (!canColdAddFileToLake(lake, actor, grantResolver.get(lake.id), owner)) {
-      throw new BadRequestError('You do not have permission to add files to this data lake');
+    const mayJoin = canManage(lake) && canColdAddFileToLake(lake, actor, grantResolver.get(lake.id), owner);
+    if (!mayJoin && canManage(lake) && resentNonCanonicalLakes.has(lake)) {
+      // A stale miscased tag the actor may not turn into membership: drop it rather than refuse,
+      // so an unrelated edit (rename, content) still saves.
+      joins.splice(joins.indexOf(lake), 1);
+      metaTagsToPersist.splice(metaTagsToPersist.indexOf(lake.datalakeTag), 1);
+      continue;
     }
+    if (!mayJoin) throw new BadRequestError('You do not have permission to add files to this data lake');
     assertLakeWritable(lake);
   }
 
@@ -304,17 +315,8 @@ export const reconcileLakeTags = async (
   // so a refusal happens before any join is applied. Leaves and preserved memberships are
   // deliberately absent: the contract governs admission, never eviction.
   //
-  // An unresolvable owner is the one case this cannot grade - the chunk policy it predicts against
-  // is owner-altitude, so there is no scope to resolve. That is a FAILED READ, not a clean pass, so
-  // it is logged rather than waved through silently: unreachable from `updateFabFile` and the PUT
-  // route (both always supply an owner signal), and a future caller that trips it should see why
-  // its contract never fired instead of concluding the content was admissible.
-  if (owner === undefined) {
-    logger?.warn?.(
-      'reconcileLakeTags: could not resolve file owner; admission contract NOT evaluated for this write',
-      fabFileId
-    );
-  } else {
+  // An unresolvable owner joins nothing (see the owner warning above), so there is nothing to grade.
+  if (owner !== undefined) {
     await assertLakeAdmission(
       [...joins, ...statsOnlyJoins],
       [

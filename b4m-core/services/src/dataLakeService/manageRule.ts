@@ -121,11 +121,17 @@ export function isEffectiveOwner(
 }
 
 /**
- * The cold-add rule for stamping a lake's meta-tag onto a file. Membership is read access, so the
- * actor must own the file, or (as a platform admin or the lake's effective owner) add a file the
- * lake's owner owns. Shared by toggleTags, addFileToDataLake and reconcileLakeTags so the three
- * doors cannot drift; see addFileToDataLake for why both sides of the second arm are load-bearing.
- * An unknown file owner never passes.
+ * The cold-add rule for stamping a lake's meta-tag onto a file. Membership is read access (the
+ * meta-tag arm of buildDataLakeMembershipFilter carries no ownership conjunct), so the actor must
+ * own the file, or (as a platform admin or the lake's effective owner) add a file the lake's owner
+ * owns. Both sides of that second arm are load-bearing: the file side alone would let any manage
+ * rung (curator grant, org admin) publish a lake owner's private file to every lake reader, and
+ * `isAdmin` gates the file side rather than replacing it, so an admin still cannot cold-add a third
+ * party's file. An unknown file owner never passes.
+ *
+ * Shared by toggleTags, addFileToDataLake and reconcileLakeTags so the three doors cannot drift.
+ * The PUT /api/files/:id route gate (assertCanWriteDataLakeTags) is manage-only and relies on
+ * reconcileLakeTags for this rule.
  */
 export function canColdAddFileToLake(
   lake: Pick<IDataLakeDocument, 'createdByUserId'>,
