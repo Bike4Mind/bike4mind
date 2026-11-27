@@ -1,5 +1,6 @@
 src/main/kotlin/com/bike4mind/client/apis/AIApi.kt
 src/main/kotlin/com/bike4mind/client/apis/AccountApi.kt
+src/main/kotlin/com/bike4mind/client/apis/ArtifactsApi.kt
 src/main/kotlin/com/bike4mind/client/apis/SessionsApi.kt
 src/main/kotlin/com/bike4mind/client/auth/ApiKeyAuth.kt
 src/main/kotlin/com/bike4mind/client/auth/Authentication.kt
@@ -12,6 +13,7 @@ src/main/kotlin/com/bike4mind/client/infrastructure/HttpResponse.kt
 src/main/kotlin/com/bike4mind/client/infrastructure/RequestConfig.kt
 src/main/kotlin/com/bike4mind/client/infrastructure/RequestMethod.kt
 src/main/kotlin/com/bike4mind/client/models/ErrorResponse.kt
+src/main/kotlin/com/bike4mind/client/models/GetArtifactResponse200.kt
 src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200.kt
 src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200Features.kt
 src/main/kotlin/com/bike4mind/client/models/GetClientConfigResponse200Limits.kt
@@ -41,6 +43,8 @@ src/main/kotlin/com/bike4mind/client/models/GetQuestResponse200TurnTimingRetries
 src/main/kotlin/com/bike4mind/client/models/GetQuestResponse200TurnTimingRetriesInnerAt.kt
 src/main/kotlin/com/bike4mind/client/models/GetSessionResponse200.kt
 src/main/kotlin/com/bike4mind/client/models/GetSessionResponse200TagsInner.kt
+src/main/kotlin/com/bike4mind/client/models/ListArtifactsResponse200.kt
+src/main/kotlin/com/bike4mind/client/models/ListArtifactsResponse200DataInner.kt
 src/main/kotlin/com/bike4mind/client/models/ListCreditTransactionsResponse200.kt
 src/main/kotlin/com/bike4mind/client/models/ListCreditTransactionsResponse200DataInner.kt
 src/main/kotlin/com/bike4mind/client/models/ListSessionQuestsResponse200.kt

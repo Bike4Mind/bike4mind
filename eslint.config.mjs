@@ -453,6 +453,8 @@ export default defineConfig([
     'apps/client/public/**',
     // Vendored third-party bundle shipped inside the iOS app.
     'apps/ios/Bike4Mind/Resources/Artifacts/**',
+    // Vendored third-party bundle served to the Android artifact WebView; not ours to lint.
+    'apps/android/app/src/main/assets/**',
     // electron-vite's build output; 'dist'/'build' above do not cover it.
     'apps/desktop/out/**',
     'packages/sdk/src/generated/**',
