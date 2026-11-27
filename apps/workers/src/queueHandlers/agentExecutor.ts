@@ -4104,10 +4104,9 @@ async function runExecution(
 
     try {
       await markFailedWithRetry(
-        (id, failure) => agentExecutionRepository.markFailed(id, failure),
-        executionId,
-        { message: errorMessage, stack: errorStack },
-        logger
+        () => agentExecutionRepository.markFailedIfActive(executionId, { message: errorMessage, stack: errorStack }),
+        logger,
+        { getRemainingMs: () => context.getRemainingTimeInMillis() }
       );
       // Don't leak internal error details to client. Recognized, non-sensitive failure
       // categories (billing/rate-limit/timeout/auth) get a specific message; everything else stays
@@ -5525,10 +5524,9 @@ async function processSubagentDispatch(
     logger.error('[SubagentDispatch] Fatal error', { error: errorMessage });
     try {
       await markFailedWithRetry(
-        (id, failure) => agentExecutionRepository.markFailed(id, failure),
-        childExecutionId,
-        { message: errorMessage, timedOut: false },
-        logger
+        () => agentExecutionRepository.markFailedIfActive(childExecutionId, { message: errorMessage, timedOut: false }),
+        logger,
+        { getRemainingMs: () => context.getRemainingTimeInMillis() }
       );
       // `parentId` is set inside the try block; if we threw before resolving
       // it (e.g., child doc missing), we don't know the real parent. Omit the
