@@ -261,7 +261,7 @@ private struct TranscriptSkeleton: View {
         ForEach(Self.replyFractions.indices, id: \.self) { turn in
           SkeletonBlock(
             widthFraction: Tokens.Layout.promptWidthFraction * 0.7, height: 40, alignment: .trailing,
-            cornerRadius: Tokens.Radius.md, fill: Tokens.Palette.promptBubble)
+            cornerRadius: Tokens.Radius.md)
           VStack(spacing: Tokens.Spacing.s) {
             ForEach(Self.replyFractions[turn].indices, id: \.self) { line in
               SkeletonBlock(widthFraction: Self.replyFractions[turn][line])
@@ -273,6 +273,5 @@ private struct TranscriptSkeleton: View {
       .padding(.horizontal, Tokens.Spacing.m)
       .padding(.vertical, Tokens.Spacing.s)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
   }
 }

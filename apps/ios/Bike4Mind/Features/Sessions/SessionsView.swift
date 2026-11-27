@@ -130,7 +130,6 @@ private struct SessionsSkeleton: View {
       }
       .padding(Tokens.Spacing.m)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
   }
 }
 

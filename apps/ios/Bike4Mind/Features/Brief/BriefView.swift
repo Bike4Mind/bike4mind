@@ -511,6 +511,5 @@ private struct BriefSkeleton: View {
       }
       .padding(Tokens.Spacing.m)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
   }
 }
