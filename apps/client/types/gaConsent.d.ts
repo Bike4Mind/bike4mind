@@ -10,5 +10,7 @@ declare global {
     __b4mGaConsentDefault?: 'granted' | 'denied';
     /** The /auth/success fragment, taken out of the URL by authFragmentCaptureScript (utils/authParams). */
     __b4mAuthFragment?: string;
+    /** A `/shared` page's fragment, taken out of the URL by shareFragmentCaptureScript (utils/shareFragment). */
+    __b4mShareFragment?: { pathname: string; hash: string };
   }
 }
