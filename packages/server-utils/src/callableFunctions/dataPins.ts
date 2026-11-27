@@ -224,7 +224,7 @@ export async function pinCallableFunctionData(
     });
   }
 
-  const file = await fabFilesService.assertFabFileAccessById(actor, input.fileId, {
+  const file = await fabFilesService.assertFabFileAccessById(actor, input.fileId.trim(), {
     db: { fabFiles: fabFileRepository },
   });
   if (!file.filePath) {

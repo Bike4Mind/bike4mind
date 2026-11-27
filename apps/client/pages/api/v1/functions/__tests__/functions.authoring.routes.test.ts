@@ -107,7 +107,11 @@ vi.mock('@bike4mind/database', async importOriginal => ({
     setGrants: async (id: string, owner: Owner, grants: unknown) => write('setGrants', id, owner, { grants }),
     deleteForOwner: async (id: string, owner: Owner) => !!write('delete', id, owner, {}),
   },
-  callableFunctionReviewRepository: { deleteForFunction: async () => undefined },
+  callableFunctionReviewRepository: {
+    deleteForFunction: async () => undefined,
+    find: async () => [],
+    deleteForFunctionExceptUsers: async () => undefined,
+  },
   callableFunctionCallRepository: {
     summarizeForOwner: async () => ({ since: new Date(0), total: 0, outcomes: {}, recent: [] }),
   },
@@ -358,6 +362,19 @@ describe("authoring the key owner's own function", () => {
     expect((res.body.data as { examples: unknown[] }).examples).toEqual([
       { ...example, name: 'two span', citation: 'Handbook, table 3' },
     ]);
+  });
+
+  it('shares with person ids trimmed, as the app saves them', async () => {
+    const res = await call(shareRoute, {
+      method: 'PUT',
+      query: { id: OWNED_ID },
+      body: { visibility: 'private', user_ids: [' 6b0000000000000000000003 '] },
+    });
+    expect(res.status).toBe(200);
+    expect((res.body.data as { share: unknown }).share).toEqual({
+      visibility: 'private',
+      user_ids: ['6b0000000000000000000003'],
+    });
   });
 
   it('refuses sharing a draft as not_live', async () => {

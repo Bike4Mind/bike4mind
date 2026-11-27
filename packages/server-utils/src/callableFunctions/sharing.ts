@@ -158,7 +158,7 @@ export async function shareCallableFunction(
     });
   }
 
-  const userIds = [...new Set(input.userIds)].filter(userId => userId !== actor.id);
+  const userIds = [...new Set(input.userIds.map(userId => userId.trim()))].filter(userId => userId !== actor.id);
   const { maxUserIds } = CALLABLE_FUNCTION_GRANT_LIMITS;
   if (userIds.length > maxUserIds) {
     throw new BadRequestError(`A tool can be shared with at most ${maxUserIds} people.`, { code: 'too_many_people' });
@@ -169,17 +169,19 @@ export async function shareCallableFunction(
   }
 
   const grants: ICallableFunctionGrants = { visibility: input.visibility, userIds };
+  const projectId = input.projectId?.trim();
+  const organizationId = input.organizationId?.trim();
   if (input.visibility === 'project') {
-    if (!input.projectId || !(await isProjectMember(actor.id, input.projectId))) {
+    if (!projectId || !(await isProjectMember(actor.id, projectId))) {
       throw new NotFoundError('Project not found');
     }
-    grants.projectId = input.projectId;
+    grants.projectId = projectId;
   } else if (input.visibility === 'organization') {
     const orgIds = await organizationRepository.findMembershipOrgIds(actor.id);
-    if (!input.organizationId || !orgIds.includes(input.organizationId)) {
+    if (!organizationId || !orgIds.includes(organizationId)) {
       throw new NotFoundError('Organization not found');
     }
-    grants.organizationId = input.organizationId;
+    grants.organizationId = organizationId;
   } else if (userIds.length === 0) {
     throw new BadRequestError('Name at least one person, a project, or an organization.', { code: 'no_recipients' });
   }
