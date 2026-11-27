@@ -346,7 +346,9 @@ jobs:
       - name: Upload Playwright report
         # Nothing to upload on a skip; without this the upload emits a "No files were
         # found" warning that reads like the run lost its report.
-        if: always() && steps.e2e.outputs.preview_skipped != 'true' && steps.scrub.outcome == 'success'
+        # Private repositories only: an artifact is readable by everyone who can read the repo.
+        # Elsewhere the report is reached through the QA ingest below.
+        if: always() && steps.e2e.outputs.preview_skipped != 'true' && steps.scrub.outcome == 'success' && github.repository_visibility == 'private'
         uses: actions/upload-artifact@v6
         with:
           name: playwright-report${{ inputs.artifact_suffix && format('-{0}', inputs.artifact_suffix) || '' }}-${{ steps.config.outputs.stage }}${{ inputs.e2e_test_id && format('-{0}', inputs.e2e_test_id) || '' }}
@@ -517,8 +519,8 @@ jobs:
                   "elements": [
                     {
                       "type": "button",
-                      "text": { "type": "plain_text", "text": "${{ steps.e2e.outputs.preview_skipped == 'true' && 'View Run' || 'View Report' }}" },
-                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}${{ steps.e2e.outputs.preview_skipped != 'true' && '#artifacts' || '' }}"
+                      "text": { "type": "plain_text", "text": "${{ steps.e2e.outputs.preview_skipped != 'true' && github.repository_visibility == 'private' && 'View Report' || 'View Run' }}" },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}${{ steps.e2e.outputs.preview_skipped != 'true' && github.repository_visibility == 'private' && '#artifacts' || '' }}"
                     }
                   ]
                 }
