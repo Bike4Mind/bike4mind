@@ -245,7 +245,8 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
   // Opti access can resolve after mount (entitlement fetch) or be revoked mid-session, so
   // re-seed the selection whenever the offered scopes change: a preset selection follows
   // its preset into the new model, and a custom one keeps the user's picks minus any scope
-  // no longer offered, so a hidden scope can't be submitted.
+  // no longer offered, so a hidden scope can't be submitted. An MCP or functions-only selection is kept
+  // as is: the functions scopes sit outside the offered model, and no MCP scope is gated.
   const [seededModel, setSeededModel] = useState(scopeModel);
   if (seededModel !== scopeModel) {
     const previousModel = seededModel;
@@ -593,6 +594,7 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
                       value={expirationDays}
                       onChange={(_, value) => setExpirationDays(value as string)}
                       className="project-api-keys-expiration-select"
+                      data-testid="api-key-expiration-select"
                     >
                       <Option value="30">30 days</Option>
                       <Option value="90">90 days</Option>

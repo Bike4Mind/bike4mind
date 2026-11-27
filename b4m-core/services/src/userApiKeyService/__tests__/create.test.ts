@@ -1303,7 +1303,7 @@ describe('createUserApiKey - MCP key', () => {
   });
 
   it('refuses a key with no scopes, before the MCP rules run', async () => {
-    await expect(mint({ scopes: [] }).result).rejects.toThrow(/scope/i);
+    await expect(mint({ scopes: [] }).result).rejects.toThrow('scopes: Too small: expected array to have >=1 items');
   });
 
   it('refuses a ceiling without the flag', async () => {

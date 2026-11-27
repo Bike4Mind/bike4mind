@@ -775,8 +775,17 @@ describe('UserApiKeysTab - MCP access level', () => {
       openModal();
       fireEvent.click(mcpChip());
       fireEvent.click(screen.getByTestId('api-key-mcp-functions-invoke-checkbox').querySelector('input')!);
+      fireEvent.click(within(screen.getByTestId('api-key-exposure-ceiling-select')).getByRole('combobox'));
+      fireEvent.click(screen.getByRole('option', { name: /organization/i }));
+      fireEvent.click(screen.getByText('Advanced settings'));
+      fireEvent.click(within(screen.getByTestId('api-key-expiration-select')).getByRole('combobox'));
+      fireEvent.click(screen.getByRole('option', { name: '30 days' }));
       fireEvent.click(mcpChip());
       const sent = submit();
+      expect(sent.exposureCeiling).toBe('organization');
+      const days = ((sent.expiresAt as Date).getTime() - Date.now()) / 86_400_000;
+      expect(days).toBeGreaterThan(29);
+      expect(days).toBeLessThan(31);
       expect(sent.scopes).toContain(ApiKeyScope.FUNCTIONS_INVOKE);
     } finally {
       h.functionsEnabled = false;
