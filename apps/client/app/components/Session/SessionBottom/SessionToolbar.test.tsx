@@ -283,3 +283,52 @@ describe('appendTranscript', () => {
     expect(appendTranscript('draft\n', 'hello')).toBe('draft hello');
   });
 });
+
+describe('SessionToolbar - dark send button fill', () => {
+  // Pins the dark override that matches the native sendButton role (design-tokens nativeTheme.ts).
+  const ModeWrapper =
+    (mode: 'light' | 'dark'): React.FC<{ children: React.ReactNode }> =>
+    ({ children }) => (
+      <CssVarsProvider
+        theme={appTheme}
+        defaultMode={mode}
+        modeStorageKey={`toolbar-${mode}`}
+        colorSchemeStorageKey={`toolbar-${mode}-scheme`}
+      >
+        {children}
+      </CssVarsProvider>
+    );
+  const fill = () => getComputedStyle(screen.getByTestId('send-message-btn')).backgroundColor;
+
+  it('fills the enabled button with the dark accent', () => {
+    render(<SessionToolbar {...baseProps} chatInputValue="hello" />, { wrapper: ModeWrapper('dark') });
+    expect(fill()).toBe('var(--joy-palette-reading-accent)');
+  });
+
+  it('keeps the disabled styling in dark mode', () => {
+    render(<SessionToolbar {...baseProps} chatInputValue="hello" sendBlockedReason="reconnecting" />, {
+      wrapper: ModeWrapper('dark'),
+    });
+    expect(fill()).not.toBe('var(--joy-palette-reading-accent)');
+  });
+
+  it('leaves light mode on the primary solid fill', () => {
+    render(<SessionToolbar {...baseProps} chatInputValue="hello" />, { wrapper: ModeWrapper('light') });
+    expect(fill()).not.toBe('var(--joy-palette-reading-accent)');
+  });
+
+  // getComputedStyle cannot see pseudo-classes, so pin the emitted hover/press rules as text.
+  it('darkens on hover (hover-capable pointers only) and on press', () => {
+    render(<SessionToolbar {...baseProps} chatInputValue="hello" />, { wrapper: ModeWrapper('dark') });
+    const cls = [...screen.getByTestId('send-message-btn').classList].find(name => name.startsWith('css-'));
+    const css = Array.from(document.querySelectorAll('style'))
+      .map(style => style.textContent)
+      .join('\n');
+    expect(css).toContain(
+      `@media (hover: hover){[data-joy-color-scheme="dark"] .${cls}:not(:disabled):hover{-webkit-filter:brightness(0.92);filter:brightness(0.92);}`
+    );
+    expect(css).toContain(
+      `[data-joy-color-scheme="dark"] .${cls}:not(:disabled):active{-webkit-filter:brightness(0.85);filter:brightness(0.85);}`
+    );
+  });
+});
