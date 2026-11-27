@@ -48,6 +48,7 @@ import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
 import { adminAssistantToolDefinitions } from '@server/adminAssistant';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { premiumLlmToolNames } from '@bike4mind/server-utils/premiumLlmToolNames';
 import { resolveRoleAdminPermissions } from '@bike4mind/server-utils/auth/adminRoles';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
@@ -481,7 +482,7 @@ export async function processQuest(
       body: requestBody,
       logger,
       externalTools,
-      contributedToolNames: new Set(Object.keys(premiumLlmTools)),
+      contributedToolNames: premiumLlmToolNames,
       videoToolConfigResolver: getVideoToolConfigResolver(params.apiKeyId, user.id),
       musicToolConfigResolver: getMusicToolConfigResolver(params.apiKeyId, user.id),
       imageJobsResolver: getImageJobsResolver(params.apiKeyId),

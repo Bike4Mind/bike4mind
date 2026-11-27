@@ -38,6 +38,7 @@ import {
 import { baseApi } from '@server/middlewares/baseApi';
 import { ownerWithheldUsers, withholdAdminRole } from '@bike4mind/server-utils/auth/apiKeyAdminScope';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { premiumLlmToolNames } from '@bike4mind/server-utils/premiumLlmToolNames';
 import '@bike4mind/server-utils/navigation/registerContributedViews';
 import { getCreateVideoJobDeps, getVideoJobDeps } from '@bike4mind/server-utils/generationJobs/wiring';
 import { buildVideoToolConfig } from '@bike4mind/server-utils/videoGenerations/buildVideoToolConfig';
@@ -209,7 +210,6 @@ async function runFullPipeline(
     ...(systemPrompt ? { extraContextMessages: [{ role: 'system' as const, content: systemPrompt }] } : {}),
   };
 
-  const contributedToolNames = new Set(Object.keys(premiumLlmTools));
   const invokeService = new ChatCompletionInvoke(chatCompletionOptions);
   const quest = await invokeService.invoke({
     body: invokeBody,
@@ -218,7 +218,7 @@ async function runFullPipeline(
     apiKeyId: sessionCtx.apiKeyId,
     fileInputsAllowed: sessionCtx.fileInputsAllowed,
     apiKeyBillingOwnerType: sessionCtx.apiKeyBillingOwnerType,
-    contributedToolNames,
+    contributedToolNames: premiumLlmToolNames,
   });
   if (!quest) throw new Error('Voice v2: failed to create quest');
   // Surface the quest id so the handler can stop it if the client disconnects.
@@ -251,7 +251,7 @@ async function runFullPipeline(
     // executors only capture the call; ElevenLabs runs the real side effect.
     // Premium overlay tool implementations merge first so client tools win.
     externalTools: { ...premiumLlmTools, ...clientTools },
-    contributedToolNames,
+    contributedToolNames: premiumLlmToolNames,
     videoToolConfigResolver,
   });
 

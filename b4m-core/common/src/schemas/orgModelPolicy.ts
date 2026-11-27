@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ModelBackend } from '../models';
 import { resolveMediaModelBackend } from '../mediaModelBackend';
-import { b4mLLMTools, DATA_LAKE_TOOL_NAMES } from './llm';
+import { b4mLLMTools, DATA_LAKE_TOOL_NAMES, ToolNameSchema } from './llm';
 
 /**
  * An organization's allowlist of model providers, model ids and built-in tools. Each list is

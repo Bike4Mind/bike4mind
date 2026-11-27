@@ -3,6 +3,9 @@ import { z } from 'zod';
 /**
  * Official B4M LLM tools.
  */
+// Identifier-shaped, not the built-in enum: overlay-contributed tool names live outside it.
+export const ToolNameSchema = z.string().regex(/^[a-z][a-z0-9_]{0,63}$/, 'Invalid tool name');
+
 export const b4mLLMTools = z.enum([
   'dice_roll',
   'image_generation',

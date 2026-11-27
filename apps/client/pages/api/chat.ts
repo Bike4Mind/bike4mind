@@ -59,6 +59,7 @@ import { resolveSessionOrigin } from '@server/managers/sessionOrigin';
 import type { Request, Response } from 'express';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { premiumLlmToolNames } from '@bike4mind/server-utils/premiumLlmToolNames';
 import '@bike4mind/server-utils/navigation/registerContributedViews';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
 import { resolveActiveOrg } from '@bike4mind/server-utils/utils/resolveActiveOrg';
@@ -200,11 +201,10 @@ async function handleChat(
   //    ids that are not tools here, not one entry per occurrence.
   // Overlay-contributed names are recognized by the generated map, not the enum; they are typed as
   // B4MLLMTools here only because the downstream signatures predate open tool names.
-  const premiumToolNames = new Set(Object.keys(premiumLlmTools));
   const requestedTools = Array.from(
     new Set([
       ...filterKnownTools(simplifiedRequest.tools),
-      ...((simplifiedRequest.tools ?? []).filter(id => premiumToolNames.has(id)) as B4MLLMTools[]),
+      ...((simplifiedRequest.tools ?? []).filter(id => premiumLlmToolNames.has(id)) as B4MLLMTools[]),
     ])
   );
   const recognized = new Set<string>(requestedTools);
@@ -305,7 +305,7 @@ async function handleChat(
       oauthClientId: req.apiKeyInfo?.oauthExchangeClientId,
       adminRoleWithheld: adminRoleWithheldFor(req.apiKeyInfo),
       fileInputsAllowed: fileInputsAllowedFor(req),
-      contributedToolNames: premiumToolNames,
+      contributedToolNames: premiumLlmToolNames,
       // The visit the question was asked in, so the queued turn's first_value names it. A key turn names none.
       visitId: turnAuth.authOrigin === 'session' ? readVisitId(req.headers.cookie) : undefined,
     });
@@ -367,7 +367,7 @@ async function handleChat(
             // (its own, or its workspace's resolved at read time) include premium names needs
             // the merge or those tools silently no-op on this synchronous path.
             externalTools: premiumLlmTools,
-            contributedToolNames: premiumToolNames,
+            contributedToolNames: premiumLlmToolNames,
             abortSignal,
           })
         ),

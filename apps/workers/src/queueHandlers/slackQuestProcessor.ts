@@ -59,6 +59,7 @@ import { QuestStartBodySchema, ChatCompletionProcess } from '@bike4mind/services
 import type { ToolDefinition } from '@bike4mind/services/llm/tools';
 import { withLatticeTools } from '@bike4mind/server-utils/queueHandlers/latticeChatTools';
 import { premiumLlmTools } from '@bike4mind/server-utils/premium-generated/premiumLlmTools.generated';
+import { premiumLlmToolNames } from '@bike4mind/server-utils/premiumLlmToolNames';
 import { premiumWorkspaceDeniedTools } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceDeniedTools.generated';
 import { premiumWorkspaceSessionSettings } from '@bike4mind/server-utils/premium-generated/premiumWorkspaceSessionSettings.generated';
 import { Resource } from 'sst';
@@ -487,7 +488,7 @@ export const handler = withEventContext(async (event, logger) => {
       body: requestBody,
       logger,
       externalTools,
-      contributedToolNames: new Set(Object.keys(premiumLlmTools)),
+      contributedToolNames: premiumLlmToolNames,
       videoToolConfigResolver: getSlackVideoToolConfigResolver(params.questId, user.id),
       callableFunctionsResolver: () => resolveCallableFunctionsEnabled(user),
     });
