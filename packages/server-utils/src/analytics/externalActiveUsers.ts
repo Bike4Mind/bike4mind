@@ -378,11 +378,11 @@ export interface ExternalActivityReport {
   today: string;
   windowStart: string;
   days: number;
-  /** External users with app, CLI or desktop activity: the DAU population. */
+  /** External users with app, CLI, desktop or MCP-host activity: the DAU population. */
   externalUsers: number;
   /** External users with API activity in the window, whether or not they are also in DAU. */
   externalApiUsers: number;
-  /** Internal (admin or staff-domain) users with app, CLI or desktop activity in the window. */
+  /** Internal (admin or staff-domain) users with app, CLI, desktop or MCP-host activity in the window. */
   internalUsers: number;
   excluded: Record<ExclusionReason, number>;
   staffExclusionConfigured: boolean;
@@ -396,7 +396,7 @@ export interface ExternalActivityReport {
 }
 
 export function buildReport(input: {
-  /** App, CLI and desktop activity: drives DAU, activation and retention. */
+  /** App, CLI, desktop and MCP-host activity: drives DAU, activation and retention. */
   userDays: UserDayMap;
   /** Public API activity: drives the API users series only. */
   apiUserDays: UserDayMap;
@@ -448,7 +448,7 @@ export function formatReport(report: ExternalActivityReport): string {
   const { excluded } = report;
   const lines: string[] = [
     `External activity, ${report.windowStart} to ${report.today} UTC (${report.days} days)`,
-    `External users with app, CLI or desktop activity: ${report.externalUsers}`,
+    `External users with app, CLI, desktop or MCP-host activity: ${report.externalUsers}`,
     `External users with API activity (not in DAU): ${report.externalApiUsers}`,
     `Internal users with app, CLI, desktop or MCP-host activity: ${report.internalUsers}`,
     `Excluded users: ${excluded.admin} admin, ${excluded.staffDomain} staff domain, ` +
@@ -466,7 +466,7 @@ export function formatReport(report: ExternalActivityReport): string {
 
   lines.push(
     '',
-    `DAU (UTC, last ${report.dau.length} days): web app + CLI + desktop. API and Internal users are counted separately.`
+    `DAU (UTC, last ${report.dau.length} days): web app + CLI + desktop + MCP-host. API and Internal users are counted separately.`
   );
   lines.push(pad(['Day', 'DAU', 'API users', 'Internal'], SERIES_WIDTHS));
   report.dau.forEach((row, i) => {

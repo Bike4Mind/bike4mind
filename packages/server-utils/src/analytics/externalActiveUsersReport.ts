@@ -70,8 +70,8 @@ type ActivityFilter = {
 const OBJECT_ID_RE = /^[0-9a-f]{24}$/i;
 
 /**
- * Streams the three activity sources from `windowStart` into two user-day maps: app, CLI and
- * desktop activity (DAU) and public API activity (reported separately). Projects only the fields
+ * Streams the three activity sources from `windowStart` into two user-day maps: app, CLI, desktop
+ * and MCP-host activity (DAU) and public API activity (reported separately). Projects only the fields
  * it needs and never unions across collections (DocumentDB has no $unionWith). Every read prefers
  * a secondary: a full-window scan of the largest collections should not load the primary.
  * `userIds`, when given, drops every other user's rows as they stream (not pushed into the query,

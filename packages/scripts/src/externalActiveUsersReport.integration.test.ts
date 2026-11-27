@@ -162,7 +162,7 @@ describe('runExternalActivityReport', () => {
     expect(report.excluded).toEqual({ noUser: 2, admin: 1, staffDomain: 2, testPattern: 1, synthetic: 0 });
     expect(lines[0]).toMatch(/Day\s+DAU\s+API users\s+Internal/);
     expect(lines[0]).toMatch(/2026-10-10\s+3\s+0\s+2/);
-    expect(lines[0]).toContain('Internal users with app, CLI or desktop activity: 2');
+    expect(lines[0]).toContain('Internal users with app, CLI, desktop or MCP-host activity: 2');
   });
 
   it('buckets the three users into their signup week with D1 measured and D7 too young', async () => {
