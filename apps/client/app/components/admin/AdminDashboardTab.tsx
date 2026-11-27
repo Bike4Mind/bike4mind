@@ -1,227 +1,153 @@
-import { useMemo } from 'react';
-import { Link } from '@tanstack/react-router';
-import { Alert, Box, Button, Grid, LinearProgress, Stack, Typography } from '@mui/joy';
-import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { Box, Stack, Typography } from '@mui/joy';
+import { useUser } from '@client/app/contexts/UserContext';
 import { AdminTab } from './adminSidebarConfig';
-import { UsageBySourceCard } from './EventMetrics/components/UsageBySourceCard';
+import { canOpenAdminTab } from './adminTabPermissions';
 import { AnalyticsTermHelp } from './EventMetrics/components/AnalyticsTermHelp';
-import { OverviewTab } from './EventMetrics/components/OverviewTab';
-import { useAdminActivitySummary } from './useAdminActivitySummary';
 import { NewSignupsTile } from './Signups/NewSignupsTile';
 import { AiAdvisoryStrip } from './AiAdvisory/AiAdvisoryStrip';
 import { ADMIN_REGION_GAP } from './shared/adminStyles';
-import { AdminPageHeader } from './shared';
-import { SectionCard } from './shared/SectionCard';
-import { CampaignWatchesPanel } from './CampaignWatches/CampaignWatchesPanel';
+import { AdminPageHeader, LoadingState, SectionCard, SegmentedControl } from './shared';
 import { MorningBriefCard } from './MorningBriefCard';
+import { ActiveUsersSection } from './Analytics/ActiveUsersSection';
+import { useAnalyticsOverview } from './Analytics/useAnalyticsOverview';
+import { ANALYTICS_DEFAULTS } from '@client/app/utils/analyticsOverview';
+import { useSpend } from './ModelMetrics/hooks/useSpend';
+import { useSpendFeatures } from './SpendExplorer/useFeatureCost';
+import { formatUsd } from './SpendExplorer/spendExplorerModel';
+import { useAdminRevenueTrend } from './Revenue/useAdminRevenue';
+import { DailyAreaChart } from './CreditAnalysis/components/DailyAreaChart';
+import { NeedsAttentionStrip } from './Dashboard/NeedsAttentionStrip';
+import { JumpBackIn } from './Dashboard/JumpBackIn';
+import { PulseSection } from './Dashboard/PulseSection';
+import { ModelsByCostCard, TopAccountsCard, TopFeaturesCard } from './Dashboard/UsageBreakdowns';
+import { PlatformHealthCard, RevenueMovementCard } from './Dashboard/HealthAndRevenue';
+import { DASHBOARD_RANGE_OPTIONS, spendWindow, type DashboardRange } from './Dashboard/dashboardRange';
 
-const DASHBOARD_SHORTCUTS = [
-  {
-    tab: AdminTab.EventMetrics,
-    title: 'Feature activity',
-    description: 'Explore tracked actions and event categories.',
-    help: 'An event is a recorded action, such as sending a message or uploading a file. Event categories group related actions. Counts measure recorded activity, not the number of people using a feature.',
-  },
-  {
-    tab: AdminTab.Analytics,
-    title: 'User activity & reports',
-    description: 'Investigate user activity and read daily or weekly reports.',
-  },
-  {
-    tab: AdminTab.ModelMetrics,
-    title: 'Model performance',
-    description: 'Compare AI model usage, response times, and costs.',
-    help: 'Models are the AI systems that generate responses. Latency means how long a response takes; spend means the cost of using those models.',
-  },
-  {
-    tab: AdminTab.CreditAnalytics,
-    title: 'Credits & costs',
-    description: 'Review credits used, prices charged, and underlying costs.',
-    help: 'Credits are the units used to pay for activity in Bike4Mind. Margins compare what is charged with the underlying cost of providing that activity.',
-  },
-  { tab: AdminTab.Users, title: 'Users', description: 'Find accounts and inspect individual user activity.' },
-  {
-    tab: AdminTab.SystemHealth,
-    title: 'System health',
-    description: 'Check whether the services behind Bike4Mind are working.',
-  },
-] as const;
+const twoColumnSx = { display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, minmax(0, 1fr))' } };
+const threeColumnSx = { display: 'grid', gap: 2, gridTemplateColumns: { xs: '1fr', lg: 'repeat(3, minmax(0, 1fr))' } };
 
-// SectionCard takes no sx, so the grid item stretches it to an equal row height.
-const EQUAL_HEIGHT_ITEM_SX = { display: 'flex', '& > section': { flex: 1 } } as const;
+function Region({ title, help, children }: { title: string; help?: string; children: ReactNode }) {
+  return (
+    <Stack spacing={1}>
+      <Typography level="h2">
+        {title}
+        {help && <AnalyticsTermHelp term={title} description={help} />}
+      </Typography>
+      {children}
+    </Stack>
+  );
+}
+
+function useDashboardData(range: DashboardRange) {
+  const overview = useAnalyticsOverview({ ...ANALYTICS_DEFAULTS, range });
+  const spendRange = useMemo(() => spendWindow(range), [range]);
+  const spend = useSpend(spendRange);
+  const featureRange = useMemo(
+    () => ({ from: new Date(spendRange.dateFrom), to: new Date(spendRange.dateTo) }),
+    [spendRange]
+  );
+  const features = useSpendFeatures({ range: featureRange, audience: 'external' });
+  const revenue = useAdminRevenueTrend();
+  return { overview, spend, features, revenue };
+}
 
 type AdminDashboardTabProps = {
   onNavigate: (tab: AdminTab) => void;
 };
 
 export default function AdminDashboardTab({ onNavigate }: AdminDashboardTabProps) {
-  const additionalDashboards = useMemo(
-    () => premiumRoutes.flatMap(route => (route.adminDashboard ? [{ path: route.path, ...route.adminDashboard }] : [])),
-    []
+  const { currentUser } = useUser();
+  const [range, setRange] = useState<DashboardRange>('7d');
+  const { overview, spend, features, revenue } = useDashboardData(range);
+  const canOpenTab = useCallback((tab: AdminTab) => canOpenAdminTab(currentUser, tab), [currentUser]);
+  const dailyCost = useMemo(
+    () => (spend.data?.dailyCost ?? []).map(point => ({ day: point.date, value: point.cost })),
+    [spend.data]
   );
-  const { data: activity, isLoading, isFetching, isError, refetch } = useAdminActivitySummary();
 
   return (
     // overflowX clip: the Joy Grid negative gutters stick out of this wrapper
     <Stack gap={ADMIN_REGION_GAP} sx={{ overflowX: 'clip' }} data-testid="admin-dashboard">
       <AdminPageHeader
         title="Admin dashboard"
-        description="See how Bike4Mind is being used and jump into the tools behind the numbers."
+        description="What needs a person today, and how Bike4Mind is used, what it costs and what it earns."
+        actions={
+          <SegmentedControl
+            options={DASHBOARD_RANGE_OPTIONS}
+            value={range}
+            onChange={setRange}
+            aria-label="Time range"
+            data-testid="admin-dashboard-range"
+          />
+        }
       />
 
       <AiAdvisoryStrip />
+
+      <Region title="Needs attention">
+        <NeedsAttentionStrip onNavigate={onNavigate} />
+      </Region>
+
       <MorningBriefCard />
-      <CampaignWatchesPanel compact />
 
-      {additionalDashboards.length > 0 && (
-        <Box>
-          <Typography level="h2" sx={{ mb: 1.5 }}>
-            More dashboards
-            <AnalyticsTermHelp
-              term="More dashboards"
-              description="Additional dashboards available from installed features. They may use different metrics and time ranges from this overview."
-            />
-          </Typography>
-          <Grid container spacing={2}>
-            {additionalDashboards.map(dashboard => (
-              <Grid
-                xs={12}
-                sm={additionalDashboards.length === 1 ? 12 : 6}
-                lg={additionalDashboards.length === 1 ? 12 : 4}
-                key={dashboard.path}
-                sx={EQUAL_HEIGHT_ITEM_SX}
-              >
-                <SectionCard
-                  title={dashboard.label}
-                  body="custom"
-                  action={
-                    <Button
-                      component={Link}
-                      to={dashboard.path}
-                      size="sm"
-                      variant="plain"
-                      endDecorator={<ArrowForwardIcon />}
-                      data-testid="admin-dashboard-extension-link"
-                      aria-label={`Open ${dashboard.label}`}
-                    >
-                      Open dashboard
-                    </Button>
-                  }
-                >
-                  <Typography level="body-sm" sx={{ px: 2, py: 1.75 }}>
-                    {dashboard.description}
-                  </Typography>
-                </SectionCard>
-              </Grid>
-            ))}
-          </Grid>
-        </Box>
-      )}
+      <Region title="Jump back in">
+        <JumpBackIn onNavigate={onNavigate} canOpenTab={canOpenTab} />
+      </Region>
 
-      <Stack spacing={1}>
-        <Typography level="h2">
-          Signups
-          <AnalyticsTermHelp
-            term="Signups"
-            description="New accounts, in your local time. Likely legit excludes accounts the suspected-signup signals flag: one strong signal, such as a burst of accounts on one domain, machine-regular signup cadence or bot traffic, or two weaker ones, such as signing up during a signup spike and never coming back. Suspected accounts are counted separately and can be reviewed on the Users tab."
-          />
-        </Typography>
-        <NewSignupsTile onReview={() => onNavigate(AdminTab.Users)} />
-      </Stack>
+      <Region
+        title="Pulse"
+        help="Usage counts external accounts only; cost and credits cover every account, including internal accounts and platform jobs. Each number compares the selected range with the one before it. Usage comes from the nightly analytics rollup (today is live); cost is the provider cost of LLM calls; MRR comes from the daily revenue snapshot."
+      >
+        <PulseSection range={range} overview={overview} spend={spend} revenue={revenue} />
+      </Region>
 
-      <Stack spacing={1}>
-        <Typography level="h2">
-          Client usage
-          <AnalyticsTermHelp
-            term="Client usage"
-            description="A client is an app or tool used to access Bike4Mind. CLI means the command-line app used in a terminal; API means access by other software. Agents perform tasks automatically, while system activity comes from background jobs. Sources can also describe how an action started."
-          />
-        </Typography>
-        <Typography level="body-sm">
-          Compare activity from apps, connected software, and automated tasks. Only activity with a recorded source is
-          included; Mobile is not yet tracked separately. Users may appear in more than one source.
-        </Typography>
-        <UsageBySourceCard />
-      </Stack>
-
-      <Box>
-        <Typography level="h2" sx={{ mb: 1.5 }}>
-          Explore admin
-        </Typography>
-        <Grid container spacing={2}>
-          {DASHBOARD_SHORTCUTS.map(shortcut => (
-            <Grid xs={12} sm={6} lg={4} key={shortcut.tab} sx={EQUAL_HEIGHT_ITEM_SX}>
-              <SectionCard
-                title={shortcut.title}
-                help={
-                  'help' in shortcut ? (
-                    <AnalyticsTermHelp term={shortcut.title} description={shortcut.help} />
-                  ) : undefined
-                }
-                body="custom"
-                action={
-                  <Button
-                    size="sm"
-                    variant="plain"
-                    endDecorator={<ArrowForwardIcon />}
-                    onClick={() => onNavigate(shortcut.tab)}
-                    data-testid={`admin-dashboard-open-${shortcut.tab}`}
-                    aria-label={`Open ${shortcut.title}`}
-                  >
-                    Open
-                  </Button>
-                }
-              >
-                <Typography level="body-sm" sx={{ px: 2, py: 1.75 }}>
-                  {shortcut.description}
-                </Typography>
-              </SectionCard>
-            </Grid>
-          ))}
-        </Grid>
+      <Box sx={twoColumnSx}>
+        <ActiveUsersSection
+          data={overview.data}
+          loading={overview.isLoading}
+          error={overview.isError}
+          onRetry={() => void overview.refetch()}
+        />
+        <SectionCard title="LLM cost per day" body="custom" data-testid="admin-dashboard-cost-chart">
+          <Box sx={{ p: 2 }}>
+            {spend.isLoading ? (
+              <LoadingState label="Loading daily cost" />
+            ) : spend.isError ? (
+              <Typography level="body-sm" color="warning">
+                Daily cost could not be loaded.
+              </Typography>
+            ) : (
+              <DailyAreaChart
+                data={dailyCost}
+                valueLabel="Provider cost"
+                formatValue={value => formatUsd(value)}
+                color="warning"
+                height={220}
+                testid="admin-dashboard-cost-area"
+              />
+            )}
+          </Box>
+        </SectionCard>
       </Box>
 
-      <Stack spacing={2}>
-        <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={2}>
-          <Box>
-            <Typography level="h2">
-              Recent activity
-              <AnalyticsTermHelp
-                term="Recent activity"
-                description="Counts all recorded events in the last seven UTC calendar days, including today. Today is still in progress. One person can generate many events, so these charts cannot establish overall feature adoption. Refresh activity reloads this summary only."
-              />
-            </Typography>
-            <Typography level="body-sm">Last 7 calendar days (UTC), including today</Typography>
-          </Box>
-          <Button
-            variant="outlined"
-            loading={isFetching}
-            onClick={() => void refetch()}
-            data-testid="admin-dashboard-refresh"
-          >
-            Refresh activity
-          </Button>
-        </Stack>
-        <Alert variant="soft" color="neutral">
-          These charts count all recorded events in this window, not distinct people or overall feature adoption. Today
-          is still in progress. Client usage above has its own time range.
-        </Alert>
-        {isLoading && <LinearProgress aria-label="Loading recent activity" />}
-        {isError && (
-          <Alert color="danger" data-testid="admin-dashboard-activity-error">
-            Recent activity could not be loaded. Use Refresh activity to try again.
-          </Alert>
-        )}
-        {!isLoading && !isError && activity?.totalEvents === 0 && (
-          <Typography level="body-md" data-testid="admin-dashboard-activity-empty">
-            No tracked activity in the last 7 calendar days (UTC).
-          </Typography>
-        )}
-        {!isLoading && activity && activity.totalEvents > 0 && (
-          <OverviewTab chartData={activity} showUsageBySource={false} isCompleteWindow />
-        )}
-      </Stack>
+      <Box sx={threeColumnSx}>
+        <TopFeaturesCard features={features} onNavigate={onNavigate} />
+        <ModelsByCostCard spend={spend} onNavigate={onNavigate} />
+        <TopAccountsCard spend={spend} onNavigate={onNavigate} />
+      </Box>
+
+      <Box sx={twoColumnSx}>
+        <PlatformHealthCard range={range} spend={spend} onNavigate={onNavigate} />
+        <RevenueMovementCard range={range} revenue={revenue} onNavigate={onNavigate} />
+      </Box>
+
+      <Region
+        title="Signups"
+        help="New accounts, in your local time. Likely legit excludes accounts the suspected-signup signals flag: one strong signal, such as a burst of accounts on one domain, machine-regular signup cadence or bot traffic, or two weaker ones, such as signing up during a signup spike and never coming back. Suspected accounts are counted separately and can be reviewed on the Users tab."
+      >
+        <NewSignupsTile onReview={() => onNavigate(AdminTab.Users)} />
+      </Region>
     </Stack>
   );
 }
