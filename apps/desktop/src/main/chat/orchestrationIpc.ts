@@ -6,7 +6,7 @@ import type { ChatService } from './ChatService';
 
 export function registerOrchestrationIpc(
   ipc: Pick<IpcMain, 'handle'>,
-  service: Pick<ChatService, 'getRolePolicy' | 'setRolePolicy' | 'actOnTask' | 'listTaskDecisions'>
+  service: Pick<ChatService, 'getRolePolicy' | 'setRolePolicy' | 'actOnTask'>
 ): void {
   ipc.handle(IPC_CHANNELS.chatGetRolePolicy, () => service.getRolePolicy());
   ipc.handle(IPC_CHANNELS.chatSetRolePolicy, (_event, value: unknown) =>
@@ -17,5 +17,4 @@ export function registerOrchestrationIpc(
     if (action.kind === 'report') throw new Error('Only the worker reports its own evidence.');
     return service.actOnTask(null, z.uuid().parse(sessionId), action);
   });
-  ipc.handle(IPC_CHANNELS.chatListTaskDecisions, () => service.listTaskDecisions());
 }
