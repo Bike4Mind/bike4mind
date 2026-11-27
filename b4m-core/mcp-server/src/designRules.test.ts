@@ -1,0 +1,75 @@
+import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import { checkToolDesign } from './designRules';
+import { envelope, fail, ok, paginationInput, pending, resourceLink, UNTRUSTED_NOTE } from './results';
+import { defineTool, type Tool } from './tool';
+
+const good = defineTool({
+  name: 'get_thing',
+  title: 'Get thing',
+  description: 'Gets a thing.',
+  toolset: 'about',
+  scope: null,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  inputSchema: { id: z.string() },
+  outputSchema: envelope(z.object({ id: z.string() })),
+  handler: async () => ok({ id: 'x' }),
+});
+
+const mutate = (patch: Record<string, unknown>): Tool => ({ ...good, ...patch }) as Tool;
+
+describe('checkToolDesign', () => {
+  it('accepts a conforming tool', () => expect(checkToolDesign(good)).toEqual([]));
+
+  it.each([
+    ['name', { name: 'getThing' }, /verb_noun/],
+    ['single-word name', { name: 'thing' }, /verb_noun/],
+    ['title', { title: ' ' }, /title/],
+    [
+      'missing hint',
+      { annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true } },
+      /openWorldHint/,
+    ],
+    ['outputSchema', { outputSchema: {} }, /outputSchema/],
+    ['long description', { description: 'x'.repeat(601) }, /600/],
+    ['confirm input', { inputSchema: { confirm: z.boolean() } }, /confirm/],
+    ['confirm_delete input', { inputSchema: { confirm_delete: z.boolean() } }, /confirm/],
+    [
+      'untrusted output without note',
+      { outputSchema: envelope(z.object({ items: z.array(z.object({ untrusted_body: z.string() })) })) },
+      /untrusted_/,
+    ],
+    ['list without limit', { name: 'list_things', inputSchema: {} }, /limit/],
+    ['list with wrong default', { name: 'list_things', inputSchema: { limit: z.number().default(50) } }, /limit/],
+    ['cursor without limit', { inputSchema: { cursor: z.string().optional() } }, /limit/],
+  ])('flags %s', (_name, patch, re) => {
+    expect(checkToolDesign(mutate(patch)).join('\n')).toMatch(re);
+  });
+
+  it('accepts untrusted output with the note, and a paginated list', () => {
+    const t = mutate({
+      name: 'list_things',
+      description: `Lists. ${UNTRUSTED_NOTE}`,
+      inputSchema: paginationInput,
+      outputSchema: envelope(z.object({ untrusted_title: z.string().optional() })),
+    });
+    expect(checkToolDesign(t)).toEqual([]);
+  });
+});
+
+describe('result helpers', () => {
+  it('ok puts the same JSON in structuredContent and text', () => {
+    const r = ok({ a: 1 }, [resourceLink('https://x.test/p/r/a', 'page', 'text/html')]);
+    expect(JSON.parse((r.content[0] as { text: string }).text)).toEqual(r.structuredContent);
+    expect(r.content[1]).toEqual({
+      type: 'resource_link',
+      uri: 'https://x.test/p/r/a',
+      name: 'page',
+      mimeType: 'text/html',
+    });
+  });
+  it('fail is an error and pending carries the job', () => {
+    expect(fail('bad').isError).toBe(true);
+    expect(pending('confirmation:abc').structuredContent).toMatchObject({ status: 'pending', job: 'confirmation:abc' });
+  });
+});
