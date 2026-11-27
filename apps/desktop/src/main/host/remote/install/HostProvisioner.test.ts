@@ -138,11 +138,50 @@ describe('HostProvisioner.beforeConnect', () => {
     expect((error as HostConnectError).failure.kind).toBe('sshFailed');
   });
 
-  it('fails a machine that cannot run the host program', async () => {
-    const { provisioner } = setup(machine({ node: { path: '/usr/bin/node', version: 'v20.0.0', major: 20 } }));
+  it('fails a machine without the host program that cannot install it', async () => {
+    const { provisioner } = setup(
+      machine({
+        node: { path: '/usr/bin/node', version: 'v20.0.0', major: 20 },
+        launcher: { state: 'absent' },
+        installedVersions: [],
+      })
+    );
     const error = await provisioner.beforeConnect('h1', 'box').catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(HostConnectError);
     expect((error as HostConnectError).failure.kind).toBe('nodeTooOld');
+  });
+
+  it.each([
+    ['missing', null],
+    ['too old', { path: '/usr/bin/node', version: 'v22.1.0', major: 22 }],
+  ] as const)(
+    'connects to a running daemon of another version when the login shell Node.js is %s',
+    async (_name, node) => {
+      const { provisioner, installer } = setup(machine({ node, daemon: { state: 'running', version: '1.0.0' } }), {
+        consent: true,
+      });
+      await expect(provisioner.beforeConnect('h1', 'box')).resolves.toBeUndefined();
+      expect(installer.install).not.toHaveBeenCalled();
+    }
+  );
+
+  it('connects to an installed build whose own Node.js still runs when the login shell one changed', async () => {
+    const { provisioner, installer } = setup(
+      machine({ node: { path: '/usr/bin/node', version: 'v22.1.0', major: 22 } }),
+      {
+        consent: true,
+      }
+    );
+    await expect(provisioner.beforeConnect('h1', 'box')).resolves.toBeUndefined();
+    expect(installer.install).not.toHaveBeenCalled();
+  });
+
+  it('fails a broken installed build on a machine that cannot install', async () => {
+    const { provisioner } = setup(machine({ node: null, launcher: { state: 'fails', exitCode: 9 } }), {
+      consent: true,
+    });
+    const error = await provisioner.beforeConnect('h1', 'box').catch((caught: unknown) => caught);
+    expect((error as HostConnectError).failure.kind).toBe('nodeMissing');
   });
 
   it('retries when ssh fails, and connects anyway when the probe answer is unreadable', async () => {
@@ -308,6 +347,37 @@ describe('HostProvisioner.install and update', () => {
     });
     expect(installer.install).toHaveBeenCalledTimes(1);
     expect(installer.stopDaemon).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a Node.js blocker on update and leaves the host usable on its build', async () => {
+    const old = machine({ node: null, daemon: { state: 'running', version: '1.0.0' } });
+    const { provisioner, installer, runningWork, reconnect } = setup(old);
+    await provisioner.beforeConnect('h1', 'box');
+    await expect(provisioner.update('h1', { force: false })).resolves.toMatchObject({
+      status: 'failed',
+      failure: { kind: 'nodeMissing', detail: expect.stringContaining('login shell') },
+    });
+    expect(runningWork).not.toHaveBeenCalled();
+    expect(installer.install).not.toHaveBeenCalled();
+    expect(installer.stopDaemon).not.toHaveBeenCalled();
+    expect(reconnect).not.toHaveBeenCalled();
+    await provisioner.beforeConnect('h1', 'box');
+    expect(installer.probe).toHaveBeenCalledTimes(2);
+  });
+
+  it('restarts behind an active build even when the login shell Node.js changed', async () => {
+    const { provisioner, installer } = setup(
+      machine({
+        node: null,
+        launcher: { state: 'works', version: VERSION },
+        daemon: { state: 'running', version: '1.0.0' },
+      })
+    );
+    await expect(provisioner.update('h1', { force: false })).resolves.toMatchObject({
+      status: 'installed',
+      restarted: true,
+    });
+    expect(installer.stopDaemon).toHaveBeenCalled();
   });
 
   it('reports failures as a result and as progress', async () => {

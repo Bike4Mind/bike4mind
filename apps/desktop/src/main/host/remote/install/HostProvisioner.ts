@@ -134,15 +134,22 @@ export class HostProvisioner {
       this.ready.add(hostId);
       return;
     }
+    // The blocker judges the Node.js the login shell finds now, which only an install uses; the
+    // launcher and a daemon it started run the Node.js written into the launcher at install time.
     const blocker = installBlocker(probe, alias);
     const blocking = blocker && asConnectFailure(blocker);
-    if (blocking) throw new HostConnectError(blocking);
-    if (probe.launcher.state === 'absent') throw new HostNeedsUserError({ status: 'needsInstall' });
-    if (probe.daemon.state !== 'none') {
-      // A daemon of another version: connect to it as it is rather than stop its work.
+    if (probe.launcher.state === 'absent') {
+      if (blocking) throw new HostConnectError(blocking);
+      throw new HostNeedsUserError({ status: 'needsInstall' });
+    }
+    if (probe.daemon.state !== 'none' || (blocker && probe.launcher.state === 'works')) {
+      // A daemon of another version, or an older build that still runs where no install can:
+      // connect to it as it is rather than stop its work or refuse a host that works.
+      if (blocker) this.options.log(`HOST ${hostId}: connecting to the installed host program; ${blocker.detail}`);
       this.ready.add(hostId);
       return;
     }
+    if (blocking) throw new HostConnectError(blocking);
 
     const consent = this.options.hosts.installTarget(hostId)?.installConsent === true;
     if (consent) {
@@ -184,11 +191,12 @@ export class HostProvisioner {
       const artifact = await this.artifact();
       emit({ phase: 'probing' });
       const probe = await installer.probe(alias);
-      const blocker = installBlocker(probe, alias);
-      if (blocker) throw new HostInstallError(blocker);
-
       const active = activeIs(probe, version);
       const restart = otherDaemonRuns(probe, version);
+      // Only an install needs the login shell's Node.js; nothing has changed yet, so the host
+      // stays usable on the build it has.
+      const blocker = active ? null : installBlocker(probe, alias);
+      if (blocker) throw new HostInstallError(blocker);
       if (active && !restart) {
         this.ready.add(hostId);
         emit({ phase: 'done', version });
