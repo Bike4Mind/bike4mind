@@ -45,13 +45,14 @@ describe('shellApproval command shape', () => {
   it('offers a shape for a command the scan cannot follow, keyed to its folder', async () => {
     const prompt = await approve(unfollowed);
     expect(prompt.unchecked).toBe(true);
-    expect(prompt.always?.shape).toBe(`${project}\x00tmp=$(mktemp) && git diff > "\x00" && wc -l "\x00"`);
+    expect(prompt.always?.shape).toBe(`${project}\x00tmp=$(mktemp) && git diff > "\x00tmp\x00" && wc -l "\x00tmp\x00"`);
   });
 
-  it('covers the same command with a different variable once allowed in this chat', async () => {
+  it('covers the same command however its variables are spelled once allowed in this chat', async () => {
     const gate = new ApprovalGate();
     await allowInChat(gate, await approve(unfollowed));
-    expect(covered(gate, await approve('tmp=$(mktemp) && git diff > "$tmp" && wc -l "$TMPDIR"'))).toBe(true);
+    expect(covered(gate, await approve('tmp=$(mktemp) && git diff > "${tmp}" && wc -l "${tmp}"'))).toBe(true);
+    expect(covered(gate, await approve('tmp=$(mktemp) && git diff > "$tmp" && wc -l "$TMPDIR"'))).toBe(false);
   });
 
   it('does not cover the same command with another structure or program', async () => {

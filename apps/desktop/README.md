@@ -1225,6 +1225,8 @@ a deny refuses the call, while an allow still requires the tool's interactive re
 
 The approval card's "Allow in this chat" remembers consent for this conversation; it is
 kept with the conversation across restarts and dropped when the conversation is deleted.
+For a shell command Desktop cannot follow, it also covers the same command with its variables
+spelled another way (`$X` or `${X}`), in the same folder; any other change asks again.
 "Always allow" saves the displayed allow rules in Settings -> Permissions, and also
 answers waiting cards those rules cover. For web fetches, both buttons cover every site;
 the saved rule is `WebFetch`.

@@ -128,6 +128,25 @@ describe('ApprovalGate persisted chat allowances', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('disk on fire'));
   });
 
+  it('never overwrites a record it could not read, and reads it once it can', async () => {
+    const store = memoryStore();
+    await answer(new ApprovalGate(undefined, store), 's', 'web_fetch:https://a', { decision: 'always' });
+    const load = store.loadChatAllowances;
+    store.loadChatAllowances = async () => {
+      throw new Error('busy');
+    };
+    const next = new ApprovalGate(undefined, store, vi.fn());
+    await next.ready('s');
+    await answer(next, 's', 'web_fetch:https://b', { decision: 'always' });
+    store.loadChatAllowances = load;
+
+    expect((await relaunch(store, 's')).isStanding('s', 'web_fetch:https://a')).toEqual({});
+    await next.ready('s');
+    await next.flush('s');
+    expect(next.isStanding('s', 'web_fetch:https://a')).toEqual({});
+    expect((await relaunch(store, 's')).isStanding('s', 'web_fetch:https://b')).toEqual({});
+  });
+
   it('records nothing for an answer the gate does not remember', async () => {
     const store = memoryStore();
     const gate = new ApprovalGate(undefined, store);
@@ -179,20 +198,21 @@ describe('ApprovalGate persisted chat allowances', () => {
       return gate.coversShape(sessionId, always.namespace, always.shape ?? '');
     };
 
-    it('covers the same command with a different variable, after a reload too', async () => {
+    it('covers the same command with its variables spelled another way, after a reload too', async () => {
       const store = memoryStore();
       const gate = new ApprovalGate(undefined, store);
       await answer(gate, 's', 'k', { decision: 'always' }, { always: shaped('git push origin "$BRANCH"') });
 
-      expect(covers(gate, 's', 'git push origin "$OTHER"')).toBe(true);
+      expect(covers(gate, 's', 'git push origin "${BRANCH}"')).toBe(true);
       const next = await relaunch(store, 's');
-      expect(covers(next, 's', 'git push origin "${OTHER}"')).toBe(true);
+      expect(covers(next, 's', 'git push origin "${BRANCH}"')).toBe(true);
     });
 
     it('does not cover a change in structure, another folder, tool or conversation', async () => {
       const gate = new ApprovalGate(undefined, memoryStore());
       await answer(gate, 's', 'k', { decision: 'always' }, { always: shaped('git push origin "$BRANCH"') });
 
+      expect(covers(gate, 's', 'git push origin "$OTHER"')).toBe(false);
       expect(covers(gate, 's', 'git push origin "$BRANCH" && rm -rf ~')).toBe(false);
       expect(covers(gate, 's', 'git push --force origin "$BRANCH"')).toBe(false);
       expect(covers(gate, 's', 'git push origin "$BRANCH" > out')).toBe(false);

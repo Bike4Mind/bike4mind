@@ -1,15 +1,18 @@
 /**
- * The shape of a shell command: its source with each run-time word (`$VAR`, `${VAR}`, `$1`, and
- * the same inside double quotes) replaced by a placeholder, and everything else kept as written.
- * Two commands share a shape when they differ only in which variables they read, so an
- * "Allow in this chat" for a command the scan cannot follow also covers the next call that
- * passes a different value. Operators, programs, literal arguments, redirections and the code
- * inside `$(...)` and backticks are all kept, so any change to them is a different shape.
+ * The shape of a shell command: its source with each variable read (`$VAR`, `${VAR}`, `$1`, and
+ * the same inside double quotes) written as one placeholder that keeps the variable's name, and
+ * everything else kept as written. Two commands share a shape when they read the same variables
+ * however those are spelled, so the run-time values may differ but which variable feeds which
+ * argument never does. Operators, programs, literal arguments, redirections and the code inside
+ * `$(...)` and backticks are all kept, so any change to them is a different shape.
  *
  * Null when the command holds anything this does not fully follow (arithmetic, `${...}` with an
- * operator, ANSI-C quoting, unbalanced quotes or substitutions): no shape means no shape allowance.
+ * operator, ANSI-C quoting, comments, heredocs, unbalanced quotes or substitutions): no shape
+ * means no shape allowance.
  */
 export const SHAPE_PLACEHOLDER = '\x00';
+
+const placeholder = (name: string) => `${SHAPE_PLACEHOLDER}${name}${SHAPE_PLACEHOLDER}`;
 
 type Context = 'plain' | 'double' | 'substitution' | 'backtick';
 
@@ -47,13 +50,13 @@ export function commandShape(command: string): string | null {
       if (next === '{') {
         const braced = BRACED.exec(rest.slice(1));
         if (!braced) return null;
-        shape += SHAPE_PLACEHOLDER;
+        shape += placeholder(braced[1] ?? '');
         index += 1 + braced[0].length;
         continue;
       }
       const name = NAME.exec(rest.slice(1)) ?? SPECIAL.exec(rest.slice(1));
       if (name) {
-        shape += SHAPE_PLACEHOLDER;
+        shape += placeholder(name[0]);
         index += 1 + name[0].length;
         continue;
       }
@@ -68,6 +71,9 @@ export function commandShape(command: string): string | null {
       index += 1;
       continue;
     }
+    // A comment or heredoc body is text this does not track quotes in.
+    if (char === '#' && (shape === '' || /[\s;&|()]$/.test(shape))) return null;
+    if (char === '<' && command[index + 1] === '<') return null;
     if (char === "'") {
       const close = command.indexOf("'", index + 1);
       if (close === -1) return null;

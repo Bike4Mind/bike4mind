@@ -5175,6 +5175,8 @@ export class ChatService {
         modelOption?.supportsTools === false ? [] : filterEvaluationTools(offeredTools(granted));
       let tools = toolsFor(roots);
       this.deps.approvals?.setParent(session.id, session.origin?.parentSessionId);
+      // Before any tool runs: a browser tool checks its standing consent without going through awaitApproval.
+      await this.deps.approvals?.ready(session.id);
       const directoryTurn: DirectoryTurn = {
         declined: [],
         granted: [],

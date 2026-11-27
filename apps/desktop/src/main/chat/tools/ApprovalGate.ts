@@ -180,6 +180,9 @@ export class ApprovalGate {
   /** Keys revoked before the session's stored allowances were read; applied once they are. */
   private readonly revokedBeforeLoad = new Map<string, Set<string>>();
 
+  /** Sessions with an allowance given while their stored record could not be read; saved once it is. */
+  private readonly unsaved = new Set<string>();
+
   /** Deleted conversations: nothing is read into or written for them again. Ids are never reused. */
   private readonly forgotten = new Set<string>();
 
@@ -442,6 +445,7 @@ export class ApprovalGate {
     this.loads.clear();
     this.loaded.clear();
     this.revokedBeforeLoad.clear();
+    this.unsaved.clear();
   }
 
   private load(sessionId: string): Promise<void> {
@@ -454,16 +458,18 @@ export class ApprovalGate {
         try {
           stored = await store.loadChatAllowances(sessionId);
         } catch (error) {
+          // Left unloaded, so a later save cannot overwrite a record that may still be readable; retried on next ready.
           this.warn(`APPROVALS: could not read allowances for ${sessionId}: ${String(error)}`);
+          this.loads.delete(sessionId);
+          return;
         }
         if (this.forgotten.has(sessionId)) return;
         if (stored !== null && stored !== undefined) this.merge(sessionId, stored);
         this.loaded.add(sessionId);
         const held = this.revokedBeforeLoad.get(sessionId);
         this.revokedBeforeLoad.delete(sessionId);
-        if (held && [...held].map(key => this.revokeLoaded(sessionId, key)).some(Boolean)) {
-          this.persist(sessionId);
-        }
+        const revoked = !!held && [...held].map(key => this.revokeLoaded(sessionId, key)).some(Boolean);
+        if (revoked || this.unsaved.delete(sessionId)) this.persist(sessionId);
       })();
       this.loads.set(sessionId, pending);
     }
@@ -530,6 +536,10 @@ export class ApprovalGate {
     void this.enqueue(sessionId, async () => {
       await this.load(sessionId);
       if (this.forgotten.has(sessionId)) return;
+      if (!this.loaded.has(sessionId)) {
+        this.unsaved.add(sessionId);
+        return;
+      }
       const record = this.snapshot(sessionId);
       if (record.answers.length === 0 && record.shell.length === 0) await store.deleteChatAllowances(sessionId);
       else await store.saveChatAllowances(sessionId, record);
