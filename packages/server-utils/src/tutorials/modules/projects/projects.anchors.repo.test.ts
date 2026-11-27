@@ -7,10 +7,11 @@ import { PROJECTS_STEPS } from './steps';
 // client: a renamed testid would otherwise drop the ring and the dock clearance with every test still green.
 const repoRoot = path.resolve(__dirname, '../../../../../..');
 const CLIENT_APP = 'apps/client/app';
+const SIDENAV_NAV = `${CLIENT_APP}/components/layouts/Notebook/Sidenav/SidenavNav.tsx`;
 
-function clientHas(pattern: string): boolean {
+function clientHas(pattern: string, where = CLIENT_APP): boolean {
   try {
-    execFileSync('git', ['grep', '-q', '-E', pattern, '--', CLIENT_APP, ':!*.test.*'], { cwd: repoRoot });
+    execFileSync('git', ['grep', '-q', '-E', pattern, '--', where, ':!*.test.*'], { cwd: repoRoot });
     return true;
   } catch (error) {
     // git grep exits 1 when nothing matches; anything else is a real failure.
@@ -39,8 +40,9 @@ describe('the projects tutorial selectors', () => {
 
   // Built from a template in SidenavNav.tsx, so it never appears as a literal. Bracket classes, not backslash
   // escapes: GNU grep reads a backslash-backtick as an anchor, so that pattern never matches on Linux CI.
+  // Both halves search SidenavNav.tsx only: other files have their own `key: 'projects'` items.
   it('finds the side menu Projects row the open step points at', () => {
-    expect(clientHas('data-testid=[{][`]sidenav-nav-[$][{]item[.]key[}][`][}]')).toBe(true);
-    expect(clientHas(`key: ['"]projects['"]`)).toBe(true);
+    expect(clientHas('data-testid=[{][`]sidenav-nav-[$][{]item[.]key[}][`][}]', SIDENAV_NAV)).toBe(true);
+    expect(clientHas(`key: ['"]projects['"]`, SIDENAV_NAV)).toBe(true);
   });
 });
