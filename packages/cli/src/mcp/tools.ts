@@ -247,6 +247,8 @@ const SCOPE_ALTERNATES: Record<string, readonly string[]> = {
   'notebooks:read': ['notebooks:write'],
   'datalake:read': ['datalake:write', 'datalake:query'],
   'artifacts:publish': [ApiKeyScope.ADMIN],
+  'bob:read': ['bob:run', ApiKeyScope.ADMIN],
+  'bob:run': [ApiKeyScope.ADMIN],
 };
 
 /**
@@ -256,7 +258,7 @@ const SCOPE_ALTERNATES: Record<string, readonly string[]> = {
 const TOOL_ALTERNATES: Record<string, readonly string[]> = {
   get_file: ['ai:generate'],
   send_message: ['ai:generate'],
-  list_notebooks: ['notebooks:write', ApiKeyScope.ADMIN],
+  list_notebooks: [...SCOPE_ALTERNATES['notebooks:read'], ApiKeyScope.ADMIN],
 };
 
 /** Tools whose calls reach a second route: the key must also hold one of these, beside the tool's own scope. */
