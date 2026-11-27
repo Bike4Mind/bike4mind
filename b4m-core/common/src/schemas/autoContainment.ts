@@ -128,7 +128,10 @@ export const autoContainmentDecisionItemSchema = z.object({
   releaseReason: z.string().nullable().prefault(null),
   /** Rows written before link rules were all decided by the model. */
   decidedBy: z.enum(INTERVENTION_DECIDERS).prefault('model'),
-  /** The link rules that fired for the decision's accounts, whoever decided it. */
+  /**
+   * On graduated rows, the link rules that fired for the decision's accounts, whoever decided it; empty when
+   * none fired or no rule could act, so their facts were never loaded. Contain rows leave it empty.
+   */
   linkRules: z.array(z.enum(LINK_RULES)).prefault([]),
   /** The model's own judgment on graduated rows, so abstention on rule-decided cases is measurable. */
   modelJudgment: z

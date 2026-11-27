@@ -1,3 +1,4 @@
+import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { emailDomainCandidates, type AutoContainmentConfig, type LinkRuleFacts } from '@bike4mind/common';
 import {
   loadDeviceLinkAccounts,
@@ -8,10 +9,12 @@ import {
 } from '@bike4mind/database';
 import type { IUserSpendProfile, UserAccountRiskProfile, UserSignupLinkCandidate } from '@bike4mind/database';
 import type { Logger } from '@bike4mind/observability';
+import { Resource } from 'sst';
 import { getActiveSubscriptionsForUser } from '../../entitlements/activeSubscriptions';
 import { hasPaidSubscription, hasPurchasedCredits } from '../../entitlements/paidStanding';
 import { accountLinkKeys } from '../accountLinkSignals';
 import { LINK_CANDIDATE_LIMIT } from '../abuseAssessment/accountProfile';
+import { emitMetric } from '../../utils/cloudwatch';
 import { DEFAULT_DEVICE_LINK_CONFIG, evaluateDeviceLinks, liveDeviceLinkReaders } from './deviceLinkEvaluation';
 
 /**
@@ -23,7 +26,10 @@ import { DEFAULT_DEVICE_LINK_CONFIG, evaluateDeviceLinks, liveDeviceLinkReaders 
  */
 
 const HOUR_MS = 60 * 60 * 1000;
-/** Same fallback as the assessment's account profile (abuseAssessment/accountProfile.ts) when the strong-link rule is off (0). */
+/**
+ * Same fallback as the assessment's account profile (abuseAssessment/accountProfile.ts) when the
+ * strong-link rule is off (0).
+ */
 const DEFAULT_LINK_WINDOW_HOURS = 72;
 
 export type BannedDeviceLinks = Map<string, { blockedUserId: string }[]>;
@@ -39,6 +45,8 @@ export type LinkRuleFactsDeps = {
   spendProfileByUsers: (ids: string[], since: Date) => Promise<Record<string, IUserSpendProfile>>;
   /** Per account, the banned accounts it shares an uncommon, corroborated device with. */
   bannedDeviceLinks: (ids: string[], config: AutoContainmentConfig) => Promise<BannedDeviceLinks>;
+  /** Counts a failed fact read, so a persistent failure that quietly turns its rule off is visible. Never throws. */
+  recordFactFailure: (fact: string) => Promise<void>;
 };
 
 export const liveLinkRuleFactsDeps: LinkRuleFactsDeps = {
@@ -61,6 +69,14 @@ export const liveLinkRuleFactsDeps: LinkRuleFactsDeps = {
     );
     return new Map([...results].map(([id, result]) => [id, result.linked ? result.matches : []]));
   },
+  recordFactFailure: fact =>
+    emitMetric(
+      'Lumina5/AutoContainment',
+      'LinkRuleFactFailures',
+      1,
+      { Stage: Resource.App.stage, Fact: fact },
+      StandardUnit.Count
+    ),
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -86,6 +102,7 @@ export async function loadLinkRuleFacts(
         fact,
         errorName: error instanceof Error ? error.name : typeof error,
       });
+      await deps.recordFactFailure(fact);
       return fallback;
     }
   };
@@ -121,7 +138,8 @@ export async function loadLinkRuleFacts(
       return {
         userId: account.id,
         paying: await payingOf(account.id, stamps, deps, read),
-        // An account with no email cannot be checked against partner domains and reads false, so only the device rule can still fire for it.
+        // An account with no email cannot be checked against partner domains and reads false, so only
+        // the device rule can still fire for it.
         partnerDomain: email ? await read('partnerDomain', () => deps.isOrganizationDomain(email), true) : false,
         // No spend read leaves every account at zero, which no spend-gated rule fires on.
         creditsSpent: account.createdAt ? spentOf(account.id) : 0,
@@ -156,7 +174,10 @@ async function payingOf(
   return subscriptions === null || hasPaidSubscription(subscriptions);
 }
 
-/** Accounts on the same owned mail domain that signed up within the window of this one; null when it has none to share. */
+/**
+ * Accounts on the same owned mail domain that signed up within the window of this one; null when it
+ * has none to share.
+ */
 async function domainClusterOf(
   account: UserAccountRiskProfile,
   windowHours: number,

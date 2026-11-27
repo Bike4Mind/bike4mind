@@ -3,6 +3,13 @@ import type { IUserSpendProfile, UserAccountRiskProfile, UserSignupLinkCandidate
 import { describe, expect, it, vi } from 'vitest';
 import { loadLinkRuleFacts, type LinkRuleFactsDeps } from './linkRuleFacts';
 
+// Plan price ids come from per-stage env vars, so which price counts as paid is a fixture.
+vi.mock('../../entitlements/paidStanding', async importOriginal => ({
+  ...(await importOriginal<typeof import('../../entitlements/paidStanding')>()),
+  hasPaidSubscription: (subscriptions: readonly { priceId: string }[]) =>
+    subscriptions.some(subscription => subscription.priceId === 'price_paid'),
+}));
+
 const HOUR_MS = 60 * 60 * 1000;
 const SIGNUP = new Date('2026-11-20T10:00:00Z');
 const config = AutoContainmentConfigSchema.parse({});
@@ -50,6 +57,7 @@ function makeDeps(over: Partial<LinkRuleFactsDeps> = {}): LinkRuleFactsDeps {
     findSignupLinkCandidates: vi.fn(async () => []),
     spendProfileByUsers: vi.fn(async () => ({})),
     bannedDeviceLinks: vi.fn(async () => new Map()),
+    recordFactFailure: vi.fn(async () => undefined),
     ...over,
   };
 }
@@ -124,6 +132,19 @@ describe('loadLinkRuleFacts', () => {
     });
     expect((await loadLinkRuleFacts(['u1'], config, purchased))[0].paying).toBe(true);
     expect(purchased.findActiveSubscriptions).not.toHaveBeenCalled();
+
+    const subscribed = makeDeps({ findActiveSubscriptions: vi.fn(async () => [{ priceId: 'price_paid' }]) });
+    expect((await loadLinkRuleFacts(['u1'], config, subscribed))[0].paying).toBe(true);
+    expect(subscribed.findActiveSubscriptions).toHaveBeenCalledWith('u1');
+
+    const unpaid = makeDeps({ findActiveSubscriptions: vi.fn(async () => [{ priceId: 'price_free' }]) });
+    expect((await loadLinkRuleFacts(['u1'], config, unpaid))[0].paying).toBe(false);
+  });
+
+  it('reads a partner domain from the organization-domain lookup', async () => {
+    const deps = makeDeps({ isOrganizationDomain: vi.fn(async () => true) });
+    expect((await loadLinkRuleFacts(['u1'], config, deps))[0].partnerDomain).toBe(true);
+    expect(deps.isOrganizationDomain).toHaveBeenCalledWith('u1@corp-example.com');
   });
 
   it('counts distinct banned device accounts outside the detection', async () => {
@@ -170,6 +191,9 @@ describe('loadLinkRuleFacts', () => {
       bannedSameDevice: null,
     });
     expect(logger.warn).toHaveBeenCalled();
+    expect(new Set(vi.mocked(deps.recordFactFailure).mock.calls.map(([fact]) => fact))).toEqual(
+      new Set(['paying', 'bannedSameDevice', 'creditsSpent', 'partnerDomain', 'heldSignupDomain'])
+    );
 
     const noAccounts = makeDeps({ findAccountRiskProfiles: vi.fn(boom) });
     expect(await loadLinkRuleFacts(['u1'], config, noAccounts, logger)).toEqual([]);

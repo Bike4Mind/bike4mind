@@ -377,6 +377,35 @@ describe('decideIntervention link rules', () => {
     expect(decide({ assessment: over })).toMatchObject({ kind: 'act', decidedBy: 'link_rule' });
   });
 
+  it.each([
+    ['confident', { confidence: 0.9 }],
+    ['unconfident', { confidence: 0.2 }],
+    ['stale', { assessedAt: new Date(NOW.getTime() - 25 * HOUR_MS) }],
+    ['confidence-less', { confidence: null }],
+  ])('never overrides a %s legitimate_automation judgment', (_label, over) => {
+    const decision = decide({ assessment: { result: 'legitimate_automation', ...over } });
+    expect(decision).toMatchObject({ kind: 'skip', tier: 'limit' });
+  });
+
+  it('never overrides a legitimate_automation judgment on a contain detection', () => {
+    const decision = decide({
+      detection: { wouldAction: 'contain' },
+      assessment: { result: 'legitimate_automation', confidence: 0.9 },
+      linkFacts: [facts({ bannedSameDevice: 4, adminHeldDomain: 'held.example' })],
+    });
+    expect(decision).toEqual({ kind: 'skip', why: 'not_abuse', tier: 'contain' });
+  });
+
+  it("decides on the rule tier when the detection's own mapped tier is off", () => {
+    const limitOnly = tiersOn({ tiers: { limit: { mode: 'shadow', rolloutPercent: 100 } } });
+    expect(decide({ detection: { wouldAction: 'restrict' }, config: limitOnly })).toMatchObject({
+      kind: 'act',
+      tier: 'limit',
+      decidedBy: 'link_rule',
+      linkRules: ['sharedOwnedDomain'],
+    });
+  });
+
   it('keeps a model act as decided by the model, noting the rules that also fired', () => {
     expect(decide({ assessment: { result: 'abuse', confidence: 0.95 } })).toMatchObject({
       kind: 'act',

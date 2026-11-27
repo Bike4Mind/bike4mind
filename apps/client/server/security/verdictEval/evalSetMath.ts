@@ -22,6 +22,7 @@ import {
   Scoreboard,
   cohortRowsFrom,
   ratio,
+  containmentVariant,
   type EvalDecision,
   type Label,
   type Prediction,
@@ -318,11 +319,7 @@ export function gradeEvalSet(
     {
       grader: 'containment' as const,
       predictions: latestPredictions(
-        newestPerVariant(
-          predictions.decisions,
-          row => row.mode,
-          row => row.decidedAt
-        ),
+        newestPerVariant(predictions.decisions, containmentVariant, row => row.decidedAt),
         row => CONTAINMENT_PREDICTIONS[row.outcome]
       ),
     },

@@ -47,9 +47,11 @@ it already contained. A Contain with no eligible account (admins, deleted users)
 
 ## Link rules
 
-When the model does not act (unknown, stale, not abuse, or below `minConfidence`), on a graduated or a
-Contain detection, deterministic rules in `linkRules.ts` may decide Limit or Hold signup grant instead,
-under the same mode, tier, review-only, verdict, account-count and rollout gates. Facts are loaded
+When the model abstains (unknown, stale, `insufficient_evidence`, or below `minConfidence`) or the tier
+the detection maps to is off, on a graduated or a Contain detection, deterministic rules in `linkRules.ts`
+may decide Limit or Hold signup grant instead, under the same mode, rule-tier, review-only, verdict,
+account-count and rollout gates. A `legitimate_automation` judgment is a positive call, not an
+abstention, so a rule never overrides it, whatever its confidence or age. Facts are loaded
 by `packages/server-utils/src/security/autoContainment/linkRuleFacts.ts`, failing closed per fact.
 Paying and partner-domain accounts are never touched, and a rule never decides Contain. A rule's tier is
 independent of the tier the detector's action maps to, so a rule may decide Limit on a detection whose own
@@ -62,8 +64,14 @@ mapping is a lighter tier (holdGrant, review, verify).
 | `heldSignupDomain`  | The address's domain (or a parent) was confirmed blocked by an admin, not by automation.      | holdGrant                         |
 
 Decisions record `decidedBy` (`model` or `link_rule`), the fired `linkRules`, and the model's own
-`modelJudgment`, so model abstention on rule-decided cases is measurable. `linkRules.enabled`
-(default on) turns the rules off.
+`modelJudgment`, so model abstention on rule-decided cases is measurable. A rule-decided row's `confidence`
+is still the model's, so verdict grading scores those rows as their own `<mode>:link_rule` variant with
+no confidence. `linkRules.enabled` (default on) turns the rules off.
+
+The first graduated decision on an account stands for the detection: any earlier row of any tier or
+revision covers that account for every graduated tier, so a later model-decided Limit after a rule's Hold
+signup grant (or the reverse) records nothing for it. Only Contain passes through, and only an earlier
+Contain row covers an account for Contain.
 
 ## Shadow grading
 

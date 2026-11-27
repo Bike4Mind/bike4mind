@@ -147,8 +147,13 @@ const FUTURE_SKEW_MS = 5 * 60 * 1000;
 export const rolloutBucket = (userId: string): number =>
   createHash('sha256').update(userId).digest().readUInt32BE(0) % 100;
 
-/** Model skips a link rule may override: the model abstained or was unusable, never a gate an admin or config set. */
+/**
+ * Model skips a link rule may override: the model abstained or was unusable, or the detection's own mapped
+ * tier is off (decideByLinkRule applies the rule tier's mode gate). Never an admin gate, and never a positive
+ * legitimate_automation judgment, whose skip decideIntervention keeps whatever its reason.
+ */
 const LINK_RULE_OVERRIDABLE: ReadonlySet<InterventionSkipReason> = new Set([
+  'tier_off',
   'evidence_unavailable',
   'stale_evidence',
   'not_abuse',
@@ -179,14 +184,17 @@ export function linkRulesCanAct(detection: ShadowDetectionItem, config: AutoCont
 /**
  * Which tier, if any, acts on one assessed detection. Contain keeps decideContainment's rules
  * unchanged; graduated tiers also refuse unusable or stale evidence and honor the tier's rollout.
- * When the model does not act, a firing link rule (linkRules.ts) may decide Limit or Hold signup
- * grant under the same non-model gates; a link rule never decides Contain.
+ * When the model abstains or the mapped tier is off, a firing link rule (linkRules.ts) may decide
+ * Limit or Hold signup grant under the same non-model gates; a link rule never decides Contain, and
+ * never overrides a legitimate_automation judgment.
  */
 export function decideIntervention(input: InterventionInput): InterventionDecision {
   const linkRules = input.config.linkRules.enabled && input.linkFacts ? decideLinkRules(input.linkFacts) : null;
   const decided = decideByModel(input);
   if (decided.kind === 'act') return { ...decided, linkRules: linkRules?.rules ?? [] };
   if (!linkRules || !LINK_RULE_OVERRIDABLE.has(decided.why)) return decided;
+  // A positive legitimate judgment is the more specific signal for the same cluster, so rules defer to it.
+  if (input.assessment.result === 'legitimate_automation') return decided;
   return decideByLinkRule(input, linkRules);
 }
 
@@ -232,7 +240,8 @@ function decideByLinkRule(input: InterventionInput, rule: LinkRuleDecision): Int
   const named = new Set(detection.userIds);
   if (named.size === 0) return skip('no_accounts');
   if (named.size > config.maxAccountsPerDetection) return skip('too_many_accounts');
-  // Rule ids come from facts loaded for detection.userIds, so the named filter is defensive; empty here means rollout excluded every account.
+  // Rule ids come from facts loaded for detection.userIds, so the named filter is defensive;
+  // empty here means rollout excluded every account.
   const userIds = rule.userIds.filter(id => named.has(id) && rolloutBucket(id) < tierConfig.rolloutPercent);
   if (userIds.length === 0) return skip('not_in_rollout');
 
