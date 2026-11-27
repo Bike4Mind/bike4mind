@@ -138,7 +138,7 @@ const PolicyEditor: FC<{
   const busy = save.isPending || reset.isPending;
   const parsedPolicy = toPolicy(form);
   const staleProviders = [...new Set(form.providers.filter(provider => !PROVIDERS.includes(provider)))];
-  const knownTools: ReadonlySet<string> = new Set(TOOL_ROWS.map(row => row.tool));
+  const knownTools: ReadonlySet<string> = new Set([...b4mLLMTools.options, ...contributedTools]);
   const staleTools = [...new Set(form.tools.filter(tool => !knownTools.has(tool)))];
   const canSave =
     !busy &&

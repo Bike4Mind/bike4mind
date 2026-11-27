@@ -151,6 +151,25 @@ describe('OrgModelPolicySection', () => {
     expect(screen.queryByLabelText('contributed_tool (unrecognized; remove to save)')).toBeNull();
   });
 
+  it('preserves an explicitly selected companion when saving an unrelated policy edit', () => {
+    mocks.view = {
+      policy: { ...UNRESTRICTED, allowedTools: ['retrieve_knowledge_content'] },
+      invalidStored: false,
+    };
+    renderSection();
+    toggleSwitch('providers');
+    tick(`org-model-policy-provider-${ModelBackend.OpenAI}`);
+
+    expect(saveButton().disabled).toBe(false);
+    expect(screen.queryByTestId('org-model-policy-tool-retrieve_knowledge_content')).toBeNull();
+    fireEvent.click(saveButton());
+    expect(mocks.save).toHaveBeenCalledWith({
+      allowedProviders: [ModelBackend.OpenAI],
+      allowedModels: null,
+      allowedTools: ['retrieve_knowledge_content'],
+    });
+  });
+
   it('renders a tool once when it is in both the built-in and contributed lists', () => {
     mocks.view = {
       policy: UNRESTRICTED,
