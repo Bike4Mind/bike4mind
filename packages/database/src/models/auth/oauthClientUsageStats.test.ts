@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { getOAuthClientUsageStats } from './oauthClientUsageStats';
+import { getOAuthClientUsageStats, signInsMatch, signupsMatch } from './oauthClientUsageStats';
 import { OAuthClientModel } from './OAuthClientModel';
 import { OAuthClientSignInModel } from './OAuthClientSignInModel';
 import { User } from './UserModel';
@@ -113,12 +113,26 @@ describe('getOAuthClientUsageStats', () => {
       return stages;
     };
 
+    // Aggregate explain nests the plan differently by server version; collect every winningPlan, skip rejectedPlans.
+    const winningPlans = (explain: unknown): unknown[] => {
+      const found: unknown[] = [];
+      const walk = (node: unknown) => {
+        if (Array.isArray(node)) return node.forEach(walk);
+        if (node && typeof node === 'object') {
+          for (const [key, value] of Object.entries(node)) {
+            if (key === 'winningPlan') found.push(value);
+            else if (key !== 'rejectedPlans') walk(value);
+          }
+        }
+      };
+      walk(explain);
+      return found;
+    };
+
     it('serves the sign-up count from user_signupClientId_createdAt without a collection scan', async () => {
       await addUser(CLIENT_A, daysAgo(1));
-      const plan = await User.collection
-        .find({ signupClientId: { $type: 'string', $in: [CLIENT_A] }, createdAt: { $gte: daysAgo(30) } })
-        .explain('queryPlanner');
-      const stages = planStages(plan.queryPlanner.winningPlan);
+      const plan = await User.aggregate([signupsMatch([CLIENT_A], daysAgo(30))]).explain('queryPlanner');
+      const stages = planStages(winningPlans(plan));
       expect(stages).toContain('IXSCAN');
       expect(stages).toContain('index:user_signupClientId_createdAt');
       expect(stages).not.toContain('COLLSCAN');
@@ -126,10 +140,10 @@ describe('getOAuthClientUsageStats', () => {
 
     it('serves the active-user count from the clientId and lastSignInAt index', async () => {
       await addSignIn(CLIENT_A, daysAgo(1));
-      const plan = await OAuthClientSignInModel.collection
-        .find({ clientId: { $in: [CLIENT_A] }, lastSignInAt: { $gte: daysAgo(30) } })
-        .explain('queryPlanner');
-      const stages = planStages(plan.queryPlanner.winningPlan);
+      const plan = await OAuthClientSignInModel.aggregate([signInsMatch([CLIENT_A], daysAgo(30))]).explain(
+        'queryPlanner'
+      );
+      const stages = planStages(winningPlans(plan));
       expect(stages).toContain('IXSCAN');
       expect(stages).toContain('index:clientId_1_lastSignInAt_-1');
       expect(stages).not.toContain('COLLSCAN');

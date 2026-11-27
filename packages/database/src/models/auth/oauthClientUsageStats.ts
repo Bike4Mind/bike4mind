@@ -19,6 +19,15 @@ const windowedCounts = (groupBy: string, timeField: string, since7d: Date) => ({
   },
 });
 
+// The explicit $type states the partial index's filter, which the planner needs to pick that index.
+export const signupsMatch = (clientIds: string[], since: Date) => ({
+  $match: { signupClientId: { $type: 'string', $in: clientIds }, createdAt: { $gte: since } },
+});
+
+export const signInsMatch = (clientIds: string[], since: Date) => ({
+  $match: { clientId: { $in: clientIds }, lastSignInAt: { $gte: since } },
+});
+
 /** Sign-ups and active users per registered client over the last 7 and 30 days; clients with no rows get zeros. */
 export async function getOAuthClientUsageStats(now = new Date()): Promise<OAuthClientUsageStats> {
   const clientIds = (await OAuthClientModel.find().select('clientId').lean().exec()).map(c => c.clientId);
@@ -26,13 +35,12 @@ export async function getOAuthClientUsageStats(now = new Date()): Promise<OAuthC
   const since30d = new Date(now.getTime() - 30 * DAY_MS);
 
   const [signups, signIns] = await Promise.all([
-    // The explicit $type states the partial index's filter, which the planner needs to pick that index.
     User.aggregate<WindowCounts>([
-      { $match: { signupClientId: { $type: 'string', $in: clientIds }, createdAt: { $gte: since30d } } },
+      signupsMatch(clientIds, since30d),
       windowedCounts('$signupClientId', '$createdAt', since7d),
     ]),
     OAuthClientSignInModel.aggregate<WindowCounts>([
-      { $match: { clientId: { $in: clientIds }, lastSignInAt: { $gte: since30d } } },
+      signInsMatch(clientIds, since30d),
       windowedCounts('$clientId', '$lastSignInAt', since7d),
     ]),
   ]);
