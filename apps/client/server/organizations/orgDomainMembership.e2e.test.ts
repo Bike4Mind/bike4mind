@@ -206,6 +206,19 @@ describe('suggest-join for an existing user (real Mongo)', () => {
     });
   });
 
+  it('neither suggests nor joins a user an administrator removed, by either domain path', async () => {
+    const org = await makeOrg(5);
+    await makeClaim(org.id, { policy: 'auto-join' });
+    const user = await makeUser('dee@example.com');
+    await Organization.updateOne({ _id: org._id }, { $set: { removedUserIds: [user.id] } });
+
+    expect(await listOrgDomainJoinSuggestions(user.id)).toEqual([]);
+    await expect(joinOrgViaDomain(user.id, org.id)).rejects.toThrow('You cannot join this organization');
+    expect(await applyOrgDomainMembership(user.id, user.email!)).toEqual({ joined: false, reason: 'removed' });
+    expect((await reload(org.id)).users).toEqual([]);
+    expect(observeOrgEvent).not.toHaveBeenCalled();
+  });
+
   it('completes a half-finished join when the user asks to join again', async () => {
     const { org, user } = await makeHalfJoined('suggest');
 

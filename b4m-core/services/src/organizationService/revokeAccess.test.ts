@@ -112,7 +112,7 @@ describe('organizationService - revokeAccess', () => {
     };
 
     expect(result).toEqual(expectedUpdatedOrg);
-    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
+    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1', { block: true });
   });
 
   it('revokes the removed member org-billed API keys, attributed to the removing admin', async () => {
@@ -200,7 +200,7 @@ describe('organizationService - revokeAccess', () => {
 
     await revokeAccess({ id: 'user2' } as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
 
-    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
+    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1', { block: true });
   });
 
   // Removal purges adminUserIds, so this would let a manager edit the Managers list.
@@ -244,7 +244,7 @@ describe('organizationService - revokeAccess', () => {
 
     await revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
 
-    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
+    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1', { block: true });
   });
 
   it('lets a platform admin remove a manager', async () => {
@@ -261,7 +261,7 @@ describe('organizationService - revokeAccess', () => {
       mockAdapters
     );
 
-    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
+    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1', { block: true });
   });
 
   it('refuses a manager who is no longer on the roster, and removes nothing', async () => {
@@ -397,6 +397,6 @@ describe('organizationService - revokeAccess', () => {
 
     expect(mockAdapters.db.organizations.findById).toHaveBeenCalledWith('org1');
 
-    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1');
+    expect(mockAdapters.db.organizations.removeMember).toHaveBeenCalledWith('org1', 'user1', { block: true });
   });
 });

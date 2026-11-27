@@ -27,7 +27,12 @@ describe('sharingService - acceptInvite (Organization)', () => {
       projects: { shareable: { updateUserShares: Mock }; findById: Mock; update: Mock };
       fabFiles: { shareable: { updateUserShares: Mock }; findById: Mock; update: Mock; findAllByIds: Mock };
       groups: { findById: Mock };
-      organization: { findById: Mock; addMemberIfUnderCeiling: Mock; ensureUserDetails: Mock };
+      organization: {
+        findById: Mock;
+        addMemberIfUnderCeiling: Mock;
+        clearRemovedMember: Mock;
+        ensureUserDetails: Mock;
+      };
       users: { findById: Mock; update: Mock };
     };
   };
@@ -83,11 +88,25 @@ describe('sharingService - acceptInvite (Organization)', () => {
         organization: {
           findById: vi.fn(),
           addMemberIfUnderCeiling: vi.fn(async () => ({})),
+          clearRemovedMember: vi.fn(),
           ensureUserDetails: vi.fn(),
         },
         users: { findById: vi.fn(), update: vi.fn() },
       },
     };
+  });
+
+  it('admits a removed user through a named invite and lifts the removal', async () => {
+    mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+      makeUser(id === 'minter' ? { id: 'minter' } : {})
+    );
+    mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
+    mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization({ removedUserIds: [userId] }));
+
+    await acceptInvite(userId, { id: inviteId }, asAdapters());
+
+    expect(mockAdapters.db.organization.addMemberIfUnderCeiling).toHaveBeenCalled();
+    expect(mockAdapters.db.organization.clearRemovedMember).toHaveBeenCalledWith(organizationId, userId);
   });
 
   it("sets the accepting user's organizationId and persists the user", async () => {
@@ -415,6 +434,20 @@ describe('sharingService - acceptInvite (Organization)', () => {
 
       await expect(accept(linkInvite())).rejects.toThrow('Organization is full');
       expect(mockAdapters.db.invites.cancelPendingRecipient).not.toHaveBeenCalled();
+    });
+
+    it('refuses a user an administrator removed from the organization', async () => {
+      mockAdapters.db.users.findById.mockImplementation(async (id: string) =>
+        id === 'minter' ? makeUser({ id: 'minter' }) : makeUser()
+      );
+      mockAdapters.db.invites.findById.mockResolvedValue(linkInvite());
+      mockAdapters.db.organization.findById.mockResolvedValue(makeOrganization({ removedUserIds: [userId] }));
+
+      await expect(acceptInvite(userId, { id: inviteId }, asAdapters())).rejects.toThrow(
+        'You cannot join this organization'
+      );
+      expect(mockAdapters.db.organization.addMemberIfUnderCeiling).not.toHaveBeenCalled();
+      expect(mockAdapters.db.organization.clearRemovedMember).not.toHaveBeenCalled();
     });
 
     it('refuses a revoked link before touching the organization', async () => {

@@ -354,7 +354,8 @@ export type OrgDomainMembershipOutcome =
   | { joined: true; organizationId: string }
   | {
       joined: false;
-      reason: 'no-claim' | 'not-auto-join' | 'user-missing' | 'unverified' | 'org-missing' | 'already-member';
+      reason:
+        'no-claim' | 'not-auto-join' | 'user-missing' | 'unverified' | 'org-missing' | 'already-member' | 'removed';
     }
   | { joined: false; reason: 'at-capacity'; organizationId: string; seats: number };
 
@@ -387,7 +388,10 @@ async function addMemberViaClaim(
   claim: OrgDomainClaim,
   user: DomainJoinUser
 ): Promise<
-  Exclude<OrgDomainMembershipOutcome, { reason: 'no-claim' | 'not-auto-join' | 'user-missing' | 'unverified' }>
+  Exclude<
+    OrgDomainMembershipOutcome,
+    { reason: 'no-claim' | 'not-auto-join' | 'user-missing' | 'unverified' | 'removed' }
+  >
 > {
   const { organizationId } = claim;
   const permissions = [...ORG_DOMAIN_MEMBER_PERMISSIONS];
@@ -453,6 +457,7 @@ export async function applyOrgDomainMembership(userId: string, email: string): P
     if (holdsMemberRow(organization, userId)) await repairDomainMembership(user, organization.id);
     return { joined: false, reason: 'already-member' };
   }
+  if (organizationService.wasRemovedFromOrganization(organization, userId)) return { joined: false, reason: 'removed' };
 
   return addMemberViaClaim({ ...claim, organizationId: organization.id }, user);
 }
@@ -483,6 +488,7 @@ export async function listOrgDomainJoinSuggestions(userId: string): Promise<OrgD
   const organization = await organizationRepository.findById(claim.organizationId);
   if (!organization) return [];
   if (organizationService.isCurrentOrgMember(organization, userId)) return [];
+  if (organizationService.wasRemovedFromOrganization(organization, userId)) return [];
   if (organizationSeatUsage(organization).full) return [];
   return [{ organizationId: organization.id, organizationName: organization.name, claimId: claim.id }];
 }
@@ -510,6 +516,9 @@ export async function joinOrgViaDomain(
   if (organizationService.isCurrentOrgMember(organization, userId)) {
     if (holdsMemberRow(organization, userId)) await repairDomainMembership(user, organizationId);
     return { joined: false, organization };
+  }
+  if (organizationService.wasRemovedFromOrganization(organization, userId)) {
+    throw new ForbiddenError('You cannot join this organization');
   }
 
   const outcome = await addMemberViaClaim({ ...claim, organizationId: organization.id }, user);

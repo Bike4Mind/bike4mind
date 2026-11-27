@@ -59,4 +59,31 @@ describe('OrganizationModel.removeMember', () => {
     expect(raw!.adminUserIds).toEqual([]);
     expect(raw!.billingManagerUserIds).toEqual([]);
   });
+
+  it('records the user in removedUserIds only when blocking, without duplicates', async () => {
+    const created = await Organization.create({
+      name: 'Org',
+      userId: 'owner',
+      users: [member('left'), member('removed')],
+    });
+    // Raw write: an org saved before the field existed has no removedUserIds at all.
+    await Organization.collection.updateOne({ _id: created._id }, { $unset: { removedUserIds: '' } });
+
+    await organizationRepository.removeMember(created.id, 'left');
+    await organizationRepository.removeMember(created.id, 'removed', { block: true });
+    await organizationRepository.removeMember(created.id, 'removed', { block: true });
+
+    const after = await Organization.findById(created.id).lean();
+    expect(after!.users).toEqual([]);
+    expect(after!.removedUserIds).toEqual(['removed']);
+  });
+
+  it('clearRemovedMember lifts only that user', async () => {
+    const created = await Organization.create({ name: 'Org', userId: 'owner', removedUserIds: ['a', 'b'] });
+
+    await organizationRepository.clearRemovedMember(created.id, 'a');
+
+    const after = await Organization.findById(created.id).lean();
+    expect(after!.removedUserIds).toEqual(['b']);
+  });
 });

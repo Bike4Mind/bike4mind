@@ -61,6 +61,7 @@ describe('addMember', () => {
         organizations: {
           findById: vi.fn(),
           update: vi.fn(),
+          clearRemovedMember: vi.fn(),
           ensureUserDetails: vi.fn(),
           shareable: {
             findAccessibleById: vi.fn(),
@@ -108,6 +109,8 @@ describe('addMember', () => {
     const result = await addMember(mockAdminUser, { userId: 'user-id', organizationId: 'org-id' }, mockAdapters);
 
     expect(mockAdapters.db.organizations.findById).toHaveBeenCalledWith('org-id');
+    // An administrator's add brings back a user an earlier removal blocked from self-service joins.
+    expect(mockAdapters.db.organizations.clearRemovedMember).toHaveBeenCalledWith('org-id', 'user-id');
     expect(result).toEqual({
       organization: {
         ...mockOrganization,

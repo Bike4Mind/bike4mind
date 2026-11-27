@@ -503,6 +503,7 @@ export const infraHolders = {
       { path: 'users.userId', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'adminUserIds', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'billingManagerUserIds', matchBy: 'userId', action: 'pullFromArray' },
+      { path: 'removedUserIds', matchBy: 'userId', action: 'pullFromArray' },
       { path: 'userDetails.id', matchBy: 'userId', action: 'pullFromArray' },
     ],
     unrelatedPaths: [

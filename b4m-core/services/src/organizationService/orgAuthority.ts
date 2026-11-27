@@ -31,6 +31,11 @@ export type OrgMembershipRoster = AdministrableOrg & { users?: { userId: string 
  * The repository's `setMemberMaxCredits` encodes the same two tiers as a Mongo `$or` and must
  * stay in sync with this.
  */
+/** An administrator removed this user; self-service joins must refuse them (see IOrganization.removedUserIds). */
+export function wasRemovedFromOrganization(organization: { removedUserIds?: string[] }, userId: string): boolean {
+  return (organization.removedUserIds ?? []).includes(userId);
+}
+
 export function isCurrentOrgMember(organization: OrgMembershipRoster, userId: string): boolean {
   if (organization.userId === userId) return true;
   return (organization.users ?? []).some(member => member.userId?.toString() === userId);

@@ -123,6 +123,7 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
     adminUserIds: { type: [String], default: [] },
     // Billing managers (orgRoles.ts). Same users[]-row requirement; adminUserIds wins on overlap.
     billingManagerUserIds: { type: [String], default: [] },
+    removedUserIds: { type: [String], default: [] },
     // `users[]` (the shareable ACL, from IShareableDocument) is AUTHORITATIVE for org membership -
     // every membership check reads it. `userDetails[]` below is a per-member credit side-table
     // (usedCredits / lastCreditUsedAt), NOT a membership list; keep the two in sync but never treat
@@ -735,7 +736,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    * Ids compare via `$toString` (pipelines skip Mongoose casting) so a legacy ObjectId entry still
    * matches. Idempotent (safe under a withTransaction retry).
    */
-  async removeMember(organizationId: string, userId: string): Promise<void> {
+  async removeMember(organizationId: string, userId: string, options: { block?: boolean } = {}): Promise<void> {
     const without = (field: string, idPath: string) => ({
       $filter: {
         input: { $ifNull: [`$${field}`, []] },
@@ -749,9 +750,20 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
           userDetails: without('userDetails', '$$this.id'),
           adminUserIds: without('adminUserIds', '$$this'),
           billingManagerUserIds: without('billingManagerUserIds', '$$this'),
+          ...(options.block && {
+            removedUserIds: { $setUnion: [{ $ifNull: ['$removedUserIds', []] }, [userId]] },
+          }),
         },
       },
     ]);
+  }
+
+  async clearRemovedMember(organizationId: string, userId: string): Promise<void> {
+    await this.organizationModel.updateOne(
+      { _id: organizationId },
+      { $pull: { removedUserIds: userId } },
+      { runValidators: true }
+    );
   }
 
   /**
