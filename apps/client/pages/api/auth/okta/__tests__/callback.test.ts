@@ -806,6 +806,24 @@ describe('/api/auth/okta/callback - OAuth client source tag', () => {
     expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({ signupClientId: 'b4m_sat_0123abcd' }));
   });
 
+  it("passes the new account's stored signupClientId to its signup event, undefined when it has none", async () => {
+    const userInfo = { sub: 'okta-new', email: 'new@example.com', email_verified: true, name: 'New User' };
+    mockCreate.mockResolvedValueOnce({
+      id: 'new-user',
+      _id: 'new-user',
+      tokenVersion: 0,
+      isBanned: false,
+      signupClientId: 'b4m_sat_0123abcd',
+    });
+    await runCallback({ user: null, userInfo });
+    expect(mockRecordSignupNetwork).toHaveBeenLastCalledWith(
+      expect.objectContaining({ userId: 'new-user', clientId: 'b4m_sat_0123abcd' })
+    );
+
+    await runCallback({ user: null, userInfo });
+    expect(mockRecordSignupNetwork.mock.calls.at(-1)?.[0].clientId).toBeUndefined();
+  });
+
   it('records no client when the redirect names none', async () => {
     mockVerifyState.mockReturnValue({ valid: true, payload: { idpId: 'idp-1' } });
     mockResolveSignupClientId.mockResolvedValueOnce(null);
