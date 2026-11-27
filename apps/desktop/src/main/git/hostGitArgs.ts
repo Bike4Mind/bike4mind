@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { z } from 'zod';
 import { hostProgram } from '../chat/tools/userPath';
 import { toLinuxArgument, wslCommand, wslCommandEnv, wslEnvNames, wslLocation } from '../wsl/wslPath';
 const EMPTY_HOOKS_PATH = process.platform === 'win32' ? 'NUL' : '/dev/null';
@@ -186,10 +187,32 @@ const readProgramConfig: ProgramConfigReader = async directory => {
   const configs = await Promise.all(
     submodules.map(path => scopedConfig(path, PROGRAM_KEYS, true, PROGRAM_READ_TIMEOUT_MS))
   );
-  const entries = [...own];
+  const contexts: ConfigEntry[][] = [];
   for (const config of configs) {
     if (config === null) return null;
-    // Its system and global entries are the ones already read for the repository itself.
+    contexts.push(config);
+  }
+  const overriddenKeys = new Set(
+    [own, ...contexts].flatMap(config =>
+      config.filter(entry => !TRUSTED_SCOPES.has(entry.scope)).map(entry => entry.key)
+    )
+  );
+  const trustedValues = (config: readonly ConfigEntry[]) =>
+    new Map(
+      config
+        .filter(entry => TRUSTED_SCOPES.has(entry.scope) && overriddenKeys.has(entry.key))
+        .map(entry => [entry.key, entry.value])
+    );
+  const ownTrusted = trustedValues(own);
+  const entries = [...own];
+  for (const config of contexts) {
+    // A conditional global include can differ by gitdir. One inherited -c value must preserve every context.
+    const childTrusted = trustedValues(config);
+    if (
+      childTrusted.size !== ownTrusted.size ||
+      [...childTrusted].some(([key, value]) => ownTrusted.get(key) !== value)
+    )
+      return null;
     for (const entry of config) if (!TRUSTED_SCOPES.has(entry.scope)) entries.push({ ...entry, submodule: true });
   }
   return entries;
@@ -254,7 +277,42 @@ export class RepositoryFilterError extends Error {
 }
 
 /** Subcommands that write work-tree files: with an emptied filter they would write the stored bytes, not the real file. */
-const WRITES_FILES = new Set(['switch', 'checkout', 'reset', 'stash', 'merge', 'restore']);
+const WRITES_FILES = new Set(['switch', 'checkout', 'reset', 'stash', 'merge', 'restore', 'read-tree']);
+const RECURSIVE_WRITES_FILES = new Set(['switch', 'checkout', 'reset', 'restore', 'read-tree']);
+type SubmoduleRecursionReader = (cwd: string) => Promise<boolean | null>;
+const gitBooleanSchema = z.enum(['true', 'false']).transform(value => value === 'true');
+
+const readSubmoduleRecursion: SubmoduleRecursionReader = async directory => {
+  const env = await gitCommandEnv(directory);
+  const command = await gitCommand(directory, [
+    'config',
+    '--type=bool',
+    '--default=false',
+    '--get',
+    'submodule.recurse',
+  ]);
+  if (!command) return null;
+  const { file, args, cwd } = command;
+  return new Promise(resolve => {
+    execFile(file, args, { cwd, env, timeout: PROGRAM_READ_TIMEOUT_MS, windowsHide: true }, (error, stdout) => {
+      if (error) return resolve(null);
+      const parsed = gitBooleanSchema.safeParse(stdout.trim());
+      resolve(parsed.success ? parsed.data : null);
+    });
+  });
+};
+
+function explicitSubmoduleRecursion(args: readonly string[]): boolean | undefined {
+  let recursive: boolean | undefined;
+  for (const argument of args.slice(1)) {
+    if (argument === '--') break;
+    if (argument === '--no-recurse-submodules') recursive = false;
+    else if (argument === '--recurse-submodules') recursive = true;
+    else if (argument.startsWith('--recurse-submodules='))
+      recursive = !['false', 'no', 'off', '0'].includes(argument.slice('--recurse-submodules='.length).toLowerCase());
+  }
+  return recursive;
+}
 const FILTER_PROGRAM = /^filter\..+\.(clean|smudge|process)$/;
 
 const programReads = new Map<string, Promise<ConfigEntry[] | null>>();
@@ -264,13 +322,14 @@ const programReads = new Map<string, Promise<ConfigEntry[] | null>>();
  * repository's own config, or a checked-out submodule's, makes is pinned to the user's system/global value, or
  * emptied, which git treats as no program. git hands `-c` settings down to the git it runs in a submodule. Throws
  * when git cannot list the settings or one cannot be pinned, and refuses a call that writes work-tree files while a
- * filter program only the repository itself sets is emptied.
+ * filter needed by a work tree it would write has been emptied.
  */
 export async function hostWorkTreeGitArgs(
   args: readonly string[],
   cwd: string,
   readConfig: ProgramConfigReader = readProgramConfig,
-  platform: NodeJS.Platform = process.platform
+  platform: NodeJS.Platform = process.platform,
+  readRecursion: SubmoduleRecursionReader = readSubmoduleRecursion
 ): Promise<string[]> {
   let read = readConfig === readProgramConfig ? programReads.get(cwd) : undefined;
   if (!read) {
@@ -286,14 +345,28 @@ export async function hostWorkTreeGitArgs(
   if (entries === null) throw new UnpinnableGitConfigError();
   const writesFiles = args[0] === 'worktree' ? args[1] === 'add' : WRITES_FILES.has(args[0] ?? '');
   const pins: string[] = [];
+  let emptiesSubmoduleFilter = false;
   const untrusted = entries.filter(entry => !TRUSTED_SCOPES.has(entry.scope));
   for (const key of new Set(untrusted.map(entry => entry.key))) {
     if (key.includes('=') || key.includes('\n')) throw new UnpinnableGitConfigError();
     const trusted = entries.filter(entry => entry.key === key && TRUSTED_SCOPES.has(entry.scope)).at(-1)?.value;
-    // A submodule's filter does not refuse the call: git writes that work tree only when it recurses into it.
+    // A child filter also protects recursive writes; non-recursive calls leave that work tree alone.
     const ownFilter = FILTER_PROGRAM.test(key) && untrusted.some(entry => entry.key === key && !entry.submodule);
     if (trusted === undefined && writesFiles && ownFilter) throw new RepositoryFilterError();
+    if (
+      trusted === undefined &&
+      FILTER_PROGRAM.test(key) &&
+      untrusted.some(entry => entry.key === key && entry.submodule)
+    )
+      emptiesSubmoduleFilter = true;
     pins.push('-c', `${key}=${trusted ?? (key.endsWith('.required') ? 'false' : '')}`);
+  }
+  if (emptiesSubmoduleFilter && RECURSIVE_WRITES_FILES.has(args[0] ?? '')) {
+    const recursive = explicitSubmoduleRecursion(args) ?? (await readRecursion(cwd));
+    if (recursive === null) throw new UnpinnableGitConfigError();
+    if (recursive) throw new RepositoryFilterError();
+    // Pin the admitted mode so a config edit cannot turn this non-recursive write into a recursive one.
+    pins.push('-c', 'submodule.recurse=false');
   }
   return [...configArgsFor(cwd, platform), ...pins, ...args];
 }
