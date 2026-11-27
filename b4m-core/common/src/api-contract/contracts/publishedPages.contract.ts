@@ -35,6 +35,9 @@ const SCOPES = [ApiKeyScope.ARTIFACTS_PUBLISH];
 const FORBIDDEN = { description: 'The API key lacks `artifacts:publish`.', schema: ScopeForbiddenErrorSchema } as const;
 const RATE_LIMITED = { description: 'Per-user rate limit exceeded.', schema: ApiErrorSchema } as const;
 const INVALID = { description: 'The request failed validation.', schema: ApiErrorSchema } as const;
+const AUTHOR_ONLY =
+  'The API key lacks `artifacts:publish` (scope error body), or the caller may not change this comment: only its ' +
+  'author may edit the text, and only its author, the page owner or an admin may resolve or delete it.';
 const NOT_YOURS = {
   description:
     'No page with that id is managed by the caller. A page that does not exist, a deleted one and one you do ' +
@@ -324,7 +327,11 @@ export const revokePublishedPageShareLinkContract = defineEndpoint({
     204: { description: 'The link was revoked.', noBody: true },
     403: FORBIDDEN,
     404: { description: 'No such page of yours, or no live link with that id.', schema: ApiErrorSchema },
-    409: { description: 'A concurrent change raced this one. Retry.', schema: ApiErrorSchema },
+    409: {
+      description:
+        'A concurrent change raced this one (retry), or revoking the last link would leave an access-gated page unreachable.',
+      schema: ApiErrorSchema,
+    },
     429: RATE_LIMITED,
   },
 });
@@ -422,7 +429,7 @@ export const updatePublishedPageCommentContract = defineEndpoint({
   emitsRateLimitHeaders: true,
   responses: {
     200: { description: 'The comment.', schema: PublishedPageCommentSchema, example: COMMENT_EXAMPLE },
-    403: FORBIDDEN,
+    403: { description: AUTHOR_ONLY, schema: ApiErrorSchema },
     404: { description: 'No such page of yours, or no such comment.', schema: ApiErrorSchema },
     422: INVALID,
     429: RATE_LIMITED,
@@ -443,7 +450,7 @@ export const deletePublishedPageCommentContract = defineEndpoint({
   emitsRateLimitHeaders: true,
   responses: {
     204: { description: 'The comment was deleted.', noBody: true },
-    403: FORBIDDEN,
+    403: { description: AUTHOR_ONLY, schema: ApiErrorSchema },
     404: { description: 'No such page of yours, or no such comment.', schema: ApiErrorSchema },
     429: RATE_LIMITED,
   },
@@ -473,5 +480,6 @@ export const downloadPublishedPageFileContract = defineEndpoint({
     404: { description: 'No such page of yours, or no such file in it.', schema: ApiErrorSchema },
     422: INVALID,
     429: RATE_LIMITED,
+    503: { description: 'Storage could not mint a signed link right now. Retry.', schema: ApiErrorSchema },
   },
 });

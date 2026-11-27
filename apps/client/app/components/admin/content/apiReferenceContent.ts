@@ -134,6 +134,10 @@ use to build a typed client). They are deliberately not repeated here, so the tw
   \`/api/v1/artifacts/{id}/versions[/{version}]\` (list, create, get), \`/api/v1/artifacts/search\`,
   \`/api/v1/artifacts/types\`, \`/api/v1/artifacts/{id}/publish\` (publish, unpublish),
   \`/api/v1/artifacts/{id}/republish\`
+- Published pages: \`/api/v1/published-pages\` (list), \`/api/v1/published-pages/uploads\` and
+  \`.../uploads/{draft_id}/finalize\` (publish a bundle), \`/api/v1/published-pages/{public_id}\` (get, update,
+  delete), \`.../{public_id}/share-links[/{link_id}]\`, \`.../{public_id}/restore\`,
+  \`.../{public_id}/comments[/{comment_id}]\`, \`.../{public_id}/files/download\`
 - Agents (custom personas; \`agents:read\` or \`agents:write\` to read, \`agents:write\` for the rest): \`/api/v1/agents\`,
   \`/api/v1/agents/{id}\`, \`/api/v1/agents/from-context\`, \`/api/v1/agents/{id}/transfer-credits\`,
   and the authoring assistants \`/api/v1/agents/{id}/generate-avatar\`, \`generate-description\`,

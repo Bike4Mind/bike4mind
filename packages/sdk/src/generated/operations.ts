@@ -129,6 +129,18 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/projects/{id}/invites',
   },
+  createPublishedPageComment: {
+    method: 'POST',
+    path: '/api/v1/published-pages/{public_id}/comments',
+  },
+  createPublishedPageShareLink: {
+    method: 'POST',
+    path: '/api/v1/published-pages/{public_id}/share-links',
+  },
+  createPublishedPageUpload: {
+    method: 'POST',
+    path: '/api/v1/published-pages/uploads',
+  },
   createSceneComposition: {
     method: 'POST',
     path: '/api/v1/scene-compositions',
@@ -197,6 +209,14 @@ export const operations = {
     method: 'DELETE',
     path: '/api/v1/projects/{id}',
   },
+  deletePublishedPage: {
+    method: 'DELETE',
+    path: '/api/v1/published-pages/{public_id}',
+  },
+  deletePublishedPageComment: {
+    method: 'DELETE',
+    path: '/api/v1/published-pages/{public_id}/comments/{comment_id}',
+  },
   deleteSession: {
     method: 'DELETE',
     path: '/api/sessions/{id}',
@@ -208,6 +228,10 @@ export const operations = {
   denyPendingAction: {
     method: 'POST',
     path: '/api/v1/pending-actions/{questId}/deny',
+  },
+  downloadPublishedPageFile: {
+    method: 'GET',
+    path: '/api/v1/published-pages/{public_id}/files/download',
   },
   editBriefDecision: {
     method: 'PATCH',
@@ -232,6 +256,10 @@ export const operations = {
   fetchWebPage: {
     method: 'POST',
     path: '/api/v1/tools/web-fetch',
+  },
+  finalizePublishedPage: {
+    method: 'POST',
+    path: '/api/v1/published-pages/uploads/{draft_id}/finalize',
   },
   findFunctionRecipient: {
     method: 'GET',
@@ -409,6 +437,10 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/client-config/public',
   },
+  getPublishedPage: {
+    method: 'GET',
+    path: '/api/v1/published-pages/{public_id}',
+  },
   getQuest: {
     method: 'GET',
     path: '/api/v1/quests/{id}',
@@ -573,6 +605,18 @@ export const operations = {
     method: 'GET',
     path: '/api/v1/projects',
   },
+  listPublishedPageComments: {
+    method: 'GET',
+    path: '/api/v1/published-pages/{public_id}/comments',
+  },
+  listPublishedPageShareLinks: {
+    method: 'GET',
+    path: '/api/v1/published-pages/{public_id}/share-links',
+  },
+  listPublishedPages: {
+    method: 'GET',
+    path: '/api/v1/published-pages',
+  },
   listQuestFiles: {
     method: 'GET',
     path: '/api/v1/quests/{id}/files',
@@ -693,6 +737,10 @@ export const operations = {
     method: 'POST',
     path: '/api/v1/briefs/{id}/decisions/{decisionId}/resolve',
   },
+  restorePublishedPageVersion: {
+    method: 'POST',
+    path: '/api/v1/published-pages/{public_id}/restore',
+  },
   reviewFunction: {
     method: 'POST',
     path: '/api/v1/functions/{id}/review',
@@ -700,6 +748,10 @@ export const operations = {
   reviewSkillMarketVersion: {
     method: 'POST',
     path: '/api/v1/skills/market/versions/{vid}/review',
+  },
+  revokePublishedPageShareLink: {
+    method: 'DELETE',
+    path: '/api/v1/published-pages/{public_id}/share-links/{link_id}',
   },
   runFunctionTests: {
     method: 'POST',
@@ -824,6 +876,14 @@ export const operations = {
   updateProjectSystemPrompt: {
     method: 'PATCH',
     path: '/api/v1/projects/{id}/system-prompts/{file_id}',
+  },
+  updatePublishedPage: {
+    method: 'PATCH',
+    path: '/api/v1/published-pages/{public_id}',
+  },
+  updatePublishedPageComment: {
+    method: 'PATCH',
+    path: '/api/v1/published-pages/{public_id}/comments/{comment_id}',
   },
   updateSession: {
     method: 'PUT',
