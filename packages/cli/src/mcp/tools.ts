@@ -242,22 +242,23 @@ export const TOOL_NAMES = TOOL_META.map(t => t.name);
 
 const KEY_SCOPES_TIMEOUT_MS = 5 * 1000;
 
-/**
- * Other scopes whose routes also admit a tool's scope (the routes accept any of a set). Must stay in sync with the
- * routes' requiredScopes: a tool is hidden only when the key holds none of them.
- */
+/** Other scopes that also admit a tool's scope; must match what each route method the tool calls accepts. */
 const SCOPE_ALTERNATES: Record<string, readonly string[]> = {
   'notebooks:read': ['notebooks:write'],
   'datalake:read': ['datalake:write', 'datalake:query'],
+  'artifacts:publish': [ApiKeyScope.ADMIN],
+  'bob:read': ['bob:run', ApiKeyScope.ADMIN],
+  'bob:run': [ApiKeyScope.ADMIN],
 };
 
 /**
  * Per-tool alternates that override the scope's: get_file's route also admits ai:generate keys, list_files' does not;
- * send_message's chat and quest-poll routes both admit ai:generate.
+ * send_message's chat and quest-poll routes both admit ai:generate; the notebook list alone also admits admin:*.
  */
 const TOOL_ALTERNATES: Record<string, readonly string[]> = {
   get_file: ['ai:generate'],
   send_message: ['ai:generate'],
+  list_notebooks: [...SCOPE_ALTERNATES['notebooks:read'], ApiKeyScope.ADMIN],
 };
 
 /** Tools whose calls reach a second route: the key must also hold one of these, beside the tool's own scope. */
@@ -282,7 +283,7 @@ export async function restrictToolsToKeyScopes(server: McpServer, client: B4mApi
   const scopes = await Promise.race([client.getOwnKeyScopes().catch(() => undefined), stalled]).finally(() =>
     clearTimeout(timer)
   );
-  if (!scopes || scopes.length === 0 || scopes.includes(ApiKeyScope.ADMIN)) return;
+  if (!scopes || scopes.length === 0) return;
   const wanted = new Map(TOOL_META.map(t => [t.name, t.scope]));
   for (const [name, handle] of toolHandles.get(server) ?? []) {
     const scope = wanted.get(name);

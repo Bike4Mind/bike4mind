@@ -5,6 +5,7 @@ import type { ChatHeldRelay, ChatStreamEvent } from '@shared/chat';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useHeldRelays, type HeldRelaysController } from './useHeldRelays';
 import { automaticSummary, displayText, relaySummary, relaySummaryParts } from './relayRows';
+import { chatBackedHostBridge } from '../__fixtures__/chatBackedHostBridge';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -32,6 +33,7 @@ describe('useHeldRelays', () => {
     let push: (event: ChatStreamEvent) => void = () => {};
     const getHeldRelays = vi.fn(() => Promise.resolve(initial));
     (window as unknown as { b4m: unknown }).b4m = {
+      host: chatBackedHostBridge(),
       chat: {
         getHeldRelays,
         resolveHeldRelay: vi.fn(),

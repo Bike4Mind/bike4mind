@@ -25,16 +25,23 @@ const WORKING_DIRECTORY = '/repo/worktree';
 
 type StoredSession = { mode: string; project?: { workingDirectory: string; workspaceBranch?: string } } | null;
 
-function register(session: StoredSession): PrChatHooks {
+type ChatApi = { setSessionArchived: (sessionId: string, archived: boolean) => Promise<unknown> };
+
+function register(
+  session: StoredSession,
+  chat: () => ChatApi = () => {
+    throw new Error('not used');
+  },
+  sessionSummary = vi.fn()
+): PrChatHooks {
   registerPullRequests({
     path: '/unused',
     autoFixAttemptsPath: '/unused-attempts',
-    chat: () => {
-      throw new Error('not used');
-    },
+    chat: chat as never,
     store: { get: async () => session } as never,
     logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as never,
     send: vi.fn(),
+    sessionSummary,
   });
   if (!captured.chat) throw new Error('hooks not captured');
   return captured.chat;
@@ -103,5 +110,28 @@ describe('registerPullRequests project hook', () => {
     ).toBeNull();
     expect(await register({ mode: 'code' }).project(SESSION)).toBeNull();
     expect(await register(null).project(SESSION)).toBeNull();
+  });
+});
+
+describe('registerPullRequests archive hook', () => {
+  beforeEach(() => {
+    captured.chat = null;
+  });
+
+  it('pushes the archived summary so the sidebar learns of it', async () => {
+    const summary = { id: SESSION, archived: true };
+    const setSessionArchived = vi.fn(async () => summary);
+    const sessionSummary = vi.fn();
+    const hooks = register(codeSession(), () => ({ setSessionArchived }), sessionSummary);
+    await hooks.archive(SESSION);
+    expect(setSessionArchived).toHaveBeenCalledWith(SESSION, true);
+    expect(sessionSummary).toHaveBeenCalledWith(summary);
+  });
+
+  it('pushes nothing when the session is gone', async () => {
+    const sessionSummary = vi.fn();
+    const hooks = register(codeSession(), () => ({ setSessionArchived: async () => null }), sessionSummary);
+    await hooks.archive(SESSION);
+    expect(sessionSummary).not.toHaveBeenCalled();
   });
 });

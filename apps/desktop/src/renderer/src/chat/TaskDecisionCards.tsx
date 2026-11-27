@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Alert from '@mui/joy/Alert';
 import Box from '@mui/joy/Box';
 import Sheet from '@mui/joy/Sheet';
@@ -6,33 +6,48 @@ import Stack from '@mui/joy/Stack';
 import Typography from '@mui/joy/Typography';
 import type { PendingDecision, PendingTaskDecision, TaskDecisionAnswer } from '@shared/orchestration';
 import { hostChat } from '../host/hostChat';
+import { hostClient } from '../host/HostClient';
+import { hostForSession } from '../host/sessionHost';
+import { useHostResync } from '../host/useSessionEvents';
 import { contentColumnSx, scrollingColumnHostSx } from './layout';
 import { QuestionCard } from './QuestionCard';
 import { SessionLink } from './SessionLink';
 
-/** Every decision workers wait on the user for: read once, then replaced by each push of the whole list. */
+/**
+ * Every decision workers wait on the user for, per host: read on mount and after each resync of
+ * that host, and replaced by each push of the whole list in between. taskDecision/list needs a
+ * 1.3 host, which the bundled one is; gate on the negotiated minor before a 1.2 host can be a peer.
+ */
 export function useTaskDecisions(): PendingTaskDecision[] {
-  const [decisions, setDecisions] = useState<PendingTaskDecision[]>([]);
+  const [byHost, setByHost] = useState<ReadonlyMap<string, PendingTaskDecision[]>>(() => new Map());
+  // Bumped by a resync, which may have skipped a push: the list is read again.
+  const [reads, setReads] = useState(0);
+  useHostResync(() => setReads(count => count + 1));
+
   useEffect(() => {
-    let pushed = false;
+    const pushed = new Set<string>();
     let unmounted = false;
-    const off = window.b4m.chat.onTaskDecisions(list => {
-      pushed = true;
-      setDecisions(list);
+    const set = (hostId: string, list: PendingTaskDecision[]) =>
+      setByHost(current => new Map(current).set(hostId, list));
+    const off = hostClient.onNotification('session/taskDecisionsChanged', ({ decisions }, hostId) => {
+      pushed.add(hostId);
+      set(hostId, decisions);
     });
-    window.b4m.chat
-      .listTaskDecisions()
-      .then(list => {
+    const hostId = hostForSession();
+    hostClient
+      .request(hostId, 'taskDecision/list')
+      .then(({ decisions }) => {
         // A push that landed first is newer than this read.
-        if (!pushed && !unmounted) setDecisions(list);
+        if (!pushed.has(hostId) && !unmounted) set(hostId, decisions);
       })
       .catch(() => undefined);
     return () => {
       unmounted = true;
       off();
     };
-  }, []);
-  return decisions;
+  }, [reads]);
+
+  return useMemo(() => [...byHost.values()].flat(), [byHost]);
 }
 
 /**

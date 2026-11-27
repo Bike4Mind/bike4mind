@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import {
   FormControl,
   FormLabel,
   Select,
   Option,
-  Button,
   Typography,
   Chip,
   Box,
@@ -15,14 +14,13 @@ import {
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import SaveIcon from '@mui/icons-material/Save';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import { toast } from 'sonner';
 import type { ModelBackend } from '@bike4mind/common';
 import { backendLabel } from '@client/app/utils/agentOpsModels';
-import { useSettingsDraft } from './SettingsDraftProvider';
+import { useRequiredSettingsDraft } from './SettingsDraftProvider';
 import { SettingsSection } from './shared/SettingsSection';
 
 interface OperationsModelConfig {
@@ -60,19 +58,6 @@ export const AdminOperationsModelSetting: React.FC = () => {
     },
   });
 
-  const [selectedModel, setSelectedModel] = useState<string>('');
-  const [selectedImageModel, setSelectedImageModel] = useState<string>('');
-  const [selectedSpeechModel, setSelectedSpeechModel] = useState<string>('');
-
-  // Update local state when config loads
-  useEffect(() => {
-    if (currentConfig) {
-      setSelectedModel(currentConfig.modelId);
-      setSelectedImageModel(currentConfig.imageModelId);
-      setSelectedSpeechModel(currentConfig.speechModelId);
-    }
-  }, [currentConfig]);
-
   const updateMutation = useMutation({
     mutationFn: async (config: OperationsModelConfig) => {
       const response = await api.put('/api/admin/operations-model', config);
@@ -84,12 +69,10 @@ export const AdminOperationsModelSetting: React.FC = () => {
       );
       return queryClient.invalidateQueries({ queryKey: ['operationsModel'] });
     },
-    onError: (error: Error) => {
-      toast.error(`Failed to update operations model: ${error.message}`);
-    },
   });
 
-  const draft = useSettingsDraft(
+  const draft = useRequiredSettingsDraft(
+    'AdminOperationsModelSetting',
     'operations-model-config',
     currentConfig ?? {
       modelId: '',
@@ -105,9 +88,7 @@ export const AdminOperationsModelSetting: React.FC = () => {
           : undefined,
     }
   );
-  const modelId = draft.staged ? draft.value.modelId : selectedModel;
-  const imageModelId = draft.staged ? draft.value.imageModelId : selectedImageModel;
-  const speechModelId = draft.staged ? draft.value.speechModelId : selectedSpeechModel;
+  const { modelId, imageModelId, speechModelId } = draft.value;
 
   const currentModelInfo = models?.find(m => m.id === modelId);
   const currentImageModelInfo = models?.find(m => m.id === imageModelId);
@@ -116,11 +97,6 @@ export const AdminOperationsModelSetting: React.FC = () => {
   const allSpeechModels = [...speechModels];
 
   const currentSpeechModelInfo = allSpeechModels.find(m => m.id === speechModelId);
-
-  const isDirty =
-    selectedModel !== currentConfig?.modelId ||
-    selectedImageModel !== currentConfig?.imageModelId ||
-    selectedSpeechModel !== currentConfig?.speechModelId;
 
   // Group text models by provider
   const modelsByProvider = models?.reduce(
@@ -157,26 +133,6 @@ export const AdminOperationsModelSetting: React.FC = () => {
     },
     {} as Record<string, typeof allSpeechModels>
   );
-
-  const handleSave = () => {
-    if (!selectedModel || !selectedImageModel) return;
-
-    const config: OperationsModelConfig = {
-      modelId: selectedModel,
-      imageModelId: selectedImageModel,
-      speechModelId: selectedSpeechModel,
-    };
-
-    updateMutation.mutate(config);
-  };
-
-  const handleReset = () => {
-    if (currentConfig) {
-      setSelectedModel(currentConfig.modelId);
-      setSelectedImageModel(currentConfig.imageModelId);
-      setSelectedSpeechModel(currentConfig.speechModelId);
-    }
-  };
 
   if (configLoading) {
     return (
@@ -223,8 +179,7 @@ export const AdminOperationsModelSetting: React.FC = () => {
           onChange={(_, value) => {
             // Filter out header values
             if (value && !value.startsWith('__header_')) {
-              if (draft.staged) draft.setValue(previous => ({ ...previous, modelId: value }));
-              else setSelectedModel(value);
+              draft.setValue(previous => ({ ...previous, modelId: value }));
             }
           }}
           placeholder="Choose a model..."
@@ -257,8 +212,7 @@ export const AdminOperationsModelSetting: React.FC = () => {
           onChange={(_, value) => {
             // Filter out header values
             if (value && !value.startsWith('__header_')) {
-              if (draft.staged) draft.setValue(previous => ({ ...previous, imageModelId: value }));
-              else setSelectedImageModel(value);
+              draft.setValue(previous => ({ ...previous, imageModelId: value }));
             }
           }}
           placeholder="Choose an image model..."
@@ -291,8 +245,7 @@ export const AdminOperationsModelSetting: React.FC = () => {
           onChange={(_, value) => {
             // Filter out header values
             if (value && !value.startsWith('__header_')) {
-              if (draft.staged) draft.setValue(previous => ({ ...previous, speechModelId: value }));
-              else setSelectedSpeechModel(value);
+              draft.setValue(previous => ({ ...previous, speechModelId: value }));
             }
           }}
           placeholder="Choose a speech model..."
@@ -356,24 +309,6 @@ export const AdminOperationsModelSetting: React.FC = () => {
             </Box>
           </Box>
         </Alert>
-      )}
-
-      {!draft.staged && (
-        <Box sx={{ display: 'flex', gap: 1 }}>
-          <Button
-            color="success"
-            disabled={!isDirty || !selectedModel || !selectedImageModel || !selectedSpeechModel}
-            loading={updateMutation.isPending}
-            onClick={handleSave}
-            startDecorator={<SaveIcon />}
-          >
-            Save Operations Model
-          </Button>
-
-          <Button variant="outlined" color="neutral" disabled={!isDirty} onClick={handleReset}>
-            Reset
-          </Button>
-        </Box>
       )}
 
       <Typography level="body-xs" sx={{ mt: 2, color: 'text.secondary' }}>

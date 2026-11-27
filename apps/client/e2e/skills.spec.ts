@@ -2,6 +2,7 @@ import { test, expect } from './fixtures';
 import { SKILLS_MEMBER_KEY, TIMEOUTS } from './constants';
 import { getTestUsers, type TestUser } from './helpers/test-users';
 import { apiCreateSkill, apiDeleteAllSkills, apiShareSkill } from './helpers/api';
+import { newWafRequestContext } from './helpers/waf-bypass';
 
 /**
  * Skills web UI: list, create, detail, edit, share - plus the non-admin side of
@@ -40,7 +41,7 @@ test.describe('Skills - list, create, detail, edit, share', () => {
     ({ accessToken: token, userId } = specUsers.skills);
     member = specUsers[SKILLS_MEMBER_KEY];
     if (!member) throw new Error(`No ${SKILLS_MEMBER_KEY} spec user - skills.setup.ts must run first`);
-    const ctx = await playwright.request.newContext();
+    const ctx = await newWafRequestContext(playwright.request);
     await apiDeleteAllSkills(ctx, token, userId);
     await apiDeleteAllSkills(ctx, member.accessToken, member.userId);
     await ctx.dispose();
@@ -50,7 +51,7 @@ test.describe('Skills - list, create, detail, edit, share', () => {
     // Independent deletes: the member's legacy global-read skill is visible to every user on the
     // stage, so a failed admin delete must not skip it. Either user is absent if beforeAll threw
     // before assigning it.
-    const ctx = await playwright.request.newContext();
+    const ctx = await newWafRequestContext(playwright.request);
     const results = await Promise.allSettled([
       token ? apiDeleteAllSkills(ctx, token, userId) : Promise.resolve(),
       member ? apiDeleteAllSkills(ctx, member.accessToken, member.userId) : Promise.resolve(),
