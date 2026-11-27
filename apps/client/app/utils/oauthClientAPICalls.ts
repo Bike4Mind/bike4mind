@@ -1,6 +1,7 @@
 import { api } from '@client/app/contexts/ApiContext';
 import type {
   CreateOAuthClientInput,
+  OAuthClientUsageStats,
   OAuthClientView,
   OAuthClientWithSecret,
   UpdateOAuthClientInput,
@@ -8,8 +9,15 @@ import type {
 
 const BASE = '/api/admin/oauth-clients';
 
+export const OAUTH_CLIENTS_QUERY_KEY = 'admin-oauth-clients';
+
 export const fetchOAuthClients = async () => {
   const response = await api.get<OAuthClientView[]>(BASE);
+  return response.data;
+};
+
+export const fetchOAuthClientStats = async () => {
+  const response = await api.get<OAuthClientUsageStats>(`${BASE}/stats`);
   return response.data;
 };
 
