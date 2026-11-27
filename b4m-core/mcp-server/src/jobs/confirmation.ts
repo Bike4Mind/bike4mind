@@ -10,6 +10,9 @@ const STATE: Record<string, JobStatus['state']> = {
   withdrawn: 'cancelled',
 };
 
+// Retryable by definition: request timeout, too early, rate limited.
+const TRANSIENT = new Set([408, 425, 429]);
+
 export const confirmationJob: JobKind = {
   kind: 'confirmation',
   idSchema: objectIdSchema,
@@ -17,7 +20,8 @@ export const confirmationJob: JobKind = {
   async poll(id, ctx, signal) {
     const res = await ctx.transport.call('getMcpConfirmation', { params: { id }, signal });
     if (res.status === 404) return { state: 'failed', error: 'Confirmation not found or already expired.' };
-    if (res.status === 429 || res.status >= 500) throw new Error(`confirmation lookup returned HTTP ${res.status}`);
+    if (TRANSIENT.has(res.status) || res.status >= 500)
+      throw new Error(`confirmation lookup returned HTTP ${res.status}`);
     if (res.status < 200 || res.status >= 300) {
       return { state: 'failed', error: `Confirmation lookup was refused with HTTP ${res.status}.` };
     }

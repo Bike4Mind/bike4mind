@@ -1,4 +1,4 @@
-import { SlugSchema } from '@bike4mind/common';
+import { SCOPE_URL_PREFIX, SlugSchema } from '@bike4mind/common';
 import { z } from 'zod';
 
 // Mirrors publishGateToken's SAFE_PUBLIC_ID in packages/server-utils; keep in sync.
@@ -17,8 +17,10 @@ export const slugSchema = SlugSchema;
 
 export type PublishTier = 'user' | 'project' | 'organization';
 
-// Mirrors TIER_BY_PREFIX in apps/client/server/services/publish/parsePublishPath.ts; keep in sync.
-const TIER_BY_PREFIX: Record<string, PublishTier> = { u: 'user', pj: 'project', o: 'organization' };
+// A Map, so inherited keys such as `constructor` never resolve to a tier.
+const TIER_BY_PREFIX = new Map<string, PublishTier>(
+  Object.entries(SCOPE_URL_PREFIX).map(([tier, prefix]) => [prefix.split('/').pop()!, tier as PublishTier])
+);
 
 export type LiveArtifactRef =
   | {
@@ -53,7 +55,7 @@ export function parseLiveArtifactRef(input: string): LiveArtifactRef | null {
     const [id, ...extra] = rest;
     return isPublicId(id) && extra.every(s => s === '') ? { kind: 'publicId', value: id, tierPath: head } : null;
   }
-  const tier = TIER_BY_PREFIX[head];
+  const tier = TIER_BY_PREFIX.get(head);
   const [scopeId, slug] = rest;
   return tier && isPublicId(scopeId) && isSlug(slug) ? { kind: 'bundle', tier, scopeId, slug } : null;
 }

@@ -10,7 +10,7 @@ const POLL_MAX_MS = 5000;
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 /** The host supplies the budget, so a non-finite or non-positive value falls back to the transport's cap. */
-const budgetSeconds = (requested: number, ctx: ToolContext) => {
+export const budgetSeconds = (requested: number, ctx: ToolContext) => {
   const cap = WAIT_BUDGET_SECONDS[ctx.kind];
   const host = Number.isFinite(ctx.waitBudgetSeconds) && ctx.waitBudgetSeconds > 0 ? ctx.waitBudgetSeconds : cap;
   return Math.min(requested, host, cap);
@@ -95,6 +95,7 @@ export const waitForJob = defineTool({
         const left = deadline - Date.now();
         if (![...statuses.values()].some(s => s.state === 'pending') || left <= 0 || controller.signal.aborted) break;
         await sleep(Math.min(delay, left));
+        if (controller.signal.aborted || deadline - Date.now() <= 0) break;
         delay = Math.min(delay * 1.5, POLL_MAX_MS);
       }
     } finally {
@@ -120,7 +121,16 @@ export const stopJob = defineTool({
   async handler({ job }, ctx) {
     const parsed = parseJob(job);
     if (typeof parsed === 'string') return fail(parsed);
-    const stopped = await parsed.kind.stop(parsed.id, ctx, AbortSignal.timeout(WAIT_BUDGET_SECONDS[ctx.kind] * 1000));
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), budgetSeconds(WAIT_BUDGET_SECONDS[ctx.kind], ctx) * 1000);
+    let stopped: boolean;
+    try {
+      stopped = await raceAbort(parsed.kind.stop(parsed.id, ctx, controller.signal), controller.signal);
+    } catch (error) {
+      return fail(`Could not stop the job: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      clearTimeout(timer);
+    }
     return ok({ job, state: stopped ? 'cancelled' : 'not_found' });
   },
 });

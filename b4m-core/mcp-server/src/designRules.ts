@@ -6,22 +6,25 @@ export const MAX_DESCRIPTION_LENGTH = 600;
 export const DEFAULT_PAGE_SIZE = 20;
 const NAME_RE = /^[a-z]+(_[a-z0-9]+)+$/;
 
-/** Every property name reachable in a zod schema, through objects, arrays, unions, records, intersections and optional/nullable/default wrappers. */
-function collectKeys(schema: z.ZodTypeAny, out: Set<string> = new Set(), depth = 0): Set<string> {
-  if (depth > 8) return out;
+/**
+ * Every property name reachable in a zod schema: objects, arrays, tuples, unions, records, intersections, and
+ * wrapper/pipe/transform/preprocess/lazy schemas. `seen` ends lazy cycles; there is no depth cap.
+ */
+function collectKeys(schema: z.ZodTypeAny, out: Set<string> = new Set(), seen = new Set<unknown>()): Set<string> {
+  if (!schema || seen.has(schema)) return out;
+  seen.add(schema);
   const def = ((schema as unknown as { def?: Record<string, unknown> }).def ?? {}) as Record<string, unknown>;
   if (def.shape && typeof def.shape === 'object') {
     for (const [key, child] of Object.entries(def.shape)) {
       out.add(key);
-      collectKeys(child as z.ZodTypeAny, out, depth + 1);
+      collectKeys(child as z.ZodTypeAny, out, seen);
     }
   }
-  const nested = [def.element, def.innerType, def.valueType, def.left, def.right];
+  const nested = [def.element, def.innerType, def.valueType, def.left, def.right, def.in, def.out, def.rest];
+  if (typeof def.getter === 'function') nested.push((def.getter as () => unknown)());
   if (Array.isArray(def.options)) nested.push(...def.options);
   if (Array.isArray(def.items)) nested.push(...def.items);
-  for (const next of nested) {
-    if (next) collectKeys(next as z.ZodTypeAny, out, depth + 1);
-  }
+  for (const next of nested) collectKeys(next as z.ZodTypeAny, out, seen);
   return out;
 }
 

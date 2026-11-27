@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { json, makeCtx, mockTransport } from '../testUtils';
-import { stopJob, waitForJob } from './tools';
+import { budgetSeconds, stopJob, waitForJob } from './tools';
 
 const ID = '0123456789abcdef01234567';
 const JOB = `confirmation:${ID}`;
@@ -24,25 +24,43 @@ describe('wait_for_job', () => {
     expect(transport.call).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
-    ['http', 25],
-    ['stdio', 900],
-  ] as const)('clamps the wait on %s to %i seconds', async (kind, budget) => {
-    const transport = mockTransport(async () => json(200, { status: 'pending' }));
+  it('ends the http wait at the kind cap, not the host budget', async () => {
+    let last = 0;
+    const transport = mockTransport(async () => {
+      last = Date.now();
+      return json(200, { status: 'pending' });
+    });
     const start = Date.now();
     const p = run(
       waitForJob,
       { jobs: [JOB], max_wait_seconds: 900 },
-      makeCtx({ transport, kind, waitBudgetSeconds: 5000 })
+      makeCtx({ transport, kind: 'http', waitBudgetSeconds: 5000 })
     );
-    await vi.advanceTimersByTimeAsync(budget * 1000 + 10_000);
-    const res = await p;
-    expect(res.structuredContent).toMatchObject({ status: 'pending' });
-    // the loop ended at the kind's cap, not at the 5000 s the host asked for
-    expect(Date.now() - start).toBeLessThanOrEqual(budget * 1000 + 10_000);
-    const polls = transport.call.mock.calls.length;
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(transport.call.mock.calls.length).toBe(polls);
+    await p;
+    // last poll falls within one max backoff step of the 25 s cap
+    expect(last - start).toBeGreaterThanOrEqual(25_000 - 5000);
+    expect(last - start).toBeLessThanOrEqual(25_000);
+  });
+
+  it('computes the budget as the minimum of request, host and kind cap', () => {
+    expect(budgetSeconds(900, makeCtx({ kind: 'stdio', waitBudgetSeconds: 5000 }))).toBe(900);
+    expect(budgetSeconds(900, makeCtx({ kind: 'http', waitBudgetSeconds: 5000 }))).toBe(25);
+    expect(budgetSeconds(900, makeCtx({ kind: 'http', waitBudgetSeconds: 10 }))).toBe(10);
+    expect(budgetSeconds(5, makeCtx({ kind: 'http', waitBudgetSeconds: 10 }))).toBe(5);
+  });
+
+  it('never polls with an aborted signal once the budget ends', async () => {
+    const signals: boolean[] = [];
+    const transport = mockTransport(async (_op, req) => {
+      signals.push(req?.signal?.aborted ?? false);
+      return json(200, { status: 'pending' });
+    });
+    const p = run(waitForJob, { jobs: [JOB], max_wait_seconds: 3 }, makeCtx({ transport }));
+    await vi.advanceTimersByTimeAsync(10_000);
+    await p;
+    expect(signals.length).toBeGreaterThan(1);
+    expect(signals.every(aborted => !aborted)).toBe(true);
   });
 
   it('honours a smaller ctx.waitBudgetSeconds', async () => {
@@ -75,6 +93,8 @@ describe('wait_for_job', () => {
     const transport = mockTransport();
     transport.call
       .mockResolvedValueOnce(json(503, {}))
+      .mockResolvedValueOnce(json(408, {}))
+      .mockResolvedValueOnce(json(425, {}))
       .mockRejectedValueOnce(new Error('network blip'))
       .mockResolvedValueOnce(json(429, {}))
       .mockResolvedValueOnce(json(200, { status: 'approved' }));
@@ -82,7 +102,7 @@ describe('wait_for_job', () => {
     await vi.advanceTimersByTimeAsync(30_000);
     const res = await p;
     expect(res.structuredContent).toMatchObject({ status: 'done', result: { jobs: [{ job: JOB, state: 'done' }] } });
-    expect(transport.call).toHaveBeenCalledTimes(4);
+    expect(transport.call).toHaveBeenCalledTimes(6);
   });
 
   it('reports the last transient error when the budget ends', async () => {
@@ -152,6 +172,14 @@ describe('stop_job', () => {
     const res = await stopJob.handler({ job: JOB }, makeCtx({ transport: mockTransport(async () => json(404, {})) }));
     expect(res.isError).toBeUndefined();
     expect(res.structuredContent).toMatchObject({ status: 'done', result: { state: 'not_found' } });
+  });
+
+  it('returns an error at the host budget when the withdraw never settles', async () => {
+    const transport = mockTransport(async () => new Promise(() => {}));
+    const p = stopJob.handler({ job: JOB }, makeCtx({ transport, kind: 'stdio', waitBudgetSeconds: 10 }));
+    await vi.advanceTimersByTimeAsync(10_000);
+    const res = await p;
+    expect(res.isError).toBe(true);
   });
 
   it('rejects a bad id without a transport call', async () => {

@@ -36,6 +36,39 @@ describe('checkToolDesign', () => {
     ['confirm_delete input', { inputSchema: { confirm_delete: z.boolean() } }, /confirm/],
     ['nested confirm input', { inputSchema: { opts: z.object({ confirm: z.boolean() }) } }, /confirm/],
     [
+      'confirm behind transform',
+      { inputSchema: { opts: z.object({ confirm: z.boolean() }).transform(x => x) } },
+      /confirm/,
+    ],
+    [
+      'confirm behind preprocess',
+      { inputSchema: { opts: z.preprocess(x => x, z.object({ confirm: z.boolean() })) } },
+      /confirm/,
+    ],
+    ['confirm behind lazy', { inputSchema: { opts: z.lazy(() => z.object({ confirm: z.boolean() })) } }, /confirm/],
+    [
+      'confirm in a tuple rest',
+      { inputSchema: { opts: z.tuple([z.string()]).rest(z.object({ confirm: z.boolean() })) } },
+      /confirm/,
+    ],
+    [
+      'confirm nine levels deep',
+      {
+        inputSchema: {
+          a: Array.from({ length: 9 }).reduce<z.ZodTypeAny>(
+            (acc: z.ZodTypeAny) => z.object({ n: acc }),
+            z.object({ confirm: z.boolean() })
+          ),
+        },
+      },
+      /confirm/,
+    ],
+    [
+      'untrusted output behind transform',
+      { outputSchema: envelope(z.object({ untrusted_x: z.string() }).transform(x => x)) },
+      /untrusted_/,
+    ],
+    [
       'untrusted output in a union',
       { outputSchema: envelope(z.union([z.object({ untrusted_x: z.string() }), z.object({ y: z.string() })])) },
       /untrusted_/,
@@ -67,6 +100,12 @@ describe('checkToolDesign', () => {
     ['cursor without limit', { inputSchema: { cursor: z.string().optional() } }, /limit/],
   ])('flags %s', (_name, patch, re) => {
     expect(checkToolDesign(mutate(patch)).join('\n')).toMatch(re);
+  });
+
+  it('terminates on a self-referencing lazy schema', () => {
+    type Node = { confirm?: boolean; next?: Node };
+    const node: z.ZodType<Node> = z.lazy(() => z.object({ next: node.optional() }));
+    expect(checkToolDesign(mutate({ inputSchema: { tree: node } }))).toEqual([]);
   });
 
   it('accepts untrusted output with the note, and a paginated list', () => {
