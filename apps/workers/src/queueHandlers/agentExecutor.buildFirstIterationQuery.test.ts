@@ -48,7 +48,7 @@ const BASE_QUERY = 'What does the attached PDF say?';
 const SCOPE = { $or: [{ userId: 'u1' }, { isGlobalRead: true }] };
 
 // Resolved toolbelts. The generic default agent profile carries both knowledge
-// tools; a surface-scoped profile may carry neither (see `agentExecutor.optiProfile.ts`),
+// tools; a surface-scoped profile may carry neither (a surface profile contributed by a mounted package),
 // which is what makes the readability guard necessary.
 const TOOLS_WITH_READER = ['retrieve_knowledge_content', 'search_knowledge_base', 'web_search'];
 const TOOLS_WITHOUT_READER = ['optihashi_solve', 'web_search', 'current_datetime'];
