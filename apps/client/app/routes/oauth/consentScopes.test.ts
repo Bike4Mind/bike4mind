@@ -37,7 +37,7 @@ describe('toConsentScopes', () => {
     expect(toConsentScopes(['functions:invoke', 'functions:author'])).toEqual([
       {
         id: 'functions:invoke',
-        label: 'List and run your functions, and the functions shared with you once you have reviewed them',
+        label: 'List and run your functions, and see, allow, and run the functions shared with you',
       },
       {
         id: 'functions:author',

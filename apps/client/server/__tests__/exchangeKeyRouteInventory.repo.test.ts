@@ -104,6 +104,7 @@ const ALLOWED_CONTRACTS = new Set([
   // functions:invoke and functions:author, granted to a client one at a time (OAUTH_FUNCTIONS_SCOPES).
   'listFunctions',
   'getFunction',
+  'reviewFunction',
   'invokeFunction',
   'getFunctionCall',
   'cancelFunctionCall',
@@ -205,6 +206,7 @@ const ALLOWED_ENDPOINTS = [
   'POST /api/mcp/functions',
   'GET /api/v1/functions',
   'GET /api/v1/functions/:id',
+  'POST /api/v1/functions/:id/review',
   'POST /api/v1/functions/:id/invoke',
   'GET /api/v1/functions/calls/:call_id',
   'POST /api/v1/functions/calls/:call_id/cancel',

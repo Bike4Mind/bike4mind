@@ -28,7 +28,7 @@ const SCOPE_LABELS: Readonly<Record<string, string>> = {
   // Keep in sync with the ME_READ description in @bike4mind/server-utils/app/constants/apiKeyScopes.ts.
   'me:read': 'See your name, plan, subscription, credit balance and feature access',
   [FEDERATED_ADMIN_STATUS_SCOPE]: 'See whether you are a Bike4Mind administrator',
-  'functions:invoke': 'List and run your functions, and the functions shared with you once you have reviewed them',
+  'functions:invoke': 'List and run your functions, and see, allow, and run the functions shared with you',
   'functions:author':
     'Create, read, change, test, and delete your functions, including their code and recent calls, and share them with people found by email address',
   'notebooks:read': 'View your notebooks and sessions',
