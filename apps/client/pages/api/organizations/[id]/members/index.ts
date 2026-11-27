@@ -1,4 +1,5 @@
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
+import { publishedArtifactRepository } from '@bike4mind/database/content';
 import { z } from 'zod';
 import { organizationService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -125,6 +126,7 @@ const handler = baseApi()
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             userApiKeys: userApiKeyRepository,
+            publishedArtifacts: publishedArtifactRepository,
             ...lakeConfigAuditDb,
           },
           // See the sibling removal route: a key-driven departure must be attributed to the KEY,

@@ -1,4 +1,5 @@
 import type { Request } from 'express';
+import { publishedArtifactRepository } from '@bike4mind/database/content';
 import { z } from 'zod';
 import {
   ASSIGNABLE_ORG_ROLES,
@@ -82,6 +83,7 @@ const handler = adminApi({
             dataLakes: dataLakeRepository,
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             userApiKeys: userApiKeyRepository,
+            publishedArtifacts: publishedArtifactRepository,
             ...lakeConfigAuditDb,
           },
           logger: req.logger,

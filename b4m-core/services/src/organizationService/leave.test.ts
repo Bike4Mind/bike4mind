@@ -71,6 +71,9 @@ describe('organizationService - leave', () => {
         userApiKeys: {
           revokeLiveOrgBilledByUserId: vi.fn().mockResolvedValue([]),
         },
+        publishedArtifacts: {
+          transferOrgTierOwnership: vi.fn().mockResolvedValue(0),
+        },
         // No org groups by default, so the group purge is a no-op unless a test sets some.
         groups: {
           findByOrganization: vi.fn().mockResolvedValue([]),
@@ -216,6 +219,12 @@ describe('organizationService - leave', () => {
     expect(mockAdapters.db.dataLakeAccessGrants.upsertGrant).toHaveBeenCalledWith(
       expect.objectContaining({ dataLakeId: 'lake1', principalId: 'owner1', role: 'owner', expiresAt: null })
     );
+  });
+
+  it("passes the leaver's org-namespace pages to the billing owner", async () => {
+    await leave(mockMemberUser as IUserDocument, { id: 'org1' }, mockAdapters);
+
+    expect(mockAdapters.db.publishedArtifacts.transferOrgTierOwnership).toHaveBeenCalledWith('org1', 'user1', 'owner1');
   });
 
   it('revokes the leaver org-billed API keys, attributed to the leaver', async () => {

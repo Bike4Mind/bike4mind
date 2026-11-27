@@ -66,6 +66,9 @@ describe('organizationService - revokeAccess', () => {
         userApiKeys: {
           revokeLiveOrgBilledByUserId: vi.fn().mockResolvedValue([]),
         },
+        publishedArtifacts: {
+          transferOrgTierOwnership: vi.fn().mockResolvedValue(0),
+        },
         users: {
           removeGroupsFromUser: vi.fn().mockResolvedValue(undefined),
           // Default: the removed user has no home-org pointer, so the clear below is a no-op and the
@@ -383,6 +386,12 @@ describe('organizationService - revokeAccess', () => {
     await revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
 
     expect(mockAdapters.db.users.update).not.toHaveBeenCalled();
+  });
+
+  it("passes the removed member's org-namespace pages to the billing owner", async () => {
+    await revokeAccess(mockOwnerUser as IUserDocument, { id: 'org1', userId: 'user1' }, mockAdapters);
+
+    expect(mockAdapters.db.publishedArtifacts.transferOrgTierOwnership).toHaveBeenCalledWith('org1', 'user1', 'owner1');
   });
 
   it('should validate and secure parameters', async () => {
