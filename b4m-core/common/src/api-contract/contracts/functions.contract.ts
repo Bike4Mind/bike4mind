@@ -191,8 +191,9 @@ export const reviewFunctionContract = defineEndpoint({
     "Records the key owner's review of a function another person shared with them, as the review in the app " +
     'does. `action: "allow"` with the `review_hash` read from `GET /api/v1/functions/{id}` lets them call it. ' +
     '`action: "withdraw"` takes the allow back, so calls are refused with `review_required` until they allow it ' +
-    'again. Answers the function as `GET /api/v1/functions/{id}` reads it. Only a shared function can be ' +
-    "reviewed: the key owner's own needs none.",
+    'again. An allow keeps the mode the key owner chose in the app for when chat and agent runs ask before a ' +
+    'call; this route does not set it. Answers the function as `GET /api/v1/functions/{id}` reads it. Only a ' +
+    "shared function can be reviewed: the key owner's own needs none.",
   tags: ['Functions'],
   auth: 'apiKeyOrJwt',
   scopes: SCOPES,

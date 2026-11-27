@@ -10,7 +10,6 @@ import {
   CALLABLE_FUNCTION_CALL_SURFACES,
   CALLABLE_FUNCTION_RESULT_OUTCOMES,
 } from '../types/entities/CallableFunctionCallTypes';
-import { MCP_TOOL_APPROVAL_MODES } from '../types/entities/McpConnectionTypes';
 import { ApiErrorSchema, ScopeForbiddenErrorSchema } from './chat';
 import { paginatedResponseSchema } from './pagination';
 
@@ -101,6 +100,7 @@ export const ListFunctionsResponseSchema = paginatedResponseSchema(PublicFunctio
 
 export const GetFunctionResponseSchema = z.object({ data: PublicFunctionDetailSchema });
 
+// No `approval`: when chat and agent runs ask is the person's setting in the app, never a key's to lower.
 export const ReviewFunctionRequestSchema = z.discriminatedUnion('action', [
   z
     .object({
@@ -109,13 +109,6 @@ export const ReviewFunctionRequestSchema = z.discriminatedUnion('action', [
         .string()
         .regex(/^[0-9a-f]{64}$/)
         .describe('`review_hash` as `GET /api/v1/functions/{id}` returned it.'),
-      approval: z
-        .enum(MCP_TOOL_APPROVAL_MODES)
-        .optional()
-        .describe(
-          'When chat and agent runs ask before a call: `default`, `always_allow`, or `always_ask`. Left out, an ' +
-            'allow keeps the mode the key owner chose before, or `default`. Calls over this API never ask.'
-        ),
     })
     .strict(),
   z.object({ action: z.literal('withdraw') }).strict(),

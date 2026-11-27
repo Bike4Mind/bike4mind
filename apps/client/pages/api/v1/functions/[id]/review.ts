@@ -25,7 +25,7 @@ const handler = nextRouteForContract(reviewFunctionContract, {
   if (body.action === 'allow') {
     await reviewSharedCallableFunction(req.user, entry.fn.id, {
       reviewHash: body.review_hash,
-      approval: body.approval ?? entry.approval,
+      approval: entry.approval,
     });
   } else {
     await updateSharedCallableFunctionReview(req.user, entry.fn.id, { enabled: false });

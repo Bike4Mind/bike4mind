@@ -3121,7 +3121,7 @@ export interface paths {
     put?: never;
     /**
      * Allow a function shared with you, or withdraw the allow
-     * @description Records the key owner's review of a function another person shared with them, as the review in the app does. `action: "allow"` with the `review_hash` read from `GET /api/v1/functions/{id}` lets them call it. `action: "withdraw"` takes the allow back, so calls are refused with `review_required` until they allow it again. Answers the function as `GET /api/v1/functions/{id}` reads it. Only a shared function can be reviewed: the key owner's own needs none.
+     * @description Records the key owner's review of a function another person shared with them, as the review in the app does. `action: "allow"` with the `review_hash` read from `GET /api/v1/functions/{id}` lets them call it. `action: "withdraw"` takes the allow back, so calls are refused with `review_required` until they allow it again. An allow keeps the mode the key owner chose in the app for when chat and agent runs ask before a call; this route does not set it. Answers the function as `GET /api/v1/functions/{id}` reads it. Only a shared function can be reviewed: the key owner's own needs none.
      */
     post: operations['reviewFunction'];
     delete?: never;
@@ -16798,11 +16798,6 @@ export interface components {
           action: 'allow';
           /** @description `review_hash` as `GET /api/v1/functions/{id}` returned it. */
           review_hash: string;
-          /**
-           * @description When chat and agent runs ask before a call: `default`, `always_allow`, or `always_ask`. Left out, an allow keeps the mode the key owner chose before, or `default`. Calls over this API never ask.
-           * @enum {string}
-           */
-          approval?: 'default' | 'always_allow' | 'always_ask';
         }
       | {
           /** @enum {string} */

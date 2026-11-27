@@ -75,7 +75,7 @@ curl https://app.bike4mind.com/api/v1/functions/<function-id>/review \
   -d '{"action":"allow","review_hash":"<review_hash>"}'
 ```
 
-The answer is the function as a read returns it, now with `review_status: "allowed"`, and your next call runs. `approval` (`default`, `always_allow`, or `always_ask`) sets when chat and agent runs ask before calling it. Leave it out to keep the mode you chose before, or `default` on a first allow. Calls over this API never ask. Send `{"action":"withdraw"}` to take the allow back; calls are refused with `review_required` again until you allow it once more. This is the same review as **Allow calls** in the app, and either one shows in the other.
+The answer is the function as a read returns it, now with `review_status: "allowed"`, and your next call runs. An allow keeps the mode you chose in the app for when chat and agent runs ask before calling it, or the default on a first allow; the API does not change it, and calls over this API never ask. Send `{"action":"withdraw"}` to take the allow back; calls are refused with `review_required` again until you allow it once more. This is the same review as **Allow calls** in the app, and either one shows in the other.
 
 The route needs `functions:invoke`. Only a function shared with you can be reviewed: your own function, a function not shared with you, and an id that does not exist answer `404`. If the function's interface changed after you read it, an allow answers `409` with `code: "review_conflict"`; read it again and allow the new `review_hash`. A withdraw of a function you never allowed answers `409` with `code: "not_reviewed"`.
 

@@ -882,6 +882,10 @@ describe('review', () => {
     ['a review_hash that is not a sha256', { action: 'allow', review_hash: 'abc' }],
     ['an unknown action', { action: 'approve' }],
     ['an extra field', { action: 'withdraw', enabled: false }],
+    [
+      'an approval mode, which only the app sets',
+      { action: 'allow', review_hash: 'a'.repeat(64), approval: 'always_allow' },
+    ],
   ])('answers 422 to %s', async (_name, body) => {
     expect((await review(OTHERS_ID, body)).status).toBe(422);
     expect(h.reviews).toEqual([]);
