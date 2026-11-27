@@ -395,7 +395,7 @@ public actor CaptureEngine {
     if error is StoreUnavailable { return true }
     guard let api = error as? APIError else { return false }
     switch api {
-    case .offline, .rateLimited, .server, .signedOut: return true
+    case .offline, .rateLimited, .server, .signedOut, .conflict: return true
     case .forbidden, .notFound, .malformedResponse, .upgradeRequired: return false
     }
   }
