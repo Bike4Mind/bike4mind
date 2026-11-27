@@ -968,7 +968,7 @@ export function useConversation(
             settledRereads++;
             return load();
           }
-          openRead.current = null;
+          if (openRead.current === read) openRead.current = null;
           setSession(loaded);
           // The read is the only way back to a held notice this window missed, as after a reconnect.
           setNotices(list => withHeldNotices(list, held));
