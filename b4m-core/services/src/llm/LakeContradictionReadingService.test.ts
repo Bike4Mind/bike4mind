@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import type { ApiKeyTable } from '@bike4mind/llm-adapters';
 import { ChatModels, EXCERPT_MAX, ForbiddenError, insufficientCreditsError } from '@bike4mind/common';
 import { AI_ACCESS_REVOKED_MESSAGE } from '../userService/accountState';
@@ -10,6 +10,7 @@ let nextResponse = '';
 let completeCalls = 0;
 let nextError: Error | null = null;
 let nextInfo: { inputTokens: number; outputTokens: number } | undefined;
+let nextComplete: ((opts: { abortSignal?: AbortSignal }) => Promise<void>) | null = null;
 
 vi.mock('@bike4mind/llm-adapters', async () => {
   const actual = await vi.importActual<typeof import('@bike4mind/llm-adapters')>('@bike4mind/llm-adapters');
@@ -20,10 +21,11 @@ vi.mock('@bike4mind/llm-adapters', async () => {
       complete: async (
         _model: string,
         _messages: unknown,
-        _opts: unknown,
+        opts: { abortSignal?: AbortSignal },
         callback: (texts: string[], info?: unknown) => Promise<void>
       ) => {
         completeCalls++;
+        if (nextComplete) return nextComplete(opts);
         if (nextError) throw nextError;
         await callback([nextResponse], nextInfo);
       },
@@ -31,7 +33,8 @@ vi.mock('@bike4mind/llm-adapters', async () => {
   };
 });
 
-const { LakeContradictionReadingService } = await import('./LakeContradictionReadingService');
+const { LakeContradictionReadingService, MODEL_CONTRADICTION_TIMEOUT_MS } =
+  await import('./LakeContradictionReadingService');
 
 const silentLogger = {
   info: vi.fn(),
@@ -52,6 +55,11 @@ beforeEach(() => {
   nextResponse = '';
   nextError = null;
   nextInfo = undefined;
+  nextComplete = null;
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('LakeContradictionReadingService.evaluate', () => {
@@ -243,5 +251,59 @@ describe('LakeContradictionReadingService.evaluate', () => {
     expect(completeCalls).toBe(2);
     expect(meter).toHaveBeenCalledTimes(2);
     expect(settle).toHaveBeenCalledTimes(2);
+  });
+
+  it('propagates a settlement failure after a valid response without buying a second provider call', async () => {
+    nextResponse = JSON.stringify({ contradictions: [] });
+    nextInfo = { inputTokens: 1200, outputTokens: 40 };
+    const ledgerDown = new Error('ledger unavailable');
+    const meter = vi.fn().mockResolvedValue({ settle: vi.fn().mockRejectedValue(ledgerDown), refund: vi.fn() });
+
+    await expect(service.evaluate({ apiKeyTable, documents: [doc('a'), doc('b')], meter })).rejects.toMatchObject({
+      cause: ledgerDown,
+    });
+    expect(completeCalls).toBe(1);
+    expect(meter).toHaveBeenCalledOnce();
+  });
+
+  it('propagates a refund failure after a provider error without buying a second provider call', async () => {
+    nextError = new Error('provider unavailable');
+    const ledgerDown = new Error('ledger unavailable');
+    const meter = vi.fn().mockResolvedValue({ settle: vi.fn(), refund: vi.fn().mockRejectedValue(ledgerDown) });
+
+    await expect(service.evaluate({ apiKeyTable, documents: [doc('a'), doc('b')], meter })).rejects.toMatchObject({
+      cause: ledgerDown,
+    });
+    expect(completeCalls).toBe(1);
+  });
+
+  it('aborts a timed-out call and closes every reservation before returning', async () => {
+    vi.useFakeTimers();
+    let reserved = 0;
+    let closed = 0;
+    // Slow ledger writes: a caller that does not await them returns with the reservation still open.
+    const close = async () => {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      closed++;
+      return 0;
+    };
+    const meter = vi.fn(async () => {
+      reserved++;
+      return { settle: close, refund: close };
+    });
+    // A provider that never answers on its own and stops a moment after it is aborted.
+    nextComplete = ({ abortSignal }) =>
+      new Promise<void>((_, reject) => {
+        abortSignal?.addEventListener('abort', () => setTimeout(() => reject(abortSignal.reason), 5), { once: true });
+      });
+
+    const outcome = service
+      .evaluate({ apiKeyTable, documents: [doc('a'), doc('b')], meter })
+      .then(result => ({ result, reserved, closed }));
+    await vi.advanceTimersByTimeAsync(MODEL_CONTRADICTION_TIMEOUT_MS * 3);
+
+    // A timeout is an inference failure, so the one retry still runs; neither reservation outlives the call.
+    await expect(outcome).resolves.toEqual({ result: null, reserved: 2, closed: 2 });
+    expect(completeCalls).toBe(2);
   });
 });

@@ -180,15 +180,16 @@ describe('lakeInconsistencyModelDetection queue handler (#3057)', () => {
     expect(h.detectLakeInconsistenciesModel.mock.calls[0][1].endUserId).toBe('owner1');
   });
 
-  it('falls back to the creator rather than stranding a claimed lease when the grant read fails', async () => {
-    // The lease is already held by this point, so throwing here would cost the lake its whole lease
-    // window for a lookup whose own fallback is the creator anyway.
+  it('fails the run before any reservation when the grant read fails, rather than billing the creator', async () => {
+    // A failed read says nothing about who owns the lake now; the creator may have transferred it away.
     h.listGrantsByLake.mockRejectedValue(new Error('mongo blip'));
 
-    await invoke();
-
-    expect(h.getEffectiveLLMApiKeys).toHaveBeenCalledWith('owner1', expect.anything(), expect.anything());
-    expect(h.loggerWarn).toHaveBeenCalledWith(expect.stringContaining('could not read lake grants'), expect.anything());
+    await expect(invoke()).rejects.toThrow('mongo blip');
+    expect(h.findUserById).not.toHaveBeenCalled();
+    expect(h.createCompletionMeter).not.toHaveBeenCalled();
+    expect(h.getEffectiveLLMApiKeys).not.toHaveBeenCalled();
+    expect(h.detectLakeInconsistenciesModel).not.toHaveBeenCalled();
+    expect(h.releaseModelInconsistencyRun).toHaveBeenCalledOnce();
   });
 
   it('re-checks the kill-switch at consume time, not just at enqueue time', async () => {

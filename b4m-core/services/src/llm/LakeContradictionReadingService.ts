@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { BadRequestError, InternalServerError } from '@bike4mind/utils';
-import { getAvailableModels, getLlmByModel, type ApiKeyTable } from '@bike4mind/llm-adapters';
+import { getAvailableModels, getLlmByModel, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
 import { ChatModels, EXCERPT_MAX, excerpt, isTerminalCreditRefusal } from '@bike4mind/common';
@@ -171,6 +171,61 @@ ${doc.text}
 }
 
 /**
+ * A settle or refund that failed after the provider was called. Never retried: another attempt buys
+ * another provider call, and the run must surface the unsettled one rather than finish quietly.
+ */
+export class ContradictionSettlementError extends Error {
+  constructor(cause: unknown) {
+    super('Could not settle the model contradiction pass reservation', { cause });
+    this.name = 'ContradictionSettlementError';
+  }
+}
+
+function tagSettlementFailures(meter: CompletionMeter): CompletionMeter {
+  return async (...args) => {
+    const metered = await meter(...args);
+    const fail = (error: unknown): never => {
+      throw new ContradictionSettlementError(error);
+    };
+    return { settle: usage => metered.settle(usage).catch(fail), refund: () => metered.refund().catch(fail) };
+  };
+}
+
+/**
+ * Cancels the call at the deadline instead of racing it (questExport's summary uses the same
+ * boundary), then awaits it, so the attempt's reservation is settled or refunded before this returns.
+ */
+function abortAtDeadline(
+  target: Pick<ICompletionBackend, 'complete'>,
+  timeoutMs: number
+): Pick<ICompletionBackend, 'complete'> {
+  return {
+    complete: async (model, messages, options, callback) => {
+      const controller = new AbortController();
+      const timeoutError = new Error(`Model contradiction pass timed out after ${timeoutMs}ms`);
+      const deadline = setTimeout(() => controller.abort(timeoutError), timeoutMs);
+      try {
+        await target.complete(
+          model,
+          messages,
+          { ...options, stream: false, retryMode: 'abort-aware', abortSignal: controller.signal },
+          callback
+        );
+        controller.signal.throwIfAborted();
+      } catch (error) {
+        throw controller.signal.aborted && !(error instanceof ContradictionSettlementError) ? timeoutError : error;
+      } finally {
+        clearTimeout(deadline);
+      }
+    },
+  };
+}
+
+/** Every later batch would fail the same way, so these end the run rather than count as a bad batch. */
+const endsRun = (error: unknown) =>
+  error instanceof ContradictionSettlementError || isTerminalCreditRefusal(error) || isAiAccessRefusal(error);
+
+/**
  * Read a batch of lake documents and surface the contradictions between them that no pattern rule
  * can see (#3057) - the reading half of the corpus-inconsistency detector, alongside the pure,
  * LLM-free lexical rules in `corpusInconsistency.ts`.
@@ -201,7 +256,10 @@ export class LakeContradictionReadingService {
     documents: ContradictionCandidateDocument[];
     /** Lake owner, for provider abuse attribution - matches `LakeMemoryExtractionService`. */
     endUserId?: string;
-    /** Bills every call, retries included, to the lake owner; its credit or AI-access refusal is rethrown. */
+    /**
+     * Bills every call, retries included, to the lake owner. Its credit or AI-access refusal, or a failed
+     * settlement, is rethrown.
+     */
     meter?: CompletionMeter;
   }): Promise<ModelContradiction[] | null> {
     // Nothing to compare. Below 2 the request would still bill for a read that can only ever answer
@@ -215,19 +273,24 @@ export class LakeContradictionReadingService {
       const backend = getLlmByModel(apiKeyTable, { modelInfo, logger: this.logger, endUserId });
       if (!backend) throw new InternalServerError(`Failed to initialize LLM for model: "${model}"`);
 
-      const llm = meter ? meterCompletionBackend(backend, meter, modelInfo) : backend;
+      const metered = meter ? meterCompletionBackend(backend, tagSettlementFailures(meter), modelInfo) : backend;
+      const llm = abortAtDeadline(metered, MODEL_CONTRADICTION_TIMEOUT_MS);
       const smallLLM = createSmallLLMService({ llm, modelId: model }, this.logger);
-      const { data } = await smallLLM.completeJSON(
-        buildContradictionPrompt(documents, randomUUID()),
-        ModelContradictionResponseSchema,
-        {
+      const prompt = buildContradictionPrompt(documents, randomUUID());
+      // timeoutMs 0: SmallLLMService's own timeout races without cancelling; the deadline lives in llm.
+      // The one retry is taken here because completeJSON's would also retry a settlement failure.
+      const read = () =>
+        smallLLM.completeJSON(prompt, ModelContradictionResponseSchema, {
           taskType: 'extraction',
           maxTokens: MODEL_CONTRADICTION_MAX_TOKENS,
-          timeoutMs: MODEL_CONTRADICTION_TIMEOUT_MS,
+          timeoutMs: 0,
           temperature: 0,
-          retries: 1,
-        }
-      );
+          retries: 0,
+        });
+      const { data } = await read().catch(error => {
+        if (endsRun(error)) throw error;
+        return read();
+      });
 
       // Guard against a hallucinated id: the model must cite documents it was actually given, not
       // invent one. A contradiction that loses a source to this filter is no longer cross-document.
@@ -249,8 +312,7 @@ export class LakeContradictionReadingService {
       });
       return grounded;
     } catch (error) {
-      // Every later batch would be refused too, so this ends the run rather than counting as a bad batch.
-      if (isTerminalCreditRefusal(error) || isAiAccessRefusal(error)) throw error;
+      if (endsRun(error)) throw error;
       this.logger.warn('Model contradiction pass failed for batch:', error);
       return null;
     }
