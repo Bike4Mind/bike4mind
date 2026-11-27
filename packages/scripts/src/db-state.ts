@@ -6,8 +6,9 @@
  *
  * Safety: the snapshot connects with autoIndex and autoCreate off, registers no model on its
  * connection, and sends only the read commands listed in dbState/readOnlyGuard.ts. Every command
- * is checked as it is sent; one outside that list fails the run with exit code 3. The connection
- * string is never printed.
+ * is checked as it is sent, which detects a write after the fact but cannot block it; one outside
+ * that list fails the run with exit code 3. Use a read-only database user to guarantee no writes.
+ * The connection string is never printed.
  *
  * Config: MONGODB_URI from SST resources (run under `sst shell`), falling back to the process env.
  * See the "Database state snapshot" section of packages/scripts/README.md for every flag.

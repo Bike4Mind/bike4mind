@@ -397,12 +397,15 @@ If the live list no longer verifies (corrupt bytes, or its key was dropped from 
 ## Database state snapshot
 
 `db:state` records a database's structural state to a JSON file and diffs two such files. Run a
-snapshot before and after maintenance or a large migration, then compare them. It is read-only:
-it connects with `autoIndex`/`autoCreate` off and sends only the read commands listed in
-`src/dbState/readOnlyGuard.ts`; any other command fails the run (exit 3) before the file is
-written. The connection string comes from `MONGODB_URI` (SST resource under `sst shell`, else the
-environment) and is never printed. The snapshot file holds no document data, but keep it out of
-the repo.
+snapshot before and after maintenance or a large migration, then compare them. It connects with
+`autoIndex`/`autoCreate` off and is meant to send only the read commands listed in
+`src/dbState/readOnlyGuard.ts`. The guard watches commands as the driver sends them, so it detects
+a non-read command after it has reached the server; it cannot stop it. When it sees one, the run
+fails (exit 3) and no file is written. To make the run truly read-only, point `MONGODB_URI` at a
+database user that has only the `read` (or `readAnyDatabase`) role, especially on production: the
+default `MONGODB_URI` under `sst shell` is the app's read-write user. The connection string comes
+from `MONGODB_URI` (SST resource under `sst shell`, else the environment) and is never printed. The
+snapshot file holds no document data, but keep it out of the repo.
 
 ```bash
 pnpm --filter @bike4mind/scripts db:state snapshot --out /tmp/before.json
