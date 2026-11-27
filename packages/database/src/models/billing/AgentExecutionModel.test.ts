@@ -48,6 +48,19 @@ describe('AgentExecutionRepository', () => {
       expect(failed?.completedAt).toBeInstanceOf(Date);
     });
 
+    it('stores a fallback message when the error message is empty, instead of failing validation', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution({ status: 'running' }));
+
+      expect(await agentExecutionRepository.markFailedIfActive(execution.id, { message: '', stack: 'trace' })).toBe(
+        true
+      );
+
+      const failed = await agentExecutionRepository.findById(execution.id);
+      expect(failed?.status).toBe('failed');
+      expect(failed?.error?.message).toBe('Unknown error');
+      expect(failed?.error?.stack).toBe('trace');
+    });
+
     it.each(TERMINAL_STATUSES)('leaves a %s execution untouched', async status => {
       const execution = await agentExecutionRepository.create(
         makeBaseExecution({ status, ...(status === 'failed' ? { error: { message: 'original' } } : {}) })
