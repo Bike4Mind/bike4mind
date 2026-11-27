@@ -14922,7 +14922,7 @@ export interface components {
       tier: 'user' | 'project' | 'organization';
       /** @description The id of the user, project or organization the page is published under. */
       scope_id: string;
-      /** @description The page address within the scope, lowercase kebab-case. */
+      /** @description The page address within the scope: 3-64 lowercase kebab-case characters, not a reserved name. */
       slug: string;
       title: string;
       description?: string;

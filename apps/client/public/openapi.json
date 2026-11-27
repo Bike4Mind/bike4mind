@@ -31435,8 +31435,10 @@
           },
           "slug": {
             "type": "string",
-            "minLength": 1,
-            "description": "The page address within the scope, lowercase kebab-case."
+            "minLength": 3,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "description": "The page address within the scope: 3-64 lowercase kebab-case characters, not a reserved name."
           },
           "title": {
             "type": "string",

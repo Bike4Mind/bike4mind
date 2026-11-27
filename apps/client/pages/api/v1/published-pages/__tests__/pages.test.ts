@@ -226,6 +226,15 @@ describe('published-pages routes', () => {
     );
   });
 
+  it.each(['nested/page', 'ab', 'Has-Caps', 'api', 'a'.repeat(65)])(
+    'rejects the invalid or reserved slug %s (422)',
+    async slug => {
+      mockCreateUpload.mockClear();
+      expect((await createUpload({ ...UPLOAD_BODY, slug }))._getStatusCode()).toBe(422);
+      expect(mockCreateUpload).not.toHaveBeenCalled();
+    }
+  );
+
   it('re-statuses service errors to declared statuses', async () => {
     mockCreateUpload.mockRejectedValueOnce(new HTTPError(400, 'Too many files', { errorCode: 'too_many_files' }));
     expect((await createUpload())._getStatusCode()).toBe(422);

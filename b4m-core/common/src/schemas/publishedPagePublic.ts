@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { PublishTagsSchema, PUBLISH_LIMITS, PublishScopeTierSchema, EmbedOriginsSchema } from './publishedArtifact';
+import {
+  PublishTagsSchema,
+  SlugSchema,
+  PUBLISH_LIMITS,
+  PublishScopeTierSchema,
+  EmbedOriginsSchema,
+} from './publishedArtifact';
 import { VisibilitySchema } from './artifacts';
 import { CommentPolicySchema } from './annotation';
 import { PublishAccessGateRequestSchema } from './artifactPublic';
@@ -44,7 +50,9 @@ export const CreatePublishedPageUploadRequestSchema = z
   .object({
     tier: PublishScopeTierSchema.describe('`user`, `project` or `organization`.'),
     scope_id: z.string().min(1).describe('The id of the user, project or organization the page is published under.'),
-    slug: z.string().min(1).describe('The page address within the scope, lowercase kebab-case.'),
+    slug: SlugSchema.describe(
+      'The page address within the scope: 3-64 lowercase kebab-case characters, not a reserved name.'
+    ),
     title: z.string().min(1).max(200),
     description: z.string().max(1000).optional(),
     visibility: VisibilitySchema.optional().describe('Defaults to the scope default.'),
