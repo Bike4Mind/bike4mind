@@ -51,10 +51,13 @@ const patchRoute = nextRouteForContract(updatePublishedPageContract, {
       gate === null || gate.kind === 'passphrase' ? gate : { kind: 'domain', allowedDomains: gate.allowed_domains };
   }
 
-  // Widening is checked for outbound-action trust inside the service; narrowing is never blocked.
+  // Widening is checked for outbound-action trust inside the service; narrowing is never blocked. The page
+  // is already proven managed, so a service 403 other than a plain ownership refusal is the trust refusal and stays 403, not "not found".
+  const toDeclared = declaredStatuses([404, 422]);
   const updated = await withStatusMap(
     () => updatePublishedPage({ user: req.user, logger: req.logger, publicId: public_id, patch, request: req }),
-    declaredStatuses([404, 422])
+    error =>
+      error.statusCode === 403 && error.additionalInfo?.errorCode !== 'forbidden' ? undefined : toDeclared(error)
   );
 
   return res.json(toPublishedPageResource(updated));

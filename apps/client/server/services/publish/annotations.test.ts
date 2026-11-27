@@ -14,6 +14,9 @@ import type { PublishUser } from './checkScopePermission';
 const db = vi.hoisted(() => ({
   artifact: vi.fn(),
   annotationRows: vi.fn(),
+  findFilter: vi.fn(),
+  sortArg: vi.fn(),
+  limitArg: vi.fn(),
   findOne: vi.fn(),
   count: vi.fn(),
   create: vi.fn(),
@@ -23,8 +26,13 @@ const db = vi.hoisted(() => ({
 vi.mock('@bike4mind/database', () => ({
   PublishedArtifact: { findOne: () => ({ select: () => ({ lean: db.artifact }) }) },
   Annotation: {
-    find: () => {
-      const query: Record<string, unknown> = { sort: () => query, limit: () => query, lean: db.annotationRows };
+    find: (filter: unknown) => {
+      db.findFilter(filter);
+      const query: Record<string, unknown> = {
+        sort: (s: unknown) => (db.sortArg(s), query),
+        limit: (n: unknown) => (db.limitArg(n), query),
+        lean: db.annotationRows,
+      };
       return query;
     },
     findOne: db.findOne,
@@ -161,6 +169,33 @@ describe('annotation services', () => {
     expect(result.hasMore).toBe(true);
     db.annotationRows.mockResolvedValue([row('c')]);
     expect((await listAnnotations({ publicId: 'pub1', page: { limit: 2 } })).hasMore).toBe(false);
+  });
+
+  it('builds the keyset query: $or on createdAt then _id, id tie-break sort, limit + 1', async () => {
+    db.annotationRows.mockResolvedValue([]);
+    db.findFilter.mockClear();
+    db.sortArg.mockClear();
+    db.limitArg.mockClear();
+    const at = new Date('2026-10-02');
+    await listAnnotations({ publicId: 'pub1', page: { limit: 2, after: { at, id: 'a' } } });
+    expect(db.findFilter).toHaveBeenCalledWith({
+      publicId: 'pub1',
+      deletedAt: null,
+      $or: [{ createdAt: { $gt: at } }, { createdAt: at, _id: { $gt: 'a' } }],
+    });
+    expect(db.sortArg).toHaveBeenCalledWith({ createdAt: 1, _id: 1 });
+    expect(db.limitArg).toHaveBeenCalledWith(3);
+  });
+
+  it('keeps the legacy unpaged query on the createdAt index sort with no limit', async () => {
+    db.annotationRows.mockResolvedValue([]);
+    db.findFilter.mockClear();
+    db.sortArg.mockClear();
+    db.limitArg.mockClear();
+    await listAnnotations({ publicId: 'pub1' });
+    expect(db.findFilter).toHaveBeenCalledWith({ publicId: 'pub1', deletedAt: null });
+    expect(db.sortArg).toHaveBeenCalledWith({ createdAt: 1 });
+    expect(db.limitArg).not.toHaveBeenCalled();
   });
 
   it('passes the gate proof to the visibility check only for passphrase gates', async () => {

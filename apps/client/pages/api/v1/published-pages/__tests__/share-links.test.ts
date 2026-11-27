@@ -5,6 +5,7 @@ import {
   ListPublishedPageShareLinksResponseSchema,
   PublishedPageShareLinkParamSchema,
 } from '@bike4mind/common';
+import { ZodError } from 'zod';
 import { callRoute } from './routeMocks';
 
 const store = vi.hoisted(() => ({ links: [] as Array<{ id: string; token: string; expiresAt: Date | null }> }));
@@ -142,12 +143,27 @@ describe('/api/v1/published-pages/{public_id}/share-links', () => {
     expect((await callRoute(shareLinks, { method: 'POST', query: PAGE, body: { expires_at: BAD } })).status).toBe(422);
   });
 
+  it("rejects a cursor minted for another page's link list", async () => {
+    for (let i = 0; i < 2; i++) await callRoute(shareLinks, { method: 'POST', query: PAGE, body: {} });
+    const first = await callRoute(shareLinks, { method: 'GET', query: { ...PAGE, limit: '1' } });
+    const cursor = (first.json as unknown as { next_cursor: string }).next_cursor;
+    expect(cursor).toEqual(expect.any(String));
+    expect((await callRoute(shareLinks, { method: 'GET', query: { ...PAGE, limit: '1', cursor } })).status).toBe(200);
+    const other = await callRoute(shareLinks, {
+      method: 'GET',
+      query: { public_id: 'other-page', limit: '1', cursor },
+    });
+    expect(other.status).toBe(422);
+  });
+
   it('never revokes every link for a blank or malformed link_id', async () => {
     await callRoute(shareLinks, { method: 'POST', query: PAGE, body: {} });
     await callRoute(shareLinks, { method: 'POST', query: PAGE, body: {} });
     for (const link_id of [' ', '\t', 'nope']) {
       expect(PublishedPageShareLinkParamSchema.safeParse({ ...PAGE, link_id }).success).toBe(false);
-      await expect(callRoute(revoke, { method: 'DELETE', query: { ...PAGE, link_id } })).rejects.toThrow();
+      await expect(callRoute(revoke, { method: 'DELETE', query: { ...PAGE, link_id } })).rejects.toBeInstanceOf(
+        ZodError
+      );
     }
     expect(store.links).toHaveLength(2);
   });

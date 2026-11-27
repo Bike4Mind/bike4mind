@@ -135,7 +135,13 @@ describe('published page sub-routes', () => {
     });
 
     it('pages the list by limit, hands out a cursor and rejects a malformed one', async () => {
-      mocks.list.mockResolvedValue({ annotations: [dto({ id: '5b1f6a0e00000000000000a1' })], hasMore: true });
+      mocks.list.mockResolvedValue({
+        annotations: [
+          dto({ id: '5b1f6a0e00000000000000a0', createdAt: '2026-10-01T09:30:00.000Z' }),
+          dto({ id: '5b1f6a0e00000000000000a1' }),
+        ],
+        hasMore: true,
+      });
       const first = await callRoute(comments, { method: 'GET', query: { ...PAGE, limit: '1' } });
       expect(mocks.list).toHaveBeenCalledWith(expect.objectContaining({ page: { limit: 1, after: undefined } }));
       const cursor = (first.json as unknown as { next_cursor: string }).next_cursor;
@@ -148,7 +154,14 @@ describe('published page sub-routes', () => {
           page: { limit: 1, after: { at: new Date('2026-10-02T09:30:00.000Z'), id: '5b1f6a0e00000000000000a1' } },
         })
       );
+      // A cursor minted for this page is not valid on another.
       mocks.list.mockClear();
+      const other = await callRoute(comments, {
+        method: 'GET',
+        query: { public_id: 'other-page', limit: '1', cursor },
+      });
+      expect(other.status).toBe(422);
+      expect(mocks.list).not.toHaveBeenCalled();
       const bad = await callRoute(comments, { method: 'GET', query: { ...PAGE, cursor: 'garbage' } });
       expect(bad.status).toBe(422);
       expect(mocks.list).not.toHaveBeenCalled();

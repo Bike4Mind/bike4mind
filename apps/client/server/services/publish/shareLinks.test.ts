@@ -102,7 +102,6 @@ describe('createShareLink', () => {
   it('parses a raw body only after the owner check', async () => {
     mockLoad.mockResolvedValue(artifact([], { ownerId: 'someone-else' }));
     expect((await refusal(createShareLink({ ...base, body: { regenerate: 'yes' } }))).statusCode).toBe(403);
-    await expect(createShareLink({ ...base, body: { regenerate: 'yes' } })).rejects.toThrow();
   });
 
   it('refuses an additional link at the live cap', async () => {

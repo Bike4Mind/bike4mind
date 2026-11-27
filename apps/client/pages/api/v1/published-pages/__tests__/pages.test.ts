@@ -291,8 +291,12 @@ describe('published-pages routes', () => {
     expect((await patchPage({ visibility: 'private' }))._getStatusCode()).toBe(200);
     expect(assertOutboundActionAllowed).not.toHaveBeenCalled();
     // Widening is refused by the service, which owns that check.
-    mockUpdatePage.mockRejectedValueOnce(new HTTPError(403, 'Account trust required'));
-    expect((await patchPage({ visibility: 'public' }))._getStatusCode()).toBe(404);
+    mockUpdatePage.mockRejectedValueOnce(
+      new HTTPError(403, 'Account trust required', { errorCode: 'account_trust_required' })
+    );
+    const widened = await patchPage({ visibility: 'public' });
+    expect(widened._getStatusCode()).toBe(403);
+    expect(widened._getJSONData()).toMatchObject({ errorCode: 'account_trust_required' });
     vi.mocked(assertOutboundActionAllowed).mockReset();
   });
 

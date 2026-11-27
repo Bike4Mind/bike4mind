@@ -103793,11 +103793,11 @@
             }
           },
           "403": {
-            "description": "The API key lacks `artifacts:publish`.",
+            "description": "The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account) or an administrator restriction. On a page update only a widening change is refused.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },
@@ -104506,7 +104506,7 @@
       "get": {
         "operationId": "listPublishedPageShareLinks",
         "summary": "List share links",
-        "description": "Lists the live no-sign-in share links of a page, oldest first. Cursor-paginated like other lists. A link is identified by `id` and a 4-character `token_hint`; the token and URL are never returned here. The URL is returned once, when the link is created.",
+        "description": "Lists the live no-sign-in share links of a page in id order (approximately creation order). Cursor-paginated like other lists. A link is identified by `id` and a 4-character `token_hint`; the token and URL are never returned here. The URL is returned once, when the link is created.",
         "tags": [
           "Published pages"
         ],
@@ -105035,11 +105035,11 @@
             }
           },
           "403": {
-            "description": "The API key lacks `artifacts:publish`.",
+            "description": "The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account) or an administrator restriction. On a page update only a widening change is refused.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },
@@ -105978,11 +105978,11 @@
             }
           },
           "403": {
-            "description": "The API key lacks `artifacts:publish`.",
+            "description": "The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account) or an administrator restriction. On a page update only a widening change is refused.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },
@@ -106881,11 +106881,11 @@
             }
           },
           "403": {
-            "description": "The API key lacks `artifacts:publish`.",
+            "description": "The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account) or an administrator restriction. On a page update only a widening change is refused.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScopeForbiddenResponse"
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             },

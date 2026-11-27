@@ -381,6 +381,12 @@ describe('/api/v1/published-pages scope enforcement (real middleware chain)', ()
     }
   });
 
+  it('each operation row names its own service, not the shared page lookup', () => {
+    for (const op of OPERATIONS) {
+      if (op.name !== 'getPublishedPage') expect(op.service, op.name).not.toBe(mockGetPage);
+    }
+  });
+
   it('an invalid key is refused (401) on every operation', async () => {
     mockValidate.mockResolvedValue({ isValid: false });
     for (const op of OPERATIONS) {

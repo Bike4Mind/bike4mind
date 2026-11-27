@@ -209,7 +209,7 @@ export async function listAnnotations({
     ...(after && {
       $or: [{ createdAt: { $gt: after.at } }, { createdAt: after.at, _id: { $gt: after.id } }],
     }),
-  }).sort({ createdAt: 1, _id: 1 });
+  }).sort(page ? { createdAt: 1, _id: 1 } : { createdAt: 1 }); // _id tie-break only for keyset paging; the legacy sort rides the index
   if (page) query.limit(page.limit + 1);
   const found = await query.lean<AnnotationLean[]>();
   const hasMore = page !== undefined && found.length > page.limit;

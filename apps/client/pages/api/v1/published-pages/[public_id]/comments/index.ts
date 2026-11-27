@@ -16,14 +16,14 @@ import { fromCommentAnchor, loadManagedPage, toCommentResource } from '@server/p
 import { withStatusMap } from '@server/publish/v1PublishedPageRoute';
 import { decodeTimeIdCursor, encodeTimeIdCursor } from '@server/utils/cursorPagination';
 
-const CURSOR_SCOPE = 'v1.published-page-comments';
+const cursorScope = (publicId: string) => `v1.published-page-comments:${publicId}`;
 
 const listRoute = nextRouteForContract(listPublishedPageCommentsContract, {
   rateLimit: perUserRateLimit('GET /api/v1/published-pages/[public_id]/comments'),
 }).get(async (req, res) => {
   const { public_id } = req.validatedParams;
   const { limit, cursor } = req.validatedQuery;
-  const after = cursor === undefined ? undefined : decodeTimeIdCursor(cursor, CURSOR_SCOPE);
+  const after = cursor === undefined ? undefined : decodeTimeIdCursor(cursor, cursorScope(public_id));
   await loadManagedPage(req.user, public_id);
   const { annotations, hasMore } = await listAnnotations({
     user: req.user,
@@ -34,7 +34,9 @@ const listRoute = nextRouteForContract(listPublishedPageCommentsContract, {
   res.setHeader('Cache-Control', 'private, no-store');
   return res.status(200).json({
     data: annotations.map(toCommentResource),
-    next_cursor: hasMore ? encodeTimeIdCursor(CURSOR_SCOPE, { at: new Date(last.createdAt), id: last.id }) : null,
+    next_cursor: hasMore
+      ? encodeTimeIdCursor(cursorScope(public_id), { at: new Date(last.createdAt), id: last.id })
+      : null,
   });
 });
 

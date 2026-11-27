@@ -2413,7 +2413,7 @@ export interface paths {
     };
     /**
      * List share links
-     * @description Lists the live no-sign-in share links of a page, oldest first. Cursor-paginated like other lists. A link is identified by `id` and a 4-character `token_hint`; the token and URL are never returned here. The URL is returned once, when the link is created.
+     * @description Lists the live no-sign-in share links of a page in id order (approximately creation order). Cursor-paginated like other lists. A link is identified by `id` and a 4-character `token_hint`; the token and URL are never returned here. The URL is returned once, when the link is created.
      */
     get: operations['listPublishedPageShareLinks'];
     put?: never;
@@ -44428,7 +44428,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `artifacts:publish`. */
+      /** @description The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account) or an administrator restriction. On a page update only a widening change is refused. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -44448,7 +44448,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
       /** @description No page with that id is managed by the caller. A page that does not exist, a deleted one and one you do not own are all reported as 404, so ids cannot be probed. */
@@ -44787,7 +44787,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `artifacts:publish`. */
+      /** @description The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account) or an administrator restriction. On a page update only a widening change is refused. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -44807,7 +44807,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
       /** @description No page with that id is managed by the caller. A page that does not exist, a deleted one and one you do not own are all reported as 404, so ids cannot be probed. */
@@ -45189,7 +45189,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `artifacts:publish`. */
+      /** @description The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account) or an administrator restriction. On a page update only a widening change is refused. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -45209,7 +45209,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
       /** @description No page with that id is managed by the caller. A page that does not exist, a deleted one and one you do not own are all reported as 404, so ids cannot be probed. */
@@ -45571,7 +45571,7 @@ export interface operations {
           'application/json': components['schemas']['ErrorResponse'];
         };
       };
-      /** @description The API key lacks `artifacts:publish`. */
+      /** @description The API key lacks `artifacts:publish` (scope error body), or the account may not use this action yet: `errorCode: account_trust_required` (new or unverified account) or an administrator restriction. On a page update only a widening change is refused. */
       403: {
         headers: {
           /** @description Correlation id for this request; safe to log and quote in support requests. */
@@ -45591,7 +45591,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          'application/json': components['schemas']['ScopeForbiddenResponse'];
+          'application/json': components['schemas']['ErrorResponse'];
         };
       };
       /** @description No page with that id is managed by the caller. A page that does not exist, a deleted one and one you do not own are all reported as 404, so ids cannot be probed. */

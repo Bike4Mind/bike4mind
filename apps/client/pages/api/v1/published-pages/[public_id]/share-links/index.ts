@@ -17,7 +17,7 @@ import {
 } from '@server/publish/publishedPageSubresources';
 import { declaredStatuses, withStatusMap } from '@server/publish/v1PublishedPageRoute';
 
-const CURSOR_SCOPE = 'v1.published-page-share-links';
+const cursorScope = (publicId: string) => `v1.published-page-share-links:${publicId}`;
 
 // The live-link limit and a bad expiry are validation failures.
 const toDeclared = declaredStatuses([404, 422]);
@@ -32,7 +32,7 @@ const listRoute = nextRouteForContract(listPublishedPageShareLinksContract, {
     toDeclared
   );
   // The set is bounded by the live-link ceiling, so it is paged in memory.
-  const { items, nextCursor } = paginateById(links, { ...req.validatedQuery, scope: CURSOR_SCOPE });
+  const { items, nextCursor } = paginateById(links, { ...req.validatedQuery, scope: cursorScope(public_id) });
   res.setHeader('Cache-Control', 'private, no-store');
   return res.status(200).json({ data: items.map(toShareLinkResource), next_cursor: nextCursor });
 });
