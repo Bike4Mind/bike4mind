@@ -1657,6 +1657,78 @@ describe('semanticDataLakeSearch Atlas $vectorSearch cutover', () => {
     expect(result.results.map(r => r.fileId).sort()).toEqual(['fresh', 'ready']);
   });
 
+  describe('fallback-to-scan metrics', () => {
+    const runAtlasSearch = async (adapters: ReturnType<typeof annAdapters>) => {
+      const { search, findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } = adapters;
+      return semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, vectorSearch, getAtlasIndexStatus } },
+      } as never);
+    };
+    const reportedFallbacks = () => {
+      expect(mockRecordDataLakeSearchMetrics).toHaveBeenCalledTimes(1);
+      return mockRecordDataLakeSearchMetrics.mock.calls[0][0].fallbacks;
+    };
+
+    it('reports a not-queryable index, and the scan-only search it caused', async () => {
+      const result = await runAtlasSearch(
+        annAdapters({ files: [annFile('f1')], scanChunks: chunkRows('f1', 2), indexQueryable: false })
+      );
+
+      expect(reportedFallbacks()).toEqual({
+        indexNotQueryable: true,
+        annQueryFailed: false,
+        annServedNothingReason: 'index-not-queryable',
+      });
+      expect(result.scan.chunksScanned).toBe(2);
+    });
+
+    it('reports a throwing ANN query, and still serves its files from the scan', async () => {
+      const adapters = annAdapters({ files: [annFile('f1')], scanChunks: chunkRows('f1', 2) });
+      adapters.vectorSearch.mockRejectedValue(new Error('vector index unavailable'));
+
+      const result = await runAtlasSearch(adapters);
+
+      expect(adapters.vectorSearch).toHaveBeenCalledTimes(1);
+      expect(reportedFallbacks()).toEqual({
+        indexNotQueryable: false,
+        annQueryFailed: true,
+        annServedNothingReason: null,
+      });
+      expect(result.scan.chunksScanned).toBe(2);
+      expect(result.results.map(r => r.fileId)).toEqual(['f1', 'f1']);
+    });
+
+    it('reports the blocked reason when vector search serves nothing', async () => {
+      await runAtlasSearch(
+        annAdapters({
+          files: [annFile('f1', { chunkEmbeddingModelStampedAt: freshStamp })],
+          scanChunks: chunkRows('f1', 2),
+        })
+      );
+
+      expect(reportedFallbacks()).toEqual({
+        indexNotQueryable: false,
+        annQueryFailed: false,
+        annServedNothingReason: 'ready-files-within-lag',
+      });
+    });
+
+    it('reports no fallback when ANN serves the search', async () => {
+      await runAtlasSearch(
+        annAdapters({
+          files: [annFile('f1')],
+          annHits: [{ id: 'f1-c0', fabFileId: 'f1', text: 'ann hit', score: 0.95 }],
+        })
+      );
+
+      expect(reportedFallbacks()).toEqual({
+        indexNotQueryable: false,
+        annQueryFailed: false,
+        annServedNothingReason: null,
+      });
+    });
+  });
+
   describe("the per-document cap's widened ANN limit", () => {
     // Every other cap test drives the SCAN path, where the widening is invisible (scanAndRank's
     // read volume is bounded by maxChunks, not topK). The ANN backends are the only place the
