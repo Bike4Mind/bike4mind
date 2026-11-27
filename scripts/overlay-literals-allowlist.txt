@@ -32,7 +32,6 @@ apps/client/app/hooks/useNavigationExecutor.ts
 apps/client/app/hooks/useOptiNavigation.ts
 apps/client/app/hooks/useWorkspaceTargets.test.ts
 apps/client/app/sw.ts
-apps/client/app/utils/navigationIntentSurface.ts
 packages/server-utils/src/lib/entitlements/registry.test.ts
 packages/server-utils/src/lib/entitlements/registry.ts
 apps/client/next.config.mjs
