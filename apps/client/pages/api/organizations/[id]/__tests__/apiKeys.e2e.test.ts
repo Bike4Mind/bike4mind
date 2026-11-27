@@ -35,6 +35,7 @@ import {
 import { organizationRepository } from '@bike4mind/database/infra';
 import { userApiKeyRepository, userRepository } from '@bike4mind/database/auth';
 import { groupRepository } from '@bike4mind/database/social';
+import { publishedArtifactRepository } from '@bike4mind/database/content';
 import { lakeConfigAuditDb } from '@bike4mind/server-utils/dataLakes/lakeConfigAuditDb';
 import { assertAccountStateUsable } from '@bike4mind/server-utils/auth/assertAccountStateUsable';
 import { GATED_API_KEY_SCOPES } from '@bike4mind/server-utils/app/constants/apiKeyScopes';
@@ -156,6 +157,7 @@ const departureAdapters = {
     userApiKeys: userApiKeyRepository,
     dataLakes: dataLakeRepository,
     dataLakeAccessGrants: dataLakeAccessGrantRepository,
+    publishedArtifacts: publishedArtifactRepository,
     ...lakeConfigAuditDb,
   },
   logger,
