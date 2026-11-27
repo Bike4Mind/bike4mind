@@ -9,6 +9,7 @@ extension APIError {
     case .rateLimited: "Too many requests. Wait a moment and try again."
     case .server: "Bike4Mind had a problem. Try again in a moment."
     case .notFound: "This item no longer exists."
+    case .conflict: "Something else changed this notebook at the same time. Try again."
     case .forbidden: "You don't have access to this."
     case .signedOut: "Your session ended. Sign in again."
     case .malformedResponse: "Bike4Mind sent something this version of the app can't read. Try updating the app."
