@@ -1,6 +1,38 @@
-import { describe, it, expect } from 'vitest';
-import { canAnnotate, toAnnotationDto, toPublishUser, type AnnotationLean } from './annotations';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  canAnnotate,
+  createAnnotation,
+  deleteAnnotation,
+  listAnnotations,
+  toAnnotationDto,
+  toPublishUser,
+  updateAnnotation,
+  type AnnotationLean,
+} from './annotations';
 import type { PublishUser } from './checkScopePermission';
+
+const db = vi.hoisted(() => ({
+  artifact: vi.fn(),
+  annotationRows: vi.fn(),
+  findOne: vi.fn(),
+  count: vi.fn(),
+  create: vi.fn(),
+  loadLiveOwner: vi.fn(),
+  checkVisibility: vi.fn(),
+}));
+vi.mock('@bike4mind/database', () => ({
+  PublishedArtifact: { findOne: () => ({ select: () => ({ lean: db.artifact }) }) },
+  Annotation: {
+    find: () => ({ sort: () => ({ lean: db.annotationRows }) }),
+    findOne: db.findOne,
+    countDocuments: db.count,
+    create: db.create,
+  },
+}));
+vi.mock('@server/services/publish', () => ({
+  checkVisibility: db.checkVisibility,
+  loadLiveOwner: db.loadLiveOwner,
+}));
 
 const owner: PublishUser = { id: 'u-owner', username: 'owner', isAdmin: false, organizationId: null };
 const viewer: PublishUser = { id: 'u-viewer', username: 'viewer', isAdmin: false, organizationId: null };
@@ -71,5 +103,169 @@ describe('toAnnotationDto', () => {
     expect(Object.keys(dto)).not.toContain('deletedAt');
     expect(Object.keys(dto)).not.toContain('deletedBy');
     expect(Object.keys(dto)).not.toContain('authorId');
+  });
+});
+
+describe('annotation services', () => {
+  const logger = { info: vi.fn() };
+  const artifactDoc = {
+    publicId: 'pub1',
+    visibility: 'public',
+    ownerId: 'u-owner',
+    scopeId: 's1',
+    commentPolicy: 'open',
+    sha256Index: 'sha',
+    accessGate: null,
+  };
+  const expressUser = (u: PublishUser) => u as unknown as Express.User;
+  const rejection = async (p: Promise<unknown>) =>
+    p.then(
+      () => null,
+      (e: unknown) => e as Record<string, unknown>
+    );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    db.artifact.mockResolvedValue(artifactDoc);
+    db.loadLiveOwner.mockResolvedValue({});
+    db.checkVisibility.mockResolvedValue({ ok: true });
+    db.annotationRows.mockResolvedValue([]);
+    db.count.mockResolvedValue(0);
+  });
+
+  it('lists for an anonymous viewer and marks only open-public lists cacheable', async () => {
+    expect(await listAnnotations({ publicId: 'pub1' })).toEqual({
+      annotations: [],
+      commentPolicy: 'open',
+      cacheable: true,
+    });
+    db.artifact.mockResolvedValue({ ...artifactDoc, accessGate: { kind: 'passphrase' } });
+    expect((await listAnnotations({ publicId: 'pub1' })).cacheable).toBe(false);
+  });
+
+  it('passes the gate proof to the visibility check only for passphrase gates', async () => {
+    db.artifact.mockResolvedValue({ ...artifactDoc, accessGate: { kind: 'passphrase' } });
+    await listAnnotations({ publicId: 'pub1', hasGateProof: true });
+    expect(db.checkVisibility.mock.calls[0][2]).toEqual({ passphraseVerified: true });
+    db.artifact.mockResolvedValue({ ...artifactDoc, accessGate: { kind: 'domain' } });
+    await listAnnotations({ publicId: 'pub1', hasGateProof: true });
+    expect(db.checkVisibility.mock.calls[1][2]).toEqual({ passphraseVerified: false });
+  });
+
+  it('throws 404 not_found when the artifact or its owner is gone', async () => {
+    db.loadLiveOwner.mockResolvedValue(null);
+    expect(await rejection(listAnnotations({ publicId: 'pub1' }))).toMatchObject({
+      statusCode: 404,
+      additionalInfo: { errorCode: 'not_found' },
+    });
+  });
+
+  it('throws the visibility status when the gate refuses', async () => {
+    db.checkVisibility.mockResolvedValue({ ok: false, status: 401, error: 'Passphrase required' });
+    expect(await rejection(listAnnotations({ publicId: 'pub1' }))).toMatchObject({
+      statusCode: 401,
+      message: 'Passphrase required',
+    });
+  });
+
+  it('create requires a user, a comment kind and a permitting policy', async () => {
+    const input = { body: 'hi' };
+    expect(await rejection(createAnnotation({ publicId: 'pub1', input, logger }))).toMatchObject({ statusCode: 401 });
+    expect(
+      await rejection(
+        createAnnotation({ user: expressUser(viewer), publicId: 'pub1', input: { ...input, kind: 'vote' }, logger })
+      )
+    ).toMatchObject({ statusCode: 400, additionalInfo: { errorCode: 'unsupported_annotation_kind' } });
+    db.artifact.mockResolvedValue({ ...artifactDoc, commentPolicy: 'none' });
+    expect(
+      await rejection(createAnnotation({ user: expressUser(viewer), publicId: 'pub1', input, logger }))
+    ).toMatchObject({ statusCode: 403, message: 'Commenting is disabled for this artifact' });
+  });
+
+  it('create throttles non-admins and exempts admins', async () => {
+    db.count.mockResolvedValue(30);
+    const input = { body: 'hi' };
+    expect(
+      await rejection(createAnnotation({ user: expressUser(viewer), publicId: 'pub1', input, logger }))
+    ).toMatchObject({ statusCode: 429, additionalInfo: { errorCode: 'comment_rate_limited' } });
+    db.create.mockResolvedValue({
+      id: 'a1',
+      toObject: () => ({ _id: 'a1', publicId: 'pub1', kind: 'comment', createdAt: new Date(0) }),
+    });
+    await createAnnotation({ user: expressUser(admin), publicId: 'pub1', input, logger });
+    expect(db.count).toHaveBeenCalledTimes(1);
+  });
+
+  it('create pins the artifact version, validates the thread root and logs', async () => {
+    db.create.mockResolvedValue({
+      id: 'a1',
+      toObject: () => ({ _id: 'a1', publicId: 'pub1', kind: 'comment', createdAt: new Date(0) }),
+    });
+    const dto = await createAnnotation({ user: expressUser(viewer), publicId: 'pub1', input: { body: 'hi' }, logger });
+    expect(dto.id).toBe('a1');
+    expect(db.create).toHaveBeenCalledWith(
+      expect.objectContaining({ artifactVersionSha: 'sha', authorId: 'u-viewer' })
+    );
+    expect(logger.info).toHaveBeenCalledWith('[ANNOTATE] create publicId=pub1 by=u-viewer id=a1');
+    expect(
+      await rejection(
+        createAnnotation({
+          user: expressUser(viewer),
+          publicId: 'pub1',
+          input: { body: 'x', threadRootId: 'nope' },
+          logger,
+        })
+      )
+    ).toMatchObject({ statusCode: 400, additionalInfo: { errorCode: 'invalid_thread_root' } });
+  });
+
+  describe('update and delete', () => {
+    const id = 'a'.repeat(24);
+    const row = (authorId: string) => ({
+      authorId,
+      body: 'old',
+      resolvedAt: null as Date | null,
+      resolvedBy: null as string | null,
+      save: vi.fn(),
+      softDelete: vi.fn(),
+      toObject() {
+        return { _id: id, publicId: 'pub1', kind: 'comment', body: this.body, createdAt: new Date(0) };
+      },
+    });
+
+    it('only the author may edit the body', async () => {
+      db.findOne.mockResolvedValue(row('u-viewer'));
+      expect(
+        await rejection(updateAnnotation({ user: expressUser(admin), publicId: 'pub1', id, input: { body: 'new' } }))
+      ).toMatchObject({ statusCode: 403, additionalInfo: { errorCode: 'author_only' } });
+      const dto = await updateAnnotation({ user: expressUser(viewer), publicId: 'pub1', id, input: { body: 'new' } });
+      expect(dto.body).toBe('new');
+    });
+
+    it('lets the artifact owner resolve but not an unrelated viewer', async () => {
+      const ann = row('u-viewer');
+      db.findOne.mockResolvedValue(ann);
+      db.artifact.mockResolvedValue({ ownerId: 'u-owner' });
+      await updateAnnotation({ user: expressUser(owner), publicId: 'pub1', id, input: { resolved: true } });
+      expect(ann.resolvedBy).toBe('u-owner');
+      const other = { ...viewer, id: 'u-other' };
+      expect(
+        await rejection(updateAnnotation({ user: expressUser(other), publicId: 'pub1', id, input: { resolved: true } }))
+      ).toMatchObject({ statusCode: 403 });
+    });
+
+    it('404s a malformed or unknown id', async () => {
+      expect(
+        await rejection(deleteAnnotation({ user: expressUser(viewer), publicId: 'pub1', id: 'bad', logger }))
+      ).toMatchObject({ statusCode: 404 });
+    });
+
+    it('soft-deletes for the author and logs', async () => {
+      const ann = row('u-viewer');
+      db.findOne.mockResolvedValue(ann);
+      await deleteAnnotation({ user: expressUser(viewer), publicId: 'pub1', id, logger });
+      expect(ann.softDelete).toHaveBeenCalledWith('u-viewer');
+      expect(logger.info).toHaveBeenCalledWith(`[ANNOTATE] delete publicId=pub1 id=${id} by=u-viewer`);
+    });
   });
 });

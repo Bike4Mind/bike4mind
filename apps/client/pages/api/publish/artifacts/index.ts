@@ -1,14 +1,6 @@
 import { ApiKeyScope } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
-import { PublishedArtifact, Project } from '@bike4mind/database';
-import {
-  buildListVisibilityFilter,
-  buildListQuery,
-  excludeNonLiveOwners,
-  type ListQueryParams,
-} from '@server/services/publish';
-import { displayReplyTitle } from '@server/services/publish/plainTitle';
-import { signOwnerThumbnailUrl } from '@server/services/publish/thumbnailUrl';
+import { listPublishedPages } from '@server/services/publish/managePublishedPages';
 
 /**
  * GET /api/publish/artifacts - list artifacts visible to the caller.
@@ -40,9 +32,11 @@ import { signOwnerThumbnailUrl } from '@server/services/publish/thumbnailUrl';
  * thumbnail has rendered. No other listing, and no other route, ever exposes one.
  */
 
-/** Matches the pre-paging hard cap, so an existing caller that sends no `limit` is unaffected. */
-const LEGACY_LIMIT = 200;
-const MAX_LIMIT = 200;
+const optionalInt = (value: unknown): number | undefined => {
+  const parsed = parseInt(String(value ?? ''), 10);
+  return Number.isNaN(parsed) ? undefined : parsed;
+};
+const optionalString = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined);
 
 const handler = baseApi({
   requiredScopes: [ApiKeyScope.ARTIFACTS_PUBLISH, ApiKeyScope.ADMIN],
@@ -51,275 +45,29 @@ const handler = baseApi({
   if (!req.user) {
     return res.status(401).json({ error: 'Authentication required' });
   }
-  const userId = String(req.user.id);
-  const isAdmin = !!req.user.isAdmin;
-
-  // `?sourceArtifactId=<id>` answers "has the caller already published this notebook
-  // artifact?" for the publish dialog's update-existing-vs-new choice. It is
-  // inherently owner-scoped (you can only update your own publication) and matches the
-  // bundle source linkage written at publish time.
-  const sourceArtifactId = typeof req.query.sourceArtifactId === 'string' ? req.query.sourceArtifactId : undefined;
-  // `?sourceMessageId=<questId>` is the same owner-scoped lookup for a published chat reply, so
-  // reopening Publish & Share on an answer lands on the live page instead of a blank form.
-  const sourceMessageId = typeof req.query.sourceMessageId === 'string' ? req.query.sourceMessageId : undefined;
-
-  // `?mine=true` scopes to the caller's OWN artifacts - the set they can manage
-  // (PATCH/restore/delete are owner-only). Otherwise apply the visibility filter.
-  const mine = req.query.mine === 'true' || req.query.mine === '1';
-
-  const scope: Record<string, unknown> = { deletedAt: null };
-  if (sourceArtifactId) {
-    scope.ownerId = userId;
-    scope['source.artifactId'] = sourceArtifactId;
-  } else if (sourceMessageId) {
-    scope.ownerId = userId;
-    scope['source.kind'] = 'reply';
-    scope['source.messageId'] = sourceMessageId;
-  } else if (mine) {
-    scope.ownerId = userId;
-  } else {
-    // Default visibility listing is the ONLY branch that consults project visibility, so
-    // resolve the caller's accessible project ids here - the owner-scoped branches above
-    // never use them, and doing it eagerly cost an extra Project.find on every dialog
-    // update-existing lookup (the hot `?sourceArtifactId` path).
-    // Membership rows store userId (sharingService pushShareable); path is users.userId, not users.id.
-    const projects = await Project.find({ $or: [{ userId }, { 'users.userId': userId }] })
-      .select('_id')
-      .lean<Array<{ _id: unknown }>>();
-    const userProjectIds = projects.map(p => String(p._id));
-    const visibilityFilter = buildListVisibilityFilter({
-      userId,
-      isAdmin,
-      userOrganizationId: req.user.organizationId ? String(req.user.organizationId) : null,
-      userProjectIds,
-    });
-    if (visibilityFilter) scope.$and = [visibilityFilter];
-  }
-
-  // Parse then clamp, rather than `parseInt(...) || DEFAULT`: with the falsy-fallback idiom a
-  // `limit=0` resolves to the DEFAULT page size instead of the floor, which is the opposite of
-  // what the caller asked for.
-  const rawLimit = parseInt(String(req.query.limit ?? ''), 10);
-  const limit = Math.min(MAX_LIMIT, Math.max(1, Number.isNaN(rawLimit) ? LEGACY_LIMIT : rawLimit));
-  const rawSkip = parseInt(String(req.query.skip ?? ''), 10);
-  const skip = Math.max(0, Number.isNaN(rawSkip) ? 0 : rawSkip);
-
-  const params: ListQueryParams = {
-    q: typeof req.query.q === 'string' ? req.query.q : undefined,
-    kind: typeof req.query.kind === 'string' ? req.query.kind : undefined,
-    visibility: typeof req.query.visibility === 'string' ? req.query.visibility : undefined,
-    gate: typeof req.query.gate === 'string' ? req.query.gate : undefined,
-    comments: typeof req.query.comments === 'string' ? req.query.comments : undefined,
-    tag: typeof req.query.tag === 'string' ? req.query.tag : undefined,
-    sort: typeof req.query.sort === 'string' ? req.query.sort : undefined,
-  };
-  const { match, sort } = buildListQuery(params);
-  const wantFacets = req.query.facets === 'true' || req.query.facets === '1';
-  // versionsCount/titleSort must precede $sort ONLY when a sort actually orders by them. For every
-  // other sort they are computed inside the rows branch, after $limit, so the $size over versions[]
-  // runs on one page rather than the whole scope.
-  const sortNeedsDerived = 'versionsCount' in sort || 'titleSort' in sort;
-  const derived = {
-    versionsCount: { $size: { $ifNull: ['$versions', []] } },
-    titleSort: { $toLower: '$title' },
-  };
-
-  // Reply rows published before deriveTitle stripped inline markdown still store "Recap: *Tides*". The
-  // list shows them the way the share page does (displayReplyTitle), which needs the reply body, so
-  // ship it only for reply rows whose title holds a marker character. `q` and the title sort still run
-  // on the stored value: a legacy title differs from its display only by markers, so a word search
-  // still hits and the order moves only for a title that opens with a link or code span.
-  const replyTitleBody = {
-    $cond: [
-      {
-        $and: [
-          { $eq: ['$source.kind', 'reply'] },
-          { $regexMatch: { input: { $ifNull: ['$title', ''] }, regex: '[*_~`\\[]' } },
-        ],
-      },
-      '$renderedBody',
-      '$$REMOVE',
-    ],
-  };
-
-  // AUTHORIZATION clause and caller narrowing merged into ONE leading $match, so an index can
-  // serve the whole predicate. Mongo does not use indexes inside a $facet sub-pipeline, so with the
-  // narrowing applied in there the { ownerId, tags, deletedAt } index was unreachable for the very
-  // filter it was added for.
-  //
-  // $and rather than a spread: the two objects share no key today, but the collision a spread would
-  // one day hide is a narrowing clause clobbering the visibility filter - i.e. WIDENING the
-  // authorized set, which buildListQuery says must be impossible. $and makes that structural, and a
-  // top-level $and is flattened by the planner so index eligibility is unaffected.
-  const narrowed = Object.keys(match).length ? { $and: [scope, match] } : scope;
-  // Browse listing only: the owner-scoped branches list the caller's own rows, and admins see all.
-  // Applied before paging so `total`, skip and limit count the same rows the page shows.
-  const browse = !sourceArtifactId && !sourceMessageId && !mine;
-  const ownerGate = browse && !isAdmin ? await excludeNonLiveOwners(narrowed, userId) : null;
-  const filter = ownerGate ? { $and: [narrowed, ownerGate] } : narrowed;
-
-  // `versions` can grow unbounded, so compute its length server-side with $size and never
-  // ship the array over the wire - the count drives the management tab's version chip and
-  // single-version hint. $ifNull guards rows written before the field existed.
-  //
-  // One aggregation, two answers: the page and the total behind it, both under the same narrowing.
-  const [result] = await PublishedArtifact.aggregate([
-    { $match: filter },
-    // Only when a sort orders by a derived field does it have to exist before $sort (which runs
-    // ahead of $project - ordering by a projected-only field silently orders by nothing).
-    ...(sortNeedsDerived ? [{ $addFields: derived }] : []),
-    {
-      $facet: {
-        rows: [
-          { $sort: sort },
-          { $skip: skip },
-          { $limit: limit },
-          // Cheap placement: after $limit this runs over one page, not the whole scope.
-          ...(sortNeedsDerived ? [] : [{ $addFields: derived }]),
-          {
-            $project: {
-              publicId: 1,
-              tier: 1,
-              scopeId: 1,
-              slug: 1,
-              title: 1,
-              description: 1,
-              tags: 1,
-              visibility: 1,
-              commentPolicy: 1,
-              // Needed by the share dialog to seed its "List in search engines" switch. Without
-              // it the control renders OFF for an artifact that is genuinely listed, and the
-              // owner has no way to turn it off from that dialog.
-              discoverable: 1,
-              source: 1,
-              size: 1,
-              publishedAt: 1,
-              updatedAt: 1,
-              viewCount: 1,
-              ownerId: 1,
-              previousVersionMeta: 1,
-              versionsCount: 1,
-              // The gate KIND only - never the hash, which must not leave the server even
-              // though this is an aggregate rather than a select:false-honouring find.
-              gateKind: '$accessGate.kind',
-              // Consumed and dropped below; never sent to the caller.
-              replyTitleBody,
-              // Storage key only, also consumed and dropped below: the caller gets a presigned
-              // `thumbnailUrl` instead, and only for its own rows on the owner-scoped listing.
-              thumbnailKey: '$thumbnail.key',
-            },
-          },
-        ],
-        total: [{ $count: 'n' }],
-      },
-    },
-  ]);
-
-  // Facet counts are their OWN aggregation over `scope` alone, deliberately without the caller's
-  // narrowing: a chip has to keep showing its count after you click it instead of collapsing to
-  // itself. Splitting them out is what lets the rows query above carry its filter in a leading
-  // $match; it also makes that property literal rather than a side effect of $facet's isolation.
-  //
-  // Owner-scoped listings only. Ungated, these are five group-bys with no allowDiskUse over
-  // everything an admin can see, and only the management tab (which always sends `mine`) uses them.
-  const [facetResult] =
-    wantFacets && mine
-      ? await PublishedArtifact.aggregate([
-          { $match: scope },
-          {
-            $facet: {
-              byKind: [{ $group: { _id: '$source.kind', n: { $sum: 1 } } }],
-              byVisibility: [{ $group: { _id: '$visibility', n: { $sum: 1 } } }],
-              byGate: [{ $group: { _id: { $ifNull: ['$accessGate.kind', 'none'] }, n: { $sum: 1 } } }],
-              withComments: [{ $match: { commentPolicy: { $in: ['open', 'restricted'] } } }, { $count: 'n' }],
-              // Sorted by count then name so the row is stable between requests, and capped: a
-              // library can carry far more distinct tags than belong in a toolbar, and the full
-              // vocabulary is available from GET /api/publish/tags.
-              byTag: [
-                { $unwind: '$tags' },
-                { $group: { _id: '$tags', n: { $sum: 1 } } },
-                { $sort: { n: -1, _id: 1 } },
-                { $limit: 24 },
-              ],
-            },
-          },
-        ])
-      : [undefined];
-
-  const buckets = (rows: Array<{ _id: unknown; n: number }> | undefined): Record<string, number> =>
-    (rows ?? []).reduce<Record<string, number>>((acc, r) => {
-      if (r._id != null) acc[String(r._id)] = r.n;
-      return acc;
-    }, {});
-
-  // A browse listing mixes the caller's own rows with other people's. The projection above is
-  // shaped for the management tab, so on someone else's row it also carries identifiers a viewer
-  // has no claim to (owner and scope ids, version provenance, gate kind, the publisher's source
-  // references). Rows the caller does not own keep only the display fields below, so a field
-  // added to the projection stays owner/admin-only unless it is listed here. Admins keep the full
-  // rows - the admin surface is the reason the wide projection exists.
-  //
-  // versionsCount and discoverable stay: neither identifies a tenant, both are read by the
-  // owner's own management tab (PublishedArtifactsTabContent, PublishShareModal), and hiding them
-  // would couple those reads to ownerId staying in the projection forever.
-  const NON_OWNER_VISIBLE_FIELDS = [
-    '_id',
-    'publicId',
-    'tier',
-    'slug',
-    'title',
-    'description',
-    'tags',
-    'visibility',
-    'commentPolicy',
-    'discoverable',
-    'size',
-    'publishedAt',
-    'updatedAt',
-    'viewCount',
-    'versionsCount',
-  ] as const;
-
-  const rows = await Promise.all(
-    ((result?.rows ?? []) as Array<Record<string, unknown>>).map(
-      async ({ replyTitleBody: body, thumbnailKey, ...row }) => {
-        const titled =
-          typeof body === 'string' && typeof row.title === 'string'
-            ? { ...row, title: displayReplyTitle(row.title, body) || row.title }
-            : row;
-        // Thumbnails are owner-only: signed for the caller's OWN rows on `?mine`, never for a browse
-        // listing (admins included) and never anywhere else. See signOwnerThumbnailUrl.
-        if (!mine || row.ownerId !== userId || typeof row.publicId !== 'string' || typeof thumbnailKey !== 'string') {
-          return titled;
-        }
-        const thumbnailUrl = await signOwnerThumbnailUrl(row.publicId, thumbnailKey);
-        return thumbnailUrl ? { ...titled, thumbnailUrl } : titled;
-      }
-    )
-  );
-  const visibleRows = isAdmin
-    ? rows
-    : rows.map(row => {
-        if (row.ownerId === userId) return row;
-        const trimmed: Record<string, unknown> = {};
-        for (const field of NON_OWNER_VISIBLE_FIELDS) {
-          if (field in row) trimmed[field] = row[field];
-        }
-        return trimmed;
-      });
-
+  const { query } = req;
+  const result = await listPublishedPages({
+    user: req.user,
+    sourceArtifactId: optionalString(query.sourceArtifactId),
+    sourceMessageId: optionalString(query.sourceMessageId),
+    mine: query.mine === 'true' || query.mine === '1',
+    facets: query.facets === 'true' || query.facets === '1',
+    limit: optionalInt(query.limit),
+    skip: optionalInt(query.skip),
+    q: optionalString(query.q),
+    kind: optionalString(query.kind),
+    visibility: optionalString(query.visibility),
+    gate: optionalString(query.gate),
+    comments: optionalString(query.comments),
+    tag: optionalString(query.tag),
+    sort: optionalString(query.sort),
+  });
   return res.status(200).json({
-    artifacts: visibleRows,
-    total: result?.total?.[0]?.n ?? 0,
-    limit,
-    skip,
-    facets: {
-      kind: buckets(facetResult?.byKind),
-      visibility: buckets(facetResult?.byVisibility),
-      gate: buckets(facetResult?.byGate),
-      comments: facetResult?.withComments?.[0]?.n ?? 0,
-      tag: buckets(facetResult?.byTag),
-    },
+    artifacts: result.items,
+    total: result.total,
+    limit: result.limit,
+    skip: result.skip,
+    facets: result.facets,
   });
 });
 

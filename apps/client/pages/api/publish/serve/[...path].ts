@@ -45,11 +45,10 @@ import {
   isRedirectedFetchDest,
   mediaLinkTtlSeconds,
   inlineTypeFor,
-  isSafeSignedOrigin,
   isStreamedFile,
-  signedResponseFor,
 } from '@bike4mind/server-utils/services/publish/signedFiles';
 import { gateProofSecondsLeft, requestHasGateProof } from '@bike4mind/server-utils/services/publish/publishGateToken';
+import { makeBundleFileSigner } from '@server/services/publish/resolveBundleDownload';
 import { renderPassphraseShell } from '@server/services/publish/renderPassphraseShell';
 import { injectSignupGateBridge } from '@server/services/publish/signupGateBridge';
 import { PUBLISH_HOST } from '@bike4mind/server-utils/services/publish/validateBundle';
@@ -433,7 +432,11 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   }
 
   const storage = getPublishedArtifactsStorage();
-  const signFile = makeFileSigner(storage, artifact, req);
+  const signFile = makeBundleFileSigner(
+    storage,
+    artifact,
+    resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto'])
+  );
 
   // A `public` artifact with an access gate must NOT serve like open-public:
   // no CDN caching, no isolated public origin, and bundles inline their assets
@@ -2194,54 +2197,6 @@ const PIN_BRIDGE_JS = String.raw`(function(){
 function injectPinBridge(srcdoc: string): string {
   const tag = `<script>${PIN_BRIDGE_JS}</script>`;
   return /<\/body>/i.test(srcdoc) ? srcdoc.replace(/<\/body>/i, `${tag}</body>`) : srcdoc + tag;
-}
-
-type FileSigner = ((path: string, wantsDownload: boolean, ttlSeconds: number) => Promise<string | null>) & {
-  /** Origin of this deployment's signed links, '' when signing is unavailable or unsafe. */
-  origin: () => Promise<string>;
-};
-
-/**
- * Signs bundle files for this request (see signedFiles.ts). Returns null instead of a URL
- * whenever the storage cannot sign for browsers (e.g. a server-only endpoint), its signing
- * origin is an app-controlled host, or a link lands anywhere but that one origin - callers
- * then fall back to the buffered path. The origin comes from the storage's own config, so
- * a CSP naming it admits exactly the bucket.
- */
-function makeFileSigner(
-  storage: ReturnType<typeof getPublishedArtifactsStorage>,
-  page: { storageKeyPrefix: string; indexObjectPath?: string | null },
-  req: Request
-): FileSigner {
-  const docOrigin = resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto']);
-  let origin: Promise<string> | undefined;
-  const originOnce = (): Promise<string> =>
-    (origin ??= (async () => {
-      if (typeof storage.browserSigningOrigin !== 'function') return '';
-      try {
-        const found = await storage.browserSigningOrigin();
-        return found && isSafeSignedOrigin(found, docOrigin) ? found : '';
-      } catch {
-        return '';
-      }
-    })());
-  const signer = (async (path: string, wantsDownload: boolean, ttlSeconds: number) => {
-    const allowed = await originOnce();
-    if (!allowed) return null;
-    try {
-      const key = path === 'index.html' ? currentPublishedIndexKey(page) : `${page.storageKeyPrefix}${path}`;
-      const url = await storage.getSignedUrl(key, 'get', {
-        audience: 'browser',
-        expiresIn: ttlSeconds,
-        ...signedResponseFor(path, wantsDownload),
-      });
-      return new URL(url).origin === allowed ? url : null;
-    } catch {
-      return null;
-    }
-  }) as FileSigner;
-  signer.origin = originOnce;
-  return signer;
 }
 
 function buildAnnotateOverlayHtml(artifact: PublishedArtifactLean): string {

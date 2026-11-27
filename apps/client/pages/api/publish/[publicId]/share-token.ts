@@ -1,45 +1,20 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import {
-  assertPublicationPublicLink,
-  type PublicationPolicyContext,
-} from '@server/services/publish/organizationPolicy';
-import {
-  PublishedArtifact,
-  liveShareTokenMatch,
-  liveShareTokens,
-  type PublishedArtifactShareToken,
-} from '@bike4mind/database';
 import { outboundActionGate } from '@server/auth/assertOutboundActionAllowed';
-import { generateShareToken } from '@server/services/publish';
+import { PublishServiceError } from '@server/services/publish/publishServiceError';
+import {
+  createShareLink,
+  listShareLinks,
+  newestShareLink,
+  revokeShareLink,
+  shareLinkBodySchema,
+} from '@server/services/publish/shareLinks';
 import type { Request, Response } from 'express';
-import { Types } from 'mongoose';
-import * as z from 'zod';
 
-const shareTokenBodySchema = z.object({
-  regenerate: z.boolean().optional(),
-  additional: z.boolean().optional(),
-  // Validated by `parseShareLinkExpiry` so every bad value gets the same 400 code.
-  expiresAt: z.unknown().optional(),
-});
-
-const MAX_SHARE_LINK_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
-// A link that expires almost at once stops counting toward MAX_LIVE_SHARE_LINKS, so without a floor
-// `additional: true` could append entries as fast as it is called.
-const MIN_SHARE_LINK_LIFETIME_MS = 60 * 60 * 1000;
-const isoDateTime = z.iso.datetime({ offset: true });
-
-/** The requested expiry: absent -> null (never expires); otherwise an ISO datetime 1 hour to 365 days away. */
-function parseShareLinkExpiry(raw: unknown, now: Date): Date | null | 'invalid' {
-  if (raw === undefined) return null;
-  if (!isoDateTime.safeParse(raw).success) return 'invalid';
-  const expiresAt = new Date(raw as string);
-  const ms = expiresAt.getTime() - now.getTime();
-  return ms >= MIN_SHARE_LINK_LIFETIME_MS && ms <= MAX_SHARE_LINK_LIFETIME_MS ? expiresAt : 'invalid';
-}
+export { MAX_LIVE_SHARE_LINKS, MAX_SHARE_TOKEN_ENTRIES } from '@server/services/publish/shareLinks';
 
 /**
  * Owner-only management of a published artifact's no-sign-in share links (the
- * capability behind `/a/<shareToken>`).
+ * capability behind `/a/<shareToken>`). The logic lives in `server/services/publish/shareLinks`.
  *
  *   GET    - list the live links, WITHOUT minting one, so the owner-facing surface can
  *          offer Revoke on a cold page load. Returns each token itself: the caller is
@@ -51,177 +26,26 @@ function parseShareLinkExpiry(raw: unknown, now: Date): Date | null | 'invalid' 
  *          revokes every live link (what single-link callers expect).
  *
  * Share links are served `no-store`, so no CDN invalidation is needed on rotate/
- * revoke. The token value is never logged.
- *
- * `shareTokens[]` is the only representation of a share link and the race arbiter: every
- * precondition below pins an entry's liveness. `shareTokenUpdatedAt` is a GET response field
- * only, derived from the newest live entry's `createdAt` (a documented field with external
- * consumers).
+ * revoke. `shareTokenUpdatedAt` is a GET response field only, derived from the newest live
+ * entry's `createdAt` (a documented field with external consumers).
  */
 
-/** Ceiling on live links per artifact. Not a security boundary (the owner can revoke and
- *  mint freely); it keeps the owner's list a list rather than a scroll. The array as a whole
- *  is bounded by MAX_SHARE_TOKEN_ENTRIES. */
-export const MAX_LIVE_SHARE_LINKS = 20;
-
-/** Ceiling on the whole `shareTokens[]` array, revoked and expired entries included. Every mint
- *  prunes the oldest dead entries past it; live entries are never pruned. Kept well above
- *  MAX_LIVE_SHARE_LINKS so a full live set still leaves room for retained revoked entries; at
- *  or below it, a mint would prune every revoked entry. */
-export const MAX_SHARE_TOKEN_ENTRIES = 50;
-
-interface ShareTokenArtifactLean extends PublicationPolicyContext {
-  publicId: string;
-  ownerId: string;
-  shareTokens?: PublishedArtifactShareToken[];
-  visibility?: string;
-  accessGate?: unknown;
+/** Re-shapes a service refusal into this route's `{ error, code? }` body. */
+function sendLegacyError(res: Response, error: unknown): Response {
+  if (!(error instanceof PublishServiceError)) throw error;
+  return res.status(error.statusCode).json({ error: error.message, code: error.errorCode });
 }
 
-async function loadOwnedArtifact(req: Request, res: Response): Promise<ShareTokenArtifactLean | null> {
+function actor(req: Request, res: Response) {
   if (!req.user?.id) {
     res.status(401).json({ error: 'Authentication required' });
     return null;
   }
-  const publicId = String((req.query as { publicId?: string }).publicId ?? '');
-  if (!publicId) {
-    res.status(400).json({ error: 'Missing publicId' });
-    return null;
-  }
-  const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null }).lean<ShareTokenArtifactLean>();
-  if (!artifact) {
-    res.status(404).json({ error: 'Not found' });
-    return null;
-  }
-  if (artifact.ownerId !== String(req.user.id) && !req.user.isAdmin) {
-    res.status(403).json({ error: 'Only the owner may manage this share link' });
-    return null;
-  }
-  return artifact;
-}
-
-/** One live link as the owner surface renders it. `id` is the entry `_id` the owner revokes by. */
-interface ShareLinkView {
-  id: string;
-  shareToken: string;
-  shareUrl: string;
-  createdAt: Date | null;
-  expiresAt: Date | null;
-  viewCount: number;
-  lastViewedAt: Date | null;
-}
-
-function toShareLinkView(entry: PublishedArtifactShareToken): ShareLinkView {
   return {
-    id: String(entry._id),
-    shareToken: entry.token!,
-    shareUrl: `/a/${entry.token}`,
-    createdAt: entry.createdAt ?? null,
-    expiresAt: entry.expiresAt ?? null,
-    viewCount: entry.viewCount ?? 0,
-    lastViewedAt: entry.lastViewedAt ?? null,
+    user: { id: String(req.user.id), isAdmin: req.user.isAdmin },
+    logger: req.logger,
+    publicId: String((req.query as { publicId?: string }).publicId ?? ''),
   };
-}
-
-/** The live links, oldest-first as they were appended (`liveShareTokens` order). */
-function liveLinkViews(artifact: ShareTokenArtifactLean, now?: Date): ShareLinkView[] {
-  return liveShareTokens(artifact, now).map(toShareLinkView);
-}
-
-/** The link the single-link response fields (`shareToken`, `shareUrl`, `hasShareToken`,
- *  `shareTokenUpdatedAt`) describe: the newest live one. */
-function newestLive(links: ShareLinkView[]): ShareLinkView | undefined {
-  return links[links.length - 1];
-}
-
-/** Matches an entry that is live (has a token, not revoked, not expired), tolerating absent
- *  fields. Must stay in sync with `liveShareTokens` in `@bike4mind/database`; `liveShareTokenMatch`
- *  there has no token check and relies on the schema making `token` required. */
-function isLive(now: Date): Record<string, unknown> {
-  return {
-    $and: [
-      { $eq: [{ $type: '$$entry.token' }, 'string'] },
-      { $ne: ['$$entry.token', ''] },
-      { $eq: [{ $ifNull: ['$$entry.revokedAt', null] }, null] },
-      {
-        $or: [{ $eq: [{ $ifNull: ['$$entry.expiresAt', null] }, null] }, { $gt: ['$$entry.expiresAt', now] }],
-      },
-    ],
-  };
-}
-
-/** Live-entry count of `shareTokens`, as an aggregation expression. */
-function liveCount(now: Date): Record<string, unknown> {
-  return { $size: { $filter: { input: { $ifNull: ['$shareTokens', []] }, as: 'entry', cond: isLive(now) } } };
-}
-
-/**
- * Bounds the post-mint array `next` to MAX_SHARE_TOKEN_ENTRIES by dropping its oldest dead
- * entries. Keeps every live entry (even past the cap) and the original order, so the newest
- * live entry stays last.
- */
-function capShareTokens(next: unknown, now: Date): Record<string, unknown> {
-  const deadRoom = {
-    $subtract: [MAX_SHARE_TOKEN_ENTRIES, { $size: { $filter: { input: '$$next', as: 'entry', cond: isLive(now) } } }],
-  };
-  const deadIds = {
-    $map: {
-      input: { $filter: { input: '$$next', as: 'entry', cond: { $not: [isLive(now)] } } },
-      as: 'entry',
-      in: '$$entry._id',
-    },
-  };
-  return {
-    $let: {
-      vars: { next },
-      in: {
-        $let: {
-          vars: { deadRoom, deadIds },
-          in: {
-            $let: {
-              // $slice rejects a count of 0, hence the guard.
-              vars: {
-                keptDeadIds: {
-                  $cond: [{ $gt: ['$$deadRoom', 0] }, { $slice: ['$$deadIds', { $multiply: ['$$deadRoom', -1] }] }, []],
-                },
-              },
-              in: {
-                $filter: {
-                  input: '$$next',
-                  as: 'entry',
-                  cond: { $or: [isLive(now), { $in: ['$$entry._id', '$$keptDeadIds'] }] },
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-  };
-}
-
-/**
- * Pipeline stages that stamp `revokedAt` on every live entry matching `target`.
- *
- * Shared by revoke-by-id and revoke-everything, which differ only in `target`, so they cannot
- * disagree about what "live" means. Stamped rather than pulled - see the call sites for why.
- */
-function revokeStages(target: Record<string, unknown>, now: Date): Record<string, unknown>[] {
-  return [
-    {
-      $set: {
-        shareTokens: {
-          $map: {
-            input: { $ifNull: ['$shareTokens', []] },
-            as: 'entry',
-            in: {
-              $cond: [{ $and: [isLive(now), target] }, { $mergeObjects: ['$$entry', { revokedAt: now }] }, '$$entry'],
-            },
-          },
-        },
-      },
-    },
-  ];
 }
 
 const handler = baseApi()
@@ -231,248 +55,51 @@ const handler = baseApi()
     // placement and reason as annotations/[publicId]/can-comment.ts).
     res.setHeader('Cache-Control', 'private, no-store');
 
-    const artifact = await loadOwnedArtifact(req, res);
-    if (!artifact) return;
-
-    // Read-only: never mints. `shareLinks` drives the owner's list; the four single-link
-    // fields beside it are what the shipped single-link owner UI reads, kept so this response does not
-    // break on deploy. Both describe the same links.
-    const shareLinks = liveLinkViews(artifact);
-    const newest = newestLive(shareLinks);
-    return res.status(200).json({
-      hasShareToken: Boolean(newest),
-      shareToken: newest?.shareToken ?? null,
-      shareUrl: newest?.shareUrl ?? null,
-      // Derived from the newest live entry; null with nothing live.
-      shareTokenUpdatedAt: newest?.createdAt ?? null,
-      shareLinks,
-    });
+    const input = actor(req, res);
+    if (!input) return;
+    try {
+      // Read-only: never mints. `shareLinks` drives the owner's list; the four single-link
+      // fields beside it are what the shipped single-link owner UI reads, kept so this response does not
+      // break on deploy. Both describe the same links.
+      const shareLinks = await listShareLinks(input);
+      const newest = newestShareLink(shareLinks);
+      return res.status(200).json({
+        hasShareToken: Boolean(newest),
+        shareToken: newest?.shareToken ?? null,
+        shareUrl: newest?.shareUrl ?? null,
+        // Derived from the newest live entry; null with nothing live.
+        shareTokenUpdatedAt: newest?.createdAt ?? null,
+        shareLinks,
+      });
+    } catch (error) {
+      return sendLegacyError(res, error);
+    }
   })
   .post(outboundActionGate(), async (req: Request, res: Response) => {
-    const artifact = await loadOwnedArtifact(req, res);
-    if (!artifact) return;
-    await assertPublicationPublicLink(artifact);
-
-    const parsed = shareTokenBodySchema.parse(req.body ?? {});
-    const regenerate = parsed.regenerate === true;
-    const additional = parsed.additional === true;
-    const now = new Date();
-    const expiresAt = parseShareLinkExpiry(parsed.expiresAt, now);
-    if (expiresAt === 'invalid') {
-      return res.status(400).json({
-        error: 'expiresAt must be an ISO 8601 datetime at least 1 hour and at most 365 days away',
-        code: 'INVALID_SHARE_LINK_EXPIRY',
-      });
-    }
-    if (regenerate && additional) {
-      return res.status(400).json({
-        error: 'regenerate and additional are mutually exclusive - rotating revokes the links that additional adds to',
-        code: 'CONFLICTING_MINT_MODE',
-      });
-    }
-
-    const live = liveLinkViews(artifact, now);
-
-    // Fast path: a link is live and we are neither rotating nor adding -> return it (idempotent).
-    if (!regenerate && !additional && live.length) {
-      const newest = newestLive(live)!;
-      return res
-        .status(200)
-        .json({ id: newest.id, shareToken: newest.shareToken, shareUrl: newest.shareUrl, shareLinks: live });
-    }
-
-    if (additional && live.length >= MAX_LIVE_SHARE_LINKS) {
-      return res.status(400).json({
-        error: `An artifact may have at most ${MAX_LIVE_SHARE_LINKS} live share links - revoke one before minting another`,
-        code: 'SHARE_LINK_LIMIT',
-      });
-    }
-
-    // Mint, rotate or add under a compare-and-set so two racing POSTs cannot hand a caller a
-    // link that loses the write race (which would 404). A mint requires "no live entry" and a
-    // rotate pins the exact entry it rotates away from, so only one racer's write lands.
-    // `additional` is not idempotent by intent, so it pins only the live-link limit: the check
-    // above reads a snapshot, and concurrent adds would otherwise each pass it.
-    // (256-bit tokens, so a partial-unique-index collision is negligible.)
-    const candidate = generateShareToken();
-    const rotatingFrom = regenerate ? newestLive(live) : undefined;
-    const precondition = additional
-      ? { $expr: { $lt: [liveCount(now), MAX_LIVE_SHARE_LINKS] } }
-      : rotatingFrom
-        ? { shareTokens: { $elemMatch: { _id: new Types.ObjectId(rotatingFrom.id), ...liveShareTokenMatch(now) } } }
-        : { shareTokens: { $not: { $elemMatch: liveShareTokenMatch(now) } } };
-    const entryId = new Types.ObjectId();
-    const won = await PublishedArtifact.findOneAndUpdate(
-      { publicId: artifact.publicId, deletedAt: null, ...precondition },
-      // An aggregation pipeline rather than $push + $set: revoking the outgoing entries and
-      // appending the new one both touch `shareTokens`, which a plain update rejects as a
-      // conflicting path. Splitting them into two writes is not an option either - a crash
-      // between them would leave a rotated-away token still live in the array, i.e. a revoked
-      // link that keeps working. `_id` is generated here because a pipeline update bypasses
-      // Mongoose casting and would otherwise leave the entry without the very handle the owner
-      // UI revokes by.
-      //
-      // A rotate marks EVERY live entry revoked, not just the pinned one: `regenerate: true`
-      // has always meant "revoke every outstanding link", and the shipped Replace control still
-      // means that. Replacing one link of several is revoke-by-id followed by `additional`.
-      //
-      // The same write prunes the oldest dead entries past MAX_SHARE_TOKEN_ENTRIES, so repeated
-      // rotate or revoke+add cycles cannot grow the array without bound.
-      [
-        {
-          $set: {
-            shareTokens: capShareTokens(
-              {
-                $concatArrays: [
-                  regenerate
-                    ? {
-                        $map: {
-                          input: { $ifNull: ['$shareTokens', []] },
-                          as: 'entry',
-                          in: { $cond: [isLive(now), { $mergeObjects: ['$$entry', { revokedAt: now }] }, '$$entry'] },
-                        },
-                      }
-                    : { $ifNull: ['$shareTokens', []] },
-                  [
-                    {
-                      _id: entryId,
-                      token: candidate,
-                      createdAt: now,
-                      revokedAt: null,
-                      expiresAt,
-                      viewCount: 0,
-                      lastViewedAt: null,
-                    },
-                  ],
-                ],
-              },
-              now
-            ),
-          },
-        },
-      ],
-      { new: true }
-    ).lean<ShareTokenArtifactLean>();
-
-    if (won) {
-      req.logger.info(
-        `[PUBLISH] share-token ${regenerate ? 'rotated' : additional ? 'added' : 'minted'} publicId=${artifact.publicId} by=${req.user!.id}`
-      );
+    const input = actor(req, res);
+    if (!input) return;
+    const parsed = shareLinkBodySchema.parse(req.body ?? {});
+    try {
+      const created = await createShareLink({ ...input, ...parsed });
       return res.status(200).json({
-        id: String(entryId),
-        shareToken: candidate,
-        shareUrl: `/a/${candidate}`,
-        shareLinks: liveLinkViews(won),
+        id: created.id,
+        shareToken: created.shareToken,
+        shareUrl: created.shareUrl,
+        shareLinks: created.shareLinks,
       });
+    } catch (error) {
+      return sendLegacyError(res, error);
     }
-
-    // Lost the race: a concurrent request already minted/rotated/added. An additional mint
-    // reports why it failed; otherwise return what persisted unless it no longer fits the request.
-    const current = await PublishedArtifact.findOne({ publicId: artifact.publicId, deletedAt: null })
-      .select('shareTokens')
-      .lean<ShareTokenArtifactLean>();
-    if (!current) return res.status(404).json({ error: 'Not found' });
-    if (additional) {
-      if (liveLinkViews(current).length >= MAX_LIVE_SHARE_LINKS) {
-        return res.status(400).json({
-          error: `An artifact may have at most ${MAX_LIVE_SHARE_LINKS} live share links - revoke one before minting another`,
-          code: 'SHARE_LINK_LIMIT',
-        });
-      }
-      return res
-        .status(409)
-        .json({ error: 'The share links changed while adding one - try again', code: 'SHARE_LINK_RACED' });
-    }
-    const persisted = liveLinkViews(current);
-    const newest = newestLive(persisted);
-    // Compared by token: it is what a holder possesses.
-    const before = new Set(live.map(l => l.shareToken));
-    if (regenerate && persisted.some(l => before.has(l.shareToken))) {
-      return res
-        .status(409)
-        .json({ error: 'The share links changed while rotating - try again', code: 'SHARE_LINK_RACED' });
-    }
-    if (!newest) {
-      return res
-        .status(409)
-        .json({ error: 'The share link was revoked while it was being created - try again', code: 'SHARE_LINK_RACED' });
-    }
-    return res.status(200).json({
-      id: newest.id,
-      shareToken: newest.shareToken,
-      shareUrl: newest.shareUrl,
-      shareLinks: persisted,
-    });
   })
   .delete(async (req: Request, res: Response) => {
-    const artifact = await loadOwnedArtifact(req, res);
-    if (!artifact) return;
-
-    const id = String((req.query as { id?: string }).id ?? '').trim();
-    if (id && !Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ error: 'Invalid share link id' });
+    const input = actor(req, res);
+    if (!input) return;
+    try {
+      const result = await revokeShareLink({ ...input, id: (req.query as { id?: string }).id });
+      return res.status(200).json(result);
+    } catch (error) {
+      return sendLegacyError(res, error);
     }
-    const live = liveLinkViews(artifact);
-    // Resolve the target BEFORE writing, so an unknown id is a 404 rather than a write that
-    // matches no entry and reports success.
-    const target = id ? live.find(link => link.id === id) : undefined;
-    if (id && !target) {
-      return res.status(404).json({ error: 'No live share link with that id' });
-    }
-    const revoking = target ? [target] : live;
-    const survivors = live.length - revoking.length;
-
-    // A gate on a non-public artifact is enforced ONLY through `/a/<token>`
-    // (checkShareGrant). Revoking the LAST live link would leave a stored gate that nothing
-    // can honor - the exact state the PATCH handler refuses to create. Fail loud and let the
-    // owner decide, rather than silently dropping a gate they set. Revoking one of several is
-    // fine: the survivors keep enforcing it. (See GATE_REQUIRES_ENFORCING_SURFACE in
-    // `artifacts/[id].ts` - these two must stay in sync.)
-    // An expiring link reaches that state without passing here: once the last live link lapses,
-    // the gate fails closed and PATCH refuses gate/visibility edits until the gate is cleared or
-    // the artifact made public.
-    const gateNeedsALink = Boolean(artifact.accessGate) && artifact.visibility !== 'public';
-    if (live.length && survivors === 0 && gateNeedsALink) {
-      return res.status(400).json({
-        error:
-          "This share link is the only thing enforcing the artifact's access gate - clear the gate or set visibility to public before revoking the link",
-        code: 'REVOKE_WOULD_ORPHAN_GATE',
-      });
-    }
-
-    if (revoking.length) {
-      // Stamped rather than pulled, so the token stays claimed in the unique index and its view
-      // count survives until a later mint prunes it past MAX_SHARE_TOKEN_ENTRIES.
-      //
-      // The survivor requirement has to be part of the FILTER, not just the in-memory check
-      // above: that check reads the `loadOwnedArtifact` snapshot, so two concurrent
-      // revoke-by-id calls on the last two links each see one survivor, both pass, and between
-      // them they orphan the gate the refusal exists to protect. Pinning "some OTHER entry is
-      // still live" makes the loser match nothing - the same compare-and-set move the mint and
-      // rotate paths make. Only applied when a gate actually needs a link, so an ungated
-      // artifact keeps the cheap unconditional filter.
-      const pinSurvivor = gateNeedsALink && !!target;
-      const survivorPin = pinSurvivor
-        ? { shareTokens: { $elemMatch: { _id: { $ne: new Types.ObjectId(target!.id) }, ...liveShareTokenMatch() } } }
-        : {};
-      const result = await PublishedArtifact.updateOne(
-        { publicId: artifact.publicId, deletedAt: null, ...survivorPin },
-        revokeStages(target ? { $eq: ['$$entry._id', new Types.ObjectId(target.id)] } : { $literal: true }, new Date())
-      );
-      // Lost that race: the siblings this revoke was counting on are gone, so it would now be
-      // dropping the last link. Same refusal as the snapshot check, for the same reason.
-      if (pinSurvivor && result?.matchedCount === 0) {
-        return res.status(400).json({
-          error:
-            "This share link is the only thing enforcing the artifact's access gate - clear the gate or set visibility to public before revoking the link",
-          code: 'REVOKE_WOULD_ORPHAN_GATE',
-        });
-      }
-      req.logger.info(
-        `[PUBLISH] share-token revoked publicId=${artifact.publicId} count=${revoking.length} remaining=${survivors} by=${req.user!.id}`
-      );
-    }
-    return res.status(200).json({ revoked: true, remaining: survivors });
   });
 
 export const config = {

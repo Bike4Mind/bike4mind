@@ -1,25 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { optionalAuth } from '@server/middlewares/optionalAuth';
 import { rateLimit } from '@bike4mind/server-utils/middlewares/rateLimit';
-import type { Request } from 'express';
-import { Annotation, PublishedArtifact } from '@bike4mind/database';
-import {
-  CreateAnnotationRequestSchema,
-  type CommentPolicy,
-  type ListAnnotationsResponse,
-  type PublishVisibility,
-} from '@bike4mind/common';
-import {
-  checkVisibility,
-  canAnnotate,
-  toPublishUser,
-  authorDisplayName,
-  toAnnotationDto,
-  requestHasGateProof,
-  loadLiveOwner,
-  type AnnotationLean,
-} from '@server/services/publish';
-import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
+import { HTTPError } from '@bike4mind/server-utils/utils/errors';
+import type { Response } from 'express';
+import { CreateAnnotationRequestSchema, type ListAnnotationsResponse } from '@bike4mind/common';
+import { requestHasGateProof } from '@server/services/publish';
+import { createAnnotation, listAnnotations } from '@server/services/publish/annotations';
 
 /**
  * /api/publish/annotations/[publicId] - the collaboration layer for a published
@@ -33,50 +19,13 @@ import { isValidObjectId } from '@bike4mind/server-utils/utils/objectId';
  * only `comment`-kind annotations (approval/vote/signature reserved for Phase D).
  */
 
-/** Per-author comment throttle (anti-spam) - see the write handler. */
-const COMMENT_RATE_WINDOW_MS = 60_000;
-const COMMENT_RATE_MAX = 30;
 const listRateLimit = rateLimit({ limit: 120, windowMs: 60_000, bucket: 'publish-annotations-list' });
 
-interface ArtifactGateLean {
-  publicId: string;
-  visibility: PublishVisibility;
-  ownerId: string;
-  scopeId: string;
-  commentPolicy: CommentPolicy;
-  sha256Index?: string;
-  // Required (explicit null) to match VisibilityCheckArtifact - the gate is
-  // enforced off this field, so normalizing it here means no caller can pass a
-  // shape that silently bypasses the gate. A lean read of a pre-gate doc may
-  // omit it, so loadArtifact coerces `?? null`.
-  accessGate: { kind: 'passphrase' | 'domain'; allowedDomains?: string[] } | null;
+/** Maps a service's typed HTTP error to the legacy `{ error }` body; anything else is a real failure. */
+function sendServiceError(res: Response, error: unknown) {
+  if (error instanceof HTTPError) return res.status(error.statusCode).json({ error: error.message });
+  throw error;
 }
-
-async function loadArtifact(publicId: string): Promise<ArtifactGateLean | null> {
-  const doc = await PublishedArtifact.findOne({ publicId, deletedAt: null })
-    .select('publicId visibility ownerId scopeId commentPolicy sha256Index accessGate')
-    .lean<Omit<ArtifactGateLean, 'accessGate'> & { accessGate?: ArtifactGateLean['accessGate'] }>();
-  // Same owner check as the serve route: an artifact whose page 404s must not list or take comments.
-  if (!doc || !(await loadLiveOwner(doc.ownerId))) return null;
-  return { ...doc, accessGate: doc.accessGate ?? null };
-}
-
-/** The gate context for annotation reads/writes: a passphrase gate is satisfied
- *  by the per-artifact proof cookie the viewer already holds from unlocking the
- *  page. NOTE the cookie does not ride along automatically - the widget sends
- *  `credentials: 'omit'` by default and only re-sends with `same-origin` after a
- *  401 (see authedFetch in publish/widget.ts), so a caller that omits credentials
- *  reaches here with no proof and is correctly told the passphrase is required. */
-function gateContext(req: Request, artifact: ArtifactGateLean) {
-  return {
-    passphraseVerified: artifact.accessGate?.kind === 'passphrase' && requestHasGateProof(req, artifact.publicId),
-  };
-}
-
-/** Open-public = public AND ungated: the only state whose annotation list may be
- *  served from the shared CDN cache. A gated artifact's list is per-viewer-gated,
- *  so it must stay no-store even though its visibility is still 'public'. */
-const isOpenPublic = (a: ArtifactGateLean) => a.visibility === 'public' && !a.accessGate;
 
 const handler = baseApi({ auth: false })
   .use(optionalAuth)
@@ -94,19 +43,14 @@ const handler = baseApi({ auth: false })
     const publicId = String(req.query.publicId ?? '');
     if (!publicId) return res.status(400).json({ error: 'Missing publicId' });
 
-    const artifact = await loadArtifact(publicId);
-    if (!artifact) return res.status(404).json({ error: 'Not found' });
+    let listed;
+    try {
+      listed = await listAnnotations({ user: req.user, publicId, hasGateProof: requestHasGateProof(req, publicId) });
+    } catch (error) {
+      return sendServiceError(res, error);
+    }
 
-    const publishUser = toPublishUser(req.user);
-    const vis = await checkVisibility(artifact, publishUser, gateContext(req, artifact));
-    if (!vis.ok) return res.status(vis.status).json({ error: vis.error });
-
-    const rows = await Annotation.find({ publicId, deletedAt: null }).sort({ createdAt: 1 }).lean<AnnotationLean[]>();
-
-    const response: ListAnnotationsResponse = {
-      annotations: rows.map(toAnnotationDto),
-      commentPolicy: artifact.commentPolicy,
-    };
+    const response: ListAnnotationsResponse = { annotations: listed.annotations, commentPolicy: listed.commentPolicy };
     // The list is identical for everyone who can view, so PUBLIC artifacts are
     // CDN-cacheable - this collapses the widget's polling fan-out across viewers.
     // Per-viewer `canComment` is served separately (.../can-comment) so it never
@@ -122,7 +66,7 @@ const handler = baseApi({ auth: false })
     // pre-comment body for up to a further 60s, so a fresh comment appeared to vanish
     // on reload. A short shared TTL still collapses the polling fan-out. The widget
     // additionally sends `cache: 'no-store'` on its FIRST load for the same reason.
-    if (isOpenPublic(artifact)) {
+    if (listed.cacheable) {
       res.setHeader('Cache-Control', 'public, max-age=5, s-maxage=5');
     }
     return res.status(200).json(response);
@@ -138,68 +82,18 @@ const handler = baseApi({ auth: false })
       return res.status(400).json({ error: 'Invalid request', details: parsed.error.issues });
     }
     const input = parsed.data;
-    // v1 ships comments only; reserved kinds are rejected (not silently coerced).
-    if (input.kind && input.kind !== 'comment') {
-      return res.status(400).json({ error: 'Only comment annotations are supported in this version' });
-    }
-
-    const artifact = await loadArtifact(publicId);
-    if (!artifact) return res.status(404).json({ error: 'Not found' });
-
-    const publishUser = toPublishUser(req.user);
-    const vis = await checkVisibility(artifact, publishUser, gateContext(req, artifact));
-    if (!vis.ok) return res.status(vis.status).json({ error: vis.error });
-
-    if (!canAnnotate(artifact, publishUser, true)) {
-      const why =
-        artifact.commentPolicy === 'none' ? 'Commenting is disabled for this artifact' : 'Not authorized to comment';
-      return res.status(403).json({ error: why });
-    }
-
-    // Anti-spam throttle. These routes run under baseApi({ auth: false }) and so
-    // bypass the API-key rate-limit stack; this per-author window applies to ALL
-    // callers (JWT or key) regardless of auth type. Admins are exempt.
-    if (!req.user.isAdmin) {
-      const recent = await Annotation.countDocuments({
-        authorId: String(req.user.id),
-        createdAt: { $gte: new Date(Date.now() - COMMENT_RATE_WINDOW_MS) },
+    try {
+      const created = await createAnnotation({
+        user: req.user,
+        publicId,
+        input,
+        logger: req.logger,
+        hasGateProof: requestHasGateProof(req, publicId),
       });
-      if (recent >= COMMENT_RATE_MAX) {
-        // Names the account-wide window explicitly: it counts across ALL artifacts, so
-        // a message about "this artifact" would misdirect when it fires somewhere the
-        // author has not commented.
-        return res.status(429).json({
-          error: 'You have posted too many comments across your account recently - please slow down',
-        });
-      }
+      return res.status(201).json(created);
+    } catch (error) {
+      return sendServiceError(res, error);
     }
-
-    // Thread integrity: a reply must target a live annotation on the SAME artifact.
-    if (input.threadRootId) {
-      // A non-ObjectId can never name an annotation; checking first keeps it off the `_id` cast.
-      const root = isValidObjectId(input.threadRootId)
-        ? await Annotation.findOne({ _id: input.threadRootId, publicId, deletedAt: null })
-            .select('_id')
-            .lean<{ _id: unknown } | null>()
-        : null;
-      if (!root)
-        return res.status(400).json({ error: 'threadRootId does not reference an annotation on this artifact' });
-    }
-
-    const created = await Annotation.create({
-      publicId,
-      // Pin to the artifact's CURRENT version, not a client-supplied value.
-      artifactVersionSha: artifact.sha256Index,
-      kind: 'comment',
-      authorId: String(req.user.id),
-      authorDisplayName: authorDisplayName(req.user),
-      body: input.body,
-      anchor: input.anchor,
-      threadRootId: input.threadRootId ?? null,
-    });
-
-    req.logger.info(`[ANNOTATE] create publicId=${publicId} by=${req.user.id} id=${created.id}`);
-    return res.status(201).json(toAnnotationDto(created.toObject() as unknown as AnnotationLean));
   });
 
 export const config = {
