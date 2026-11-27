@@ -4271,6 +4271,7 @@ describe('deleteDataLake - only the effective owner files no other lake holds', 
       fabFiles: {
         softDeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
         findTeardownIdsByDataLakeTag: vi.fn().mockResolvedValue(['owned-file']),
+        unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
       },
     },
     logger: { warn: vi.fn() },
@@ -4285,6 +4286,29 @@ describe('deleteDataLake - only the effective owner files no other lake holds', 
     expect(adapters.db.fabFiles.softDeleteByDataLakeTag).toHaveBeenCalledWith(lakeScope, ['owner'], expect.any(Date));
     expect(adapters.db.fabFiles.findTeardownIdsByDataLakeTag).toHaveBeenCalledWith(lakeScope, ['owner']);
     expect(removalInput(retrievalIndex).fabFileIds).toEqual(['owned-file']);
+  });
+
+  it("un-archives the kept members this lake's own archive stamped, after the sweep", async () => {
+    const archivedAt = new Date('2026-06-01T00:00:00.000Z');
+    const adapters = makeAdapters([]);
+    adapters.db.dataLakes.findById = vi
+      .fn()
+      .mockResolvedValue(lake({ status: 'archived', filesArchivedAt: archivedAt }));
+
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters as never);
+
+    expect(adapters.db.fabFiles.unarchiveByDataLakeTag).toHaveBeenCalledWith(lakeScope, archivedAt);
+    expect(adapters.db.fabFiles.unarchiveByDataLakeTag.mock.invocationCallOrder[0]).toBeGreaterThan(
+      adapters.db.fabFiles.softDeleteByDataLakeTag.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('leaves archive state alone when the lake recorded no archive stamp', async () => {
+    const adapters = makeAdapters([]);
+
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', adapters as never);
+
+    expect(adapters.db.fabFiles.unarchiveByDataLakeTag).not.toHaveBeenCalled();
   });
 
   it('sweeps under the transferred owner, not the creator or the curator who asked', async () => {

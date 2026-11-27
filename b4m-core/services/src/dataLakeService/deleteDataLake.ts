@@ -41,7 +41,10 @@ interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters, LakeMembership
       >;
       dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
       batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
-      fabFiles: Pick<IFabFileRepository, 'softDeleteByDataLakeTag' | 'findTeardownIdsByDataLakeTag'>;
+      fabFiles: Pick<
+        IFabFileRepository,
+        'softDeleteByDataLakeTag' | 'findTeardownIdsByDataLakeTag' | 'unarchiveByDataLakeTag'
+      >;
       // REQUIRED, not optional: `retrievalIndex` is itself optional (a host without self-host
       // OpenSearch wires neither), but a host that DOES wire `retrievalIndex` must wire this half
       // too, or an archive/unarchive cycle leaves a stale confirm no later step ever clears (see
@@ -166,6 +169,12 @@ export const deleteDataLake = async (
   // the purge (cleanupDeletedDataLake) lets it leave instead of destroying it.
   const ownerUserIds = resolveEffectiveOwnerIds(existing, grants);
   const swept = await db.fabFiles.softDeleteByDataLakeTag(scope, ownerUserIds, stamp);
+  // After archive -> delete a kept member still carries this lake's archive stamp. Restore only
+  // un-archives the rows it undeletes and the purge only pulls tags, so nothing later would clear
+  // it. Stamp-bound only, so a file archived on its own or by another lake is left alone.
+  if (existing.filesArchivedAt) {
+    await db.fabFiles.unarchiveByDataLakeTag(scope, existing.filesArchivedAt);
+  }
   // Every swept file leaves every lake read, which is a membership departure no per-file delete
   // door saw. Without it the restore side's `added` rows stand alone and a reader replaying the
   // log has those files never having left. Recorded off the ids the sweep itself stamped, so a
