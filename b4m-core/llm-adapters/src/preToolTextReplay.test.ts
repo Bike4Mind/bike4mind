@@ -180,8 +180,8 @@ const SPECS: Spec[] = [
   {
     name: 'OpenAIBackend',
     model: 'gpt-4o',
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- constructor takes a key bag
-    build: () => openAIHarness(new OpenAIBackend({ openai: 'test-key' } as any)),
+
+    build: () => openAIHarness(new OpenAIBackend('test-key')),
     round: openAIRound,
     textOf: openAIText,
   },
@@ -262,7 +262,7 @@ describe.each(SPECS)('$name pre-tool text replay', spec => {
 
 describe('OpenAIBackend non-streaming pre-tool text', () => {
   it('does not replay text the non-streaming path never forwarded to the user', async () => {
-    const backend = new OpenAIBackend({ openai: 'test-key' } as never);
+    const backend = new OpenAIBackend('test-key');
     const requests: RequestMessage[][] = [];
     const message = (content: string, withTool: boolean) => ({
       choices: [
