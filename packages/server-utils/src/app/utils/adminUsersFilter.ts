@@ -26,6 +26,8 @@ export const USER_ACQUISITION_TOUCH_FILTERS = ['first', 'last'] as const;
 export const USER_ACQUISITION_WINDOW_FILTERS = ['7', '30', '90'] as const;
 const acquisitionPart = z.string().trim().min(1).max(ACQUISITION_FOLDED_FIELD_LIMIT);
 
+export const SIGNUP_CLIENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,100}$/;
+
 export const ADMIN_USERS_SORT_FIELDS = ['createdAt', 'name', 'currentCredits', 'lastActiveAt'] as const;
 export type AdminUsersSortField = (typeof ADMIN_USERS_SORT_FIELDS)[number];
 
@@ -118,6 +120,8 @@ export const AdminUsersFilterFieldsSchema = z.object({
     .regex(/^[0-9a-f]{24}$/i, 'Expected an id')
     .transform(id => id.toLowerCase())
     .optional(),
+  // Accounts that signed up through one OAuth client (its client id, b4m_<slug>_<8 hex>).
+  signupClient: z.string().trim().regex(SIGNUP_CLIENT_ID_PATTERN, 'Not a valid client id').optional(),
   // UTC days with AI activity, both ends inclusive; set together.
   activeFrom: utcDay.optional(),
   activeTo: utcDay.optional(),
